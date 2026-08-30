@@ -1,4 +1,5 @@
 node_modules/
+var/
 packages/watch/build/
 packages/watch/src/pkjs/
 docs/

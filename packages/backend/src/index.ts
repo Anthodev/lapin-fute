@@ -13,6 +13,15 @@ import {
   type ErrorResult,
 } from "../../contracts/src/index.ts";
 
+export {
+  CatalogManager,
+  SqliteCatalogReader,
+  handleCatalogRequest,
+  type CatalogHandlerResponse,
+  type CatalogReader,
+  type CatalogServiceResolution,
+} from "./catalog.ts";
+
 export const REDACTED_SECRET = "[REDACTED]" as const;
 
 export const BACKEND_ERROR_CODE = {

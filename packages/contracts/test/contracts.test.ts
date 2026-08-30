@@ -4,6 +4,8 @@ import {
   API_KEY_ACTION,
   APP_MESSAGE_KEY,
   APP_MESSAGE_KEY_ORDER,
+  CATALOG_ERROR_CODE,
+  CATALOG_ROUTE,
   DEPARTURE_STATUS,
   ERROR_CODE,
   FRESHNESS,
@@ -13,14 +15,20 @@ import {
   ProtocolReceiver,
   REQUEST_TRIGGER,
   SCHEMA_VERSION,
+  TRANSPORT_MODE,
   cstringBytes,
   dictionaryBytes,
   isApiKeyUpdate,
   isAppMessage,
+  isCatalogErrorResult,
   isDepartureResult,
   isErrorResult,
   isFavorite,
   isPersonalApiKey,
+  isPlaceSearchItem,
+  isPlaceSearchResult,
+  isServiceOption,
+  isServiceOptionsResult,
   utf8Bytes,
   type AppMessage,
 } from "../src/index.ts";
@@ -218,4 +226,95 @@ test("result staging requires request and favorite binding and preserves committ
   assert.equal(receiver.receive({ ...begin, REQUEST_ID: "late-request" }), false);
   assert.equal(receiver.receive({ ...begin, SCHEMA_VERSION: 99 }), false);
   assert.equal(receiver.committed.result, committed);
+});
+
+test("catalog contracts freeze routes, transport modes, error codes, and limits", () => {
+  assert.deepEqual(CATALOG_ROUTE, {
+    places: "/api/catalog/places",
+    placeServices: "/api/catalog/places/:placeId/services",
+  });
+  assert.equal(Object.values(CATALOG_ROUTE).every((route) => route.startsWith("/api/catalog/")), true);
+  assert.deepEqual(TRANSPORT_MODE, ["BUS", "METRO", "TRAM", "RER", "TRANSILIEN"]);
+  assert.deepEqual(CATALOG_ERROR_CODE, [
+    "INVALID_QUERY",
+    "PLACE_NOT_FOUND",
+    "CATALOG_UNAVAILABLE",
+    "METHOD_NOT_ALLOWED",
+  ]);
+  assert.equal(LIMITS.catalogQueryMinCharacters, 2);
+  assert.equal(LIMITS.catalogQueryMaxCharacters, 100);
+  assert.equal(LIMITS.catalogSearchResults, 20);
+});
+
+test("catalog validators enforce exact public fields, bounds, and no raw source identifiers", () => {
+  const opaque64 = "x".repeat(LIMITS.idUtf8Bytes);
+  const placeItem = {
+    placeId: `plc_${"A".repeat(43)}`,
+    stopLabel: "Châtelet",
+    localityLabel: "Paris",
+    mode: "METRO",
+  };
+  const serviceOption = {
+    serviceId: `svc_${"B".repeat(43)}`,
+    stopLabel: "Châtelet",
+    lineLabel: "Métro 1",
+    destinationLabel: "La Défense",
+  };
+  const requiredPlace = { placeId: placeItem.placeId, stopLabel: placeItem.stopLabel, mode: placeItem.mode };
+
+  assert.equal(isPlaceSearchItem(placeItem), true);
+  assert.equal(isPlaceSearchItem(requiredPlace), true);
+  assert.equal(isPlaceSearchItem({ ...placeItem, localityLabel: undefined }), true);
+  assert.equal(isPlaceSearchItem({ ...placeItem, placeId: opaque64 }), true);
+  assert.equal(isPlaceSearchResult({ schemaVersion: SCHEMA_VERSION, places: [placeItem] }), true);
+  assert.equal(isPlaceSearchResult({ schemaVersion: SCHEMA_VERSION, places: [] }), true);
+  assert.equal(isServiceOption(serviceOption), true);
+  assert.equal(isServiceOptionsResult({
+    schemaVersion: SCHEMA_VERSION,
+    placeId: placeItem.placeId,
+    services: [serviceOption],
+  }), true);
+  CATALOG_ERROR_CODE.forEach((code) => {
+    assert.equal(isCatalogErrorResult({ schemaVersion: SCHEMA_VERSION, code }), true);
+  });
+
+  assert.equal(isPlaceSearchItem({ ...placeItem, placeId: "x".repeat(LIMITS.idUtf8Bytes + 1) }), false);
+  assert.equal(isPlaceSearchItem({ ...placeItem, stopLabel: "" }), false);
+  assert.equal(isPlaceSearchItem({ ...placeItem, stopLabel: "é".repeat(LIMITS.labelUtf8Bytes / 2 + 1) }), false);
+  assert.equal(isPlaceSearchItem({ ...placeItem, mode: "TER" }), false);
+  assert.equal(isPlaceSearchItem({ ...placeItem, mode: "bus" }), false);
+  assert.equal(isPlaceSearchItem({ ...placeItem, monitoringRef: "StopPoint:Q-1" }), false);
+  assert.equal(isPlaceSearchItem({ ...requiredPlace, lineRef: "C-01234" }), false);
+  assert.equal(isPlaceSearchItem({ ...requiredPlace, q: "chatelet" }), false);
+
+  const places20 = Array.from({ length: LIMITS.catalogSearchResults }, () => placeItem);
+  assert.equal(isPlaceSearchResult({ schemaVersion: SCHEMA_VERSION, places: places20 }), true);
+  assert.equal(isPlaceSearchResult({ schemaVersion: SCHEMA_VERSION, places: [...places20, placeItem] }), false);
+  assert.equal(isPlaceSearchResult({ schemaVersion: SCHEMA_VERSION, places: [{ ...placeItem, unknown: true }] }), false);
+  assert.equal(isPlaceSearchResult({ schemaVersion: 2, places: [] }), false);
+  assert.equal(isPlaceSearchResult({ schemaVersion: SCHEMA_VERSION }), false);
+  assert.equal(isPlaceSearchResult({ schemaVersion: SCHEMA_VERSION, places: [], extra: 1 }), false);
+
+  assert.equal(isServiceOption({ ...serviceOption, serviceId: opaque64 }), true);
+  assert.equal(isServiceOption({ ...serviceOption, destinationLabel: "" }), false);
+  assert.equal(isServiceOption({ ...serviceOption, directionId: 1 }), false);
+  assert.equal(isServiceOption({ ...serviceOption, destinationRef: "Q-1" }), false);
+  assert.equal(isServiceOption({ serviceId: opaque64, stopLabel: "Châtelet", lineLabel: "1" }), false);
+  const servicesBeyondLimit = Array.from({ length: LIMITS.catalogSearchResults + 1 }, () => serviceOption);
+  assert.equal(isServiceOptionsResult({
+    schemaVersion: SCHEMA_VERSION,
+    placeId: opaque64,
+    services: servicesBeyondLimit,
+  }), true);
+  assert.equal(isServiceOptionsResult({
+    schemaVersion: SCHEMA_VERSION,
+    placeId: placeItem.placeId,
+    services: servicesBeyondLimit,
+    apiKey: "secret",
+  }), false);
+  assert.equal(isServiceOptionsResult({ schemaVersion: SCHEMA_VERSION, placeId: placeItem.placeId, services: "all" }), false);
+
+  assert.equal(isCatalogErrorResult({ schemaVersion: SCHEMA_VERSION, code: "INVALID_SERVICE" }), false);
+  assert.equal(isCatalogErrorResult({ schemaVersion: SCHEMA_VERSION, code: "INVALID_QUERY", requestId: "r" }), false);
+  assert.equal(isCatalogErrorResult({ code: "INVALID_QUERY" }), false);
 });
