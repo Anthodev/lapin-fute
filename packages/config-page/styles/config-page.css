@@ -1,0 +1,181 @@
+/* Lapin Futé configuration page: mobile-first, framework-free. */
+
+:root {
+  color-scheme: light dark;
+  --bg: #f4f4f2;
+  --surface: #ffffff;
+  --text: #1c1c1e;
+  --muted: #5c5c60;
+  --accent: #0a6ebd;
+  --on-accent: #ffffff;
+  --danger: #b3261e;
+  --border: #d9d9de;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #141416;
+    --surface: #1f1f23;
+    --text: #f2f2f4;
+    --muted: #a0a0a8;
+    --accent: #6db3f2;
+    --on-accent: #0b0b0d;
+    --danger: #f2b8b5;
+    --border: #3a3a40;
+  }
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font: 16px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  -webkit-text-size-adjust: 100%;
+}
+
+main {
+  max-width: 30rem;
+  margin: 0 auto;
+  padding: 1rem 1rem 2rem;
+}
+
+h1 {
+  font-size: 1.35rem;
+  margin: 0.25rem 0 1rem;
+}
+
+h2 {
+  font-size: 1.05rem;
+  margin: 0 0 0.5rem;
+}
+
+section {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 0.75rem;
+  padding: 1rem;
+  margin-bottom: 1rem;
+}
+
+.status {
+  color: var(--muted);
+  margin: 0 0 0.75rem;
+}
+
+.field-label {
+  display: block;
+  margin: 0 0 0.35rem;
+  font-weight: 600;
+}
+
+.key-row {
+  display: flex;
+  gap: 0.5rem;
+}
+
+#key-input {
+  flex: 1;
+  min-width: 0;
+  min-height: 2.75rem;
+  padding: 0 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: 0.5rem;
+  background: var(--bg);
+  color: var(--text);
+  font: inherit;
+}
+
+#key-input:focus-visible,
+button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+button {
+  min-height: 2.75rem;
+  padding: 0 0.9rem;
+  border: 1px solid var(--border);
+  border-radius: 0.5rem;
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+}
+
+button:disabled {
+  opacity: 0.5;
+}
+
+.primary {
+  width: 100%;
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--on-accent);
+  font-weight: 600;
+}
+
+.danger {
+  color: var(--danger);
+  border-color: var(--danger);
+}
+
+.error {
+  color: var(--danger);
+  margin: 0.5rem 0 0;
+}
+
+.pending {
+  color: var(--danger);
+  margin: 0.5rem 0;
+}
+
+#key-remove {
+  margin-top: 0.25rem;
+}
+
+#favorites-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 0.5rem;
+}
+
+.favorite {
+  border: 1px solid var(--border);
+  border-radius: 0.5rem;
+  padding: 0.5rem 0.75rem;
+}
+
+.favorite .labels {
+  margin: 0;
+  font-weight: 600;
+}
+
+.favorite .sub {
+  margin: 0.1rem 0 0;
+  color: var(--muted);
+  font-size: 0.9rem;
+  overflow-wrap: anywhere;
+}
+
+.favorite-actions {
+  display: flex;
+  gap: 0.5rem;
+  margin-top: 0.5rem;
+}
+
+.favorite-actions button {
+  min-height: 2.25rem;
+  padding: 0 0.6rem;
+  font-size: 0.9rem;
+}
+
+@media (min-width: 30rem) {
+  main {
+    padding-top: 2rem;
+  }
+}
