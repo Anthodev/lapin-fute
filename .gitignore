@@ -1,0 +1,11 @@
+node_modules/
+packages/watch/build/
+packages/watch/src/pkjs/
+docs/
+*.pbw
+.DS_Store
+
+graft/
+
+AGENTS.md
+.agents/

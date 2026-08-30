@@ -1,0 +1,34 @@
+{
+  "favorite": {
+    "schemaVersion": 1,
+    "id": "foundation-home",
+    "serviceId": "opaque:foundation:service:1",
+    "displayName": "Commute home",
+    "stopLabel": "Châtelet",
+    "lineLabel": "Métro 1",
+    "destinationLabel": "La Défense",
+    "sortOrder": 0
+  },
+  "result": {
+    "schemaVersion": 1,
+    "requestId": "foundation-request",
+    "favoriteId": "foundation-home",
+    "fetchedAt": 1788000000,
+    "sourceUpdatedAt": 1787999990,
+    "freshness": "REALTIME",
+    "departures": [
+      {
+        "expectedAt": 1788000120,
+        "aimedAt": 1788000100,
+        "minutes": 2,
+        "status": "DELAYED",
+        "nextIntervalMinutes": 4
+      },
+      {
+        "expectedAt": 1788000360,
+        "minutes": 6,
+        "status": "ON_TIME"
+      }
+    ]
+  }
+}
