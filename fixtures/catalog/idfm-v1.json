@@ -1,0 +1,167 @@
+{
+  "schemaVersion": 1,
+  "fixtureVersion": "idfm-catalog-v1",
+  "recordedAt": "2026-08-30T00:00:00.000Z",
+  "dataClassification": "Schema-faithful deterministic reduction of official source layouts; fixture-only identifiers, no credential and no personal departure response.",
+  "attribution": [
+    { "dataset": "offre-horaires-tc-gtfs-idfm", "url": "https://data.iledefrance-mobilites.fr/api/explore/v2.1/catalog/datasets/offre-horaires-tc-gtfs-idfm", "retrievedAt": "2026-08-30T00:00:00.000Z", "license": "Licence Mobilité" },
+    { "dataset": "perimetre-des-donnees-tr-disponibles-plateforme-idfm", "url": "https://data.iledefrance-mobilites.fr/api/explore/v2.1/catalog/datasets/perimetre-des-donnees-tr-disponibles-plateforme-idfm", "retrievedAt": "2026-08-30T00:00:00.000Z", "license": "Licence Mobilité" },
+    { "dataset": "arrets", "url": "https://data.iledefrance-mobilites.fr/api/explore/v2.1/catalog/datasets/arrets", "retrievedAt": "2026-08-30T00:00:00.000Z", "license": "Licence Ouverte 2.0" },
+    { "dataset": "zones-d-arrets", "url": "https://data.iledefrance-mobilites.fr/api/explore/v2.1/catalog/datasets/zones-d-arrets", "retrievedAt": "2026-08-30T00:00:00.000Z", "license": "Licence Ouverte 2.0" },
+    { "dataset": "relations", "url": "https://data.iledefrance-mobilites.fr/api/explore/v2.1/catalog/datasets/relations", "retrievedAt": "2026-08-30T00:00:00.000Z", "license": "Licence Ouverte 2.0" },
+    { "dataset": "referentiel-des-lignes", "url": "https://data.iledefrance-mobilites.fr/api/explore/v2.1/catalog/datasets/referentiel-des-lignes", "retrievedAt": "2026-08-30T00:00:00.000Z", "license": "ODbL 1.0" },
+    { "dataset": "arrets-lignes", "url": "https://data.iledefrance-mobilites.fr/api/explore/v2.1/catalog/datasets/arrets-lignes", "retrievedAt": "2026-08-30T00:00:00.000Z", "license": "ODbL 1.0" }
+  ],
+  "revisions": [
+    { "id": "fixture-2026-08-a", "preservedTripId": "trip-bus-preserved", "removedTripId": "trip-metro-west" },
+    { "id": "fixture-2026-08-b", "preservedTripId": "trip-bus-preserved", "removedTripId": "trip-metro-west" },
+    { "id": "fixture-invalid-no-transilien", "invalidReason": "No exact TRANSILIEN perimeter pair; five-mode validation rejects the candidate" }
+  ],
+  "sources": {
+    "agency": [
+      { "agency_name": "Fixture IDFM operator", "agency_url": "https://www.iledefrance-mobilites.fr/", "agency_timezone": "Europe/Paris" }
+    ],
+    "lines": [
+      { "id_line": "C100", "name_line": "Bus 42", "shortname_line": "42", "transportmode": "bus", "transportsubmode": "", "status": "active" },
+      { "id_line": "C200", "name_line": "Métro 4", "shortname_line": "4", "transportmode": "metro", "transportsubmode": "", "status": "active" },
+      { "id_line": "C300", "name_line": "Tram T3a", "shortname_line": "T3a", "transportmode": "tram", "transportsubmode": "", "status": "active" },
+      { "id_line": "C400", "name_line": "RER A", "shortname_line": "A", "transportmode": "rail", "transportsubmode": "local", "status": "active" },
+      { "id_line": "C500", "name_line": "Transilien L", "shortname_line": "L", "transportmode": "rail", "transportsubmode": "suburbanRailway", "status": "active" },
+      { "id_line": "C600", "name_line": "Funiculaire", "shortname_line": "F", "transportmode": "funicular", "transportsubmode": "", "status": "active" }
+    ],
+    "routes": [
+      { "route_id": "IDFM:C100", "route_short_name": "42", "route_long_name": "Bus 42" },
+      { "route_id": "IDFM:C200", "route_short_name": "4", "route_long_name": "Métro 4" },
+      { "route_id": "IDFM:C300", "route_short_name": "T3a", "route_long_name": "Tram T3a" },
+      { "route_id": "IDFM:C400", "route_short_name": "A", "route_long_name": "RER A" },
+      { "route_id": "IDFM:C500", "route_short_name": "L", "route_long_name": "Transilien L" },
+      { "route_id": "IDFM:C600", "route_short_name": "F", "route_long_name": "Funiculaire" }
+    ],
+    "zones": [
+      { "zdaid": "ZDA-BUS-1", "zdaname": "Gare du Nord", "zdatown": "Paris" },
+      { "zdaid": "ZDA-BUS-2", "zdaname": "Gare du Nord", "zdatown": "Saint-Denis" },
+      { "zdaid": "ZDA-METRO", "zdaname": "Châtelet", "zdatown": "Paris" },
+      { "zdaid": "ZDA-TRAM", "zdaname": "Porte de Versailles", "zdatown": "Paris" },
+      { "zdaid": "ZDA-RER", "zdaname": "Châtelet - Les Halles", "zdatown": "Paris" },
+      { "zdaid": "ZDA-TRANSILIEN", "zdaname": "Saint-Lazare", "zdatown": "Paris" },
+      { "zdaid": "ZDA-FUNICULAR", "zdaname": "Montmartre", "zdatown": "Paris" }
+    ],
+    "arrets": [
+      { "arrid": "ARR-BUS-1", "zdaid": "ZDA-BUS-1" },
+      { "arrid": "ARR-BUS-2", "zdaid": "ZDA-BUS-2" },
+      { "arrid": "ARR-METRO-EAST", "zdaid": "ZDA-METRO" },
+      { "arrid": "ARR-METRO-WEST", "zdaid": "ZDA-METRO" },
+      { "arrid": "ARR-TRAM", "zdaid": "ZDA-TRAM" },
+      { "arrid": "ARR-FUNICULAR", "zdaid": "ZDA-FUNICULAR" }
+    ],
+    "relations": [
+      { "zdaid": "ZDA-BUS-1", "arrid": "ARR-BUS-1", "artid": "ART-BUS-1" },
+      { "zdaid": "ZDA-BUS-2", "arrid": "ARR-BUS-2", "artid": "ART-BUS-2" },
+      { "zdaid": "ZDA-METRO", "arrid": "ARR-METRO-EAST", "artid": "ART-METRO-EAST" },
+      { "zdaid": "ZDA-METRO", "arrid": "ARR-METRO-WEST", "artid": "ART-METRO-WEST" },
+      { "zdaid": "ZDA-TRAM", "arrid": "ARR-TRAM", "artid": "ART-TRAM" },
+      { "zdaid": "ZDA-FUNICULAR", "arrid": "ARR-FUNICULAR", "artid": "ART-FUNICULAR" }
+    ],
+    "stops": [
+      { "stop_id": "IDFM:ART-BUS-1", "stop_name": "Gare du Nord quai bus", "parent_station": "IDFM:ARR-BUS-1" },
+      { "stop_id": "IDFM:TERM-BUS-1", "stop_name": "Hôpital Européen", "parent_station": "" },
+      { "stop_id": "IDFM:ART-BUS-2", "stop_name": "Gare du Nord annexe", "parent_station": "IDFM:ARR-BUS-2" },
+      { "stop_id": "IDFM:TERM-BUS-2", "stop_name": "Mairie", "parent_station": "" },
+      { "stop_id": "IDFM:ART-BUS-MISMATCH", "stop_name": "Mismatch", "parent_station": "IDFM:ARR-BUS-1" },
+      { "stop_id": "IDFM:TERM-BUS-MISMATCH", "stop_name": "Wrong perimeter destination", "parent_station": "" },
+      { "stop_id": "IDFM:ART-METRO-EAST", "stop_name": "Châtelet sud", "parent_station": "IDFM:ARR-METRO-EAST" },
+      { "stop_id": "IDFM:TERM-METRO-SOUTH", "stop_name": "Bagneux - Lucie Aubrac", "parent_station": "" },
+      { "stop_id": "IDFM:ART-METRO-WEST", "stop_name": "Châtelet nord", "parent_station": "IDFM:ARR-METRO-WEST" },
+      { "stop_id": "IDFM:TERM-METRO-NORTH", "stop_name": "Porte de Clignancourt", "parent_station": "" },
+      { "stop_id": "IDFM:ART-TRAM", "stop_name": "Porte de Versailles quai tram", "parent_station": "IDFM:ARR-TRAM" },
+      { "stop_id": "IDFM:TERM-TRAM", "stop_name": "Pont du Garigliano", "parent_station": "" },
+      { "stop_id": "IDFM:ART-RER-EAST", "stop_name": "Châtelet RER est", "parent_station": "IDFM:monomodalStopPlace:ZDA-RER" },
+      { "stop_id": "IDFM:TERM-RER-EAST", "stop_name": "Marne-la-Vallée Chessy", "parent_station": "" },
+      { "stop_id": "IDFM:ART-RER-WEST", "stop_name": "Châtelet RER ouest", "parent_station": "IDFM:monomodalStopPlace:ZDA-RER" },
+      { "stop_id": "IDFM:TERM-RER-WEST", "stop_name": "Saint-Germain-en-Laye", "parent_station": "" },
+      { "stop_id": "IDFM:ART-TRANSILIEN", "stop_name": "Saint-Lazare quai L", "parent_station": "IDFM:monomodalStopPlace:ZDA-TRANSILIEN" },
+      { "stop_id": "IDFM:TERM-TRANSILIEN", "stop_name": "Versailles Rive Droite", "parent_station": "" },
+      { "stop_id": "IDFM:ART-FUNICULAR", "stop_name": "Funiculaire bas", "parent_station": "IDFM:ARR-FUNICULAR" },
+      { "stop_id": "IDFM:TERM-FUNICULAR", "stop_name": "Funiculaire haut", "parent_station": "" }
+    ],
+    "trips": [
+      { "route_id": "IDFM:C100", "trip_id": "trip-bus-preserved", "trip_headsign": "Hôpital Européen", "direction_id": "0" },
+      { "route_id": "IDFM:C100", "trip_id": "trip-bus-homonym", "trip_headsign": "Mairie", "direction_id": "1" },
+      { "route_id": "IDFM:C100", "trip_id": "trip-bus-no-exact-perimeter", "trip_headsign": "Wrong perimeter destination", "direction_id": "0" },
+      { "route_id": "IDFM:C200", "trip_id": "trip-metro-east", "trip_headsign": "Bagneux - Lucie Aubrac", "direction_id": "0" },
+      { "route_id": "IDFM:C200", "trip_id": "trip-metro-west", "trip_headsign": "Porte de Clignancourt", "direction_id": "1", "revisions": ["fixture-2026-08-a"] },
+      { "route_id": "IDFM:C300", "trip_id": "trip-tram", "trip_headsign": "Pont du Garigliano", "direction_id": "0" },
+      { "route_id": "IDFM:C400", "trip_id": "trip-rer-east", "trip_headsign": "NORA", "direction_id": "0" },
+      { "route_id": "IDFM:C400", "trip_id": "trip-rer-west", "trip_headsign": "ZEBU", "direction_id": "1" },
+      { "route_id": "IDFM:C500", "trip_id": "trip-transilien", "trip_headsign": "MILA", "direction_id": "0" },
+      { "route_id": "IDFM:C600", "trip_id": "trip-funicular", "trip_headsign": "Sommet", "direction_id": "0" }
+    ],
+    "stopTimes": [
+      { "trip_id": "trip-bus-preserved", "stop_id": "IDFM:ART-BUS-1", "stop_sequence": "1", "pickup_type": "0" },
+      { "trip_id": "trip-bus-preserved", "stop_id": "IDFM:TERM-BUS-1", "stop_sequence": "2", "pickup_type": "1" },
+      { "trip_id": "trip-bus-homonym", "stop_id": "IDFM:ART-BUS-2", "stop_sequence": "1", "pickup_type": "0" },
+      { "trip_id": "trip-bus-homonym", "stop_id": "IDFM:TERM-BUS-2", "stop_sequence": "2", "pickup_type": "1" },
+      { "trip_id": "trip-bus-no-exact-perimeter", "stop_id": "IDFM:ART-BUS-MISMATCH", "stop_sequence": "1", "pickup_type": "0" },
+      { "trip_id": "trip-bus-no-exact-perimeter", "stop_id": "IDFM:TERM-BUS-MISMATCH", "stop_sequence": "2", "pickup_type": "1" },
+      { "trip_id": "trip-metro-east", "stop_id": "IDFM:ART-METRO-EAST", "stop_sequence": "1", "pickup_type": "0" },
+      { "trip_id": "trip-metro-east", "stop_id": "IDFM:TERM-METRO-SOUTH", "stop_sequence": "2", "pickup_type": "1" },
+      { "trip_id": "trip-metro-west", "stop_id": "IDFM:ART-METRO-WEST", "stop_sequence": "1", "pickup_type": "0", "revisions": ["fixture-2026-08-a"] },
+      { "trip_id": "trip-metro-west", "stop_id": "IDFM:TERM-METRO-NORTH", "stop_sequence": "2", "pickup_type": "1", "revisions": ["fixture-2026-08-a"] },
+      { "trip_id": "trip-tram", "stop_id": "IDFM:ART-TRAM", "stop_sequence": "1", "pickup_type": "0" },
+      { "trip_id": "trip-tram", "stop_id": "IDFM:TERM-TRAM", "stop_sequence": "2", "pickup_type": "1" },
+      { "trip_id": "trip-rer-east", "stop_id": "IDFM:ART-RER-EAST", "stop_sequence": "1", "pickup_type": "0" },
+      { "trip_id": "trip-rer-east", "stop_id": "IDFM:TERM-RER-EAST", "stop_sequence": "2", "pickup_type": "1" },
+      { "trip_id": "trip-rer-west", "stop_id": "IDFM:ART-RER-WEST", "stop_sequence": "1", "pickup_type": "0" },
+      { "trip_id": "trip-rer-west", "stop_id": "IDFM:TERM-RER-WEST", "stop_sequence": "2", "pickup_type": "1" },
+      { "trip_id": "trip-transilien", "stop_id": "IDFM:ART-TRANSILIEN", "stop_sequence": "1", "pickup_type": "0" },
+      { "trip_id": "trip-transilien", "stop_id": "IDFM:TERM-TRANSILIEN", "stop_sequence": "2", "pickup_type": "1" },
+      { "trip_id": "trip-funicular", "stop_id": "IDFM:ART-FUNICULAR", "stop_sequence": "1", "pickup_type": "0" },
+      { "trip_id": "trip-funicular", "stop_id": "IDFM:TERM-FUNICULAR", "stop_sequence": "2", "pickup_type": "1" }
+    ],
+    "objectCodes": [
+      { "object_type": "StopPoint", "object_id": "IDFM:ART-BUS-1", "object_system": "SIRI", "object_code": "STIF:StopPoint:Q:BUS-1:" },
+      { "object_type": "StopPoint", "object_id": "IDFM:TERM-BUS-1", "object_system": "source", "object_code": "DEST:BUS-1" },
+      { "object_type": "StopPoint", "object_id": "IDFM:ART-BUS-2", "object_system": "SIRI", "object_code": "STIF:StopPoint:Q:BUS-2:" },
+      { "object_type": "StopPoint", "object_id": "IDFM:TERM-BUS-2", "object_system": "source", "object_code": "DEST:BUS-2" },
+      { "object_type": "StopPoint", "object_id": "IDFM:ART-BUS-MISMATCH", "object_system": "SIRI", "object_code": "STIF:StopPoint:Q:BUS-MISSING:" },
+      { "object_type": "StopPoint", "object_id": "IDFM:TERM-BUS-MISMATCH", "object_system": "source", "object_code": "DEST:BUS-MISMATCH" },
+      { "object_type": "StopPoint", "object_id": "IDFM:ART-METRO-EAST", "object_system": "SIRI", "object_code": "STIF:StopPoint:Q:METRO-EAST:" },
+      { "object_type": "StopPoint", "object_id": "IDFM:TERM-METRO-SOUTH", "object_system": "source", "object_code": "DEST:METRO-SOUTH" },
+      { "object_type": "StopPoint", "object_id": "IDFM:ART-METRO-WEST", "object_system": "SIRI", "object_code": "STIF:StopPoint:Q:METRO-WEST:", "revisions": ["fixture-2026-08-a"] },
+      { "object_type": "StopPoint", "object_id": "IDFM:TERM-METRO-NORTH", "object_system": "source", "object_code": "DEST:METRO-NORTH", "revisions": ["fixture-2026-08-a"] },
+      { "object_type": "StopPoint", "object_id": "IDFM:ART-TRAM", "object_system": "SIRI", "object_code": "STIF:StopPoint:Q:TRAM:" },
+      { "object_type": "StopPoint", "object_id": "IDFM:TERM-TRAM", "object_system": "source", "object_code": "DEST:TRAM" },
+      { "object_type": "StopPoint", "object_id": "IDFM:ART-RER-EAST", "object_system": "SIRI", "object_code": "STIF:StopArea:SP:RER-CHAT:" },
+      { "object_type": "StopPoint", "object_id": "IDFM:TERM-RER-EAST", "object_system": "source", "object_code": "DEST:RER-EAST" },
+      { "object_type": "StopPoint", "object_id": "IDFM:ART-RER-WEST", "object_system": "SIRI", "object_code": "STIF:StopArea:SP:RER-CHAT:" },
+      { "object_type": "StopPoint", "object_id": "IDFM:TERM-RER-WEST", "object_system": "source", "object_code": "DEST:RER-WEST" },
+      { "object_type": "StopPoint", "object_id": "IDFM:ART-TRANSILIEN", "object_system": "SIRI", "object_code": "STIF:StopArea:SP:TRANSILIEN-STL:" },
+      { "object_type": "StopPoint", "object_id": "IDFM:TERM-TRANSILIEN", "object_system": "source", "object_code": "DEST:TRANSILIEN" },
+      { "object_type": "StopPoint", "object_id": "IDFM:ART-FUNICULAR", "object_system": "SIRI", "object_code": "STIF:StopPoint:Q:FUNICULAR:" },
+      { "object_type": "StopPoint", "object_id": "IDFM:TERM-FUNICULAR", "object_system": "source", "object_code": "DEST:FUNICULAR" }
+    ],
+    "arretsLignes": [
+      { "id": "IDFM:C100", "stop_id": "IDFM:ART-BUS-1" },
+      { "id": "IDFM:C100", "stop_id": "IDFM:ART-BUS-2" },
+      { "id": "IDFM:C100", "stop_id": "IDFM:ART-BUS-MISMATCH" },
+      { "id": "IDFM:C200", "stop_id": "IDFM:ART-METRO-EAST" },
+      { "id": "IDFM:C200", "stop_id": "IDFM:ART-METRO-WEST" },
+      { "id": "IDFM:C300", "stop_id": "IDFM:ART-TRAM" },
+      { "id": "IDFM:C400", "stop_id": "IDFM:ART-RER-EAST" },
+      { "id": "IDFM:C400", "stop_id": "IDFM:ART-RER-WEST" },
+      { "id": "IDFM:C500", "stop_id": "IDFM:ART-TRANSILIEN" },
+      { "id": "IDFM:C600", "stop_id": "IDFM:ART-FUNICULAR" }
+    ],
+    "perimeter": [
+      { "line": "IDFM:C100", "name_line": "42", "ns2_stoppointref": "STIF:StopPoint:Q:BUS-1:", "ns2_stopname": "Gare du Nord", "operatorname": "Fixture bus" },
+      { "line": "IDFM:C100", "name_line": "42", "ns2_stoppointref": "STIF:StopPoint:Q:BUS-2:", "ns2_stopname": "Gare du Nord", "operatorname": "Fixture bus" },
+      { "line": "IDFM:C100", "name_line": "42", "ns2_stoppointref": "STIF:StopPoint:Q:BUS-OTHER:", "ns2_stopname": "Mismatch", "operatorname": "Fixture bus" },
+      { "line": "IDFM:C200", "name_line": "4", "ns2_stoppointref": "STIF:StopPoint:Q:METRO-EAST:", "ns2_stopname": "Châtelet", "operatorname": "Fixture metro" },
+      { "line": "IDFM:C200", "name_line": "4", "ns2_stoppointref": "STIF:StopPoint:Q:METRO-WEST:", "ns2_stopname": "Châtelet", "operatorname": "Fixture metro", "revisions": ["fixture-2026-08-a"] },
+      { "line": "IDFM:C300", "name_line": "T3a", "ns2_stoppointref": "STIF:StopPoint:Q:TRAM:", "ns2_stopname": "Porte de Versailles", "operatorname": "Fixture tram" },
+      { "line": "IDFM:C400", "name_line": "A", "ns2_stoppointref": "STIF:StopArea:SP:RER-CHAT:", "ns2_stopname": "Châtelet - Les Halles", "operatorname": "Fixture rail" },
+      { "line": "IDFM:C500", "name_line": "L", "ns2_stoppointref": "STIF:StopArea:SP:TRANSILIEN-STL:", "ns2_stopname": "Saint-Lazare", "operatorname": "Fixture rail", "revisions": ["fixture-2026-08-a", "fixture-2026-08-b"] },
+      { "line": "IDFM:C600", "name_line": "F", "ns2_stoppointref": "STIF:StopPoint:Q:FUNICULAR:", "ns2_stopname": "Montmartre", "operatorname": "Fixture funicular" }
+    ]
+  }
+}

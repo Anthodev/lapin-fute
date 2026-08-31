@@ -4,7 +4,11 @@
   "private": true,
   "type": "module",
   "exports": "./src/index.ts",
+  "dependencies": {
+    "csv-parse": "7.0.2",
+    "yauzl": "3.4.0"
+  },
   "scripts": {
-    "test": "node --test test/backend.test.ts"
+    "test": "node --test test/*.test.ts"
   }
 }

@@ -8,6 +8,9 @@ export const LIMITS = {
   departures: 4,
   httpTimeoutMs: 8_000,
   httpResponseBytes: 262_144,
+  catalogQueryMinCharacters: 2,
+  catalogQueryMaxCharacters: 100,
+  catalogSearchResults: 20,
 } as const;
 
 export const PRIM_ORIGIN = "https://prim.iledefrance-mobilites.fr" as const;
@@ -24,6 +27,9 @@ export const ERROR_CODE = [
   "RATE_LIMITED",
   "INVALID_RESPONSE",
 ] as const;
+export const TRANSPORT_MODE = ["BUS", "METRO", "TRAM", "RER", "TRANSILIEN"] as const;
+export const CATALOG_ERROR_CODE = ["INVALID_QUERY", "PLACE_NOT_FOUND", "CATALOG_UNAVAILABLE", "METHOD_NOT_ALLOWED"] as const;
+export const CATALOG_ROUTE = { places: "/api/catalog/places", placeServices: "/api/catalog/places/:placeId/services" } as const;
 export const API_KEY_ACTION = ["KEEP", "REPLACE", "REMOVE"] as const;
 export const KEY_STATUS = { MISSING: 0, CONFIGURED: 1, INVALID: 2 } as const;
 export const REQUEST_TRIGGER = { APP_OPEN: 0, FAVORITE_SELECTION: 1, MANUAL_SELECT: 2 } as const;
@@ -97,6 +103,8 @@ export const WIRE_LANGUAGE = { EN: "en", FR: "fr" } as const;
 export type Freshness = (typeof FRESHNESS)[number];
 export type DepartureStatus = (typeof DEPARTURE_STATUS)[number];
 export type ErrorCode = (typeof ERROR_CODE)[number];
+export type TransportMode = (typeof TRANSPORT_MODE)[number];
+export type CatalogErrorCode = (typeof CATALOG_ERROR_CODE)[number];
 export type ApiKeyAction = (typeof API_KEY_ACTION)[number];
 export type AppMessageKey = (typeof APP_MESSAGE_KEY_ORDER)[number];
 export type WireLanguage = (typeof WIRE_LANGUAGE)[keyof typeof WIRE_LANGUAGE];
@@ -138,6 +146,35 @@ export interface ErrorResult {
   occurredAt: number;
   retryAfterSeconds?: number;
 }
+export interface PlaceSearchItem {
+  placeId: string;
+  stopLabel: string;
+  localityLabel?: string;
+  mode: TransportMode;
+}
+
+export interface PlaceSearchResult {
+  schemaVersion: typeof SCHEMA_VERSION;
+  places: PlaceSearchItem[];
+}
+
+export interface ServiceOption {
+  serviceId: string;
+  stopLabel: string;
+  lineLabel: string;
+  destinationLabel: string;
+}
+
+export interface ServiceOptionsResult {
+  schemaVersion: typeof SCHEMA_VERSION;
+  placeId: string;
+  services: ServiceOption[];
+}
+
+export interface CatalogErrorResult {
+  schemaVersion: typeof SCHEMA_VERSION;
+  code: CatalogErrorCode;
+}
 
 export type ApiKeyUpdate =
   | { schemaVersion: typeof SCHEMA_VERSION; action: "KEEP" }
@@ -155,6 +192,11 @@ const domainKeys = {
   result: ["schemaVersion", "requestId", "favoriteId", "fetchedAt", "sourceUpdatedAt", "freshness", "departures"],
   error: ["schemaVersion", "requestId", "favoriteId", "code", "occurredAt", "retryAfterSeconds"],
   keyUpdate: ["schemaVersion", "action", "value"],
+  placeSearchItem: ["placeId", "stopLabel", "localityLabel", "mode"],
+  placeSearchResult: ["schemaVersion", "places"],
+  serviceOption: ["serviceId", "stopLabel", "lineLabel", "destinationLabel"],
+  serviceOptionsResult: ["schemaVersion", "placeId", "services"],
+  catalogError: ["schemaVersion", "code"],
 } as const;
 
 function object(value: unknown): value is Record<string, unknown> {
@@ -232,6 +274,44 @@ export function isErrorResult(value: unknown): value is ErrorResult {
     && ERROR_CODE.includes(value.code as ErrorCode)
     && uint32(value.occurredAt)
     && optionalUint32(value.retryAfterSeconds);
+}
+
+export function isPlaceSearchItem(value: unknown): value is PlaceSearchItem {
+  if (!object(value) || !exactKeys(value, domainKeys.placeSearchItem)) return false;
+  return boundedString(value.placeId, LIMITS.idUtf8Bytes)
+    && boundedString(value.stopLabel, LIMITS.labelUtf8Bytes)
+    && optionalBoundedString(value.localityLabel, LIMITS.labelUtf8Bytes)
+    && TRANSPORT_MODE.includes(value.mode as TransportMode);
+}
+
+export function isPlaceSearchResult(value: unknown): value is PlaceSearchResult {
+  if (!object(value) || !exactKeys(value, domainKeys.placeSearchResult)) return false;
+  return value.schemaVersion === SCHEMA_VERSION
+    && Array.isArray(value.places)
+    && value.places.length <= LIMITS.catalogSearchResults
+    && value.places.every(isPlaceSearchItem);
+}
+
+export function isServiceOption(value: unknown): value is ServiceOption {
+  if (!object(value) || !exactKeys(value, domainKeys.serviceOption)) return false;
+  return boundedString(value.serviceId, LIMITS.idUtf8Bytes)
+    && boundedString(value.stopLabel, LIMITS.labelUtf8Bytes)
+    && boundedString(value.lineLabel, LIMITS.labelUtf8Bytes)
+    && boundedString(value.destinationLabel, LIMITS.labelUtf8Bytes);
+}
+
+export function isServiceOptionsResult(value: unknown): value is ServiceOptionsResult {
+  if (!object(value) || !exactKeys(value, domainKeys.serviceOptionsResult)) return false;
+  return value.schemaVersion === SCHEMA_VERSION
+    && boundedString(value.placeId, LIMITS.idUtf8Bytes)
+    && Array.isArray(value.services)
+    && value.services.every(isServiceOption);
+}
+
+export function isCatalogErrorResult(value: unknown): value is CatalogErrorResult {
+  if (!object(value) || !exactKeys(value, domainKeys.catalogError)) return false;
+  return value.schemaVersion === SCHEMA_VERSION
+    && CATALOG_ERROR_CODE.includes(value.code as CatalogErrorCode);
 }
 
 export function isApiKeyUpdate(value: unknown): value is ApiKeyUpdate {

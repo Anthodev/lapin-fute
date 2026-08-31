@@ -8,7 +8,10 @@ var LIMITS = Object.freeze({
   favorites: 8,
   departures: 4,
   httpTimeoutMs: 8000,
-  httpResponseBytes: 262144
+  httpResponseBytes: 262144,
+  catalogQueryMinCharacters: 2,
+  catalogQueryMaxCharacters: 100,
+  catalogSearchResults: 20
 });
 var CACHE_FRESH_SECONDS = 60;
 var FAVORITE_SETTLE_MS = 500;
