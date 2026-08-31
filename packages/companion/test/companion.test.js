@@ -126,6 +126,34 @@ test("close fragment atomically stores one favorites-and-key record and exposes 
   target.xhr.instances[0].respond(200, responseFor("secret-boundary"));
   assert.equal(JSON.stringify(target.Pebble.sent).includes(TEST_KEY), false);
 });
+test("a pre-presentation v1 record keeps its API key and legacy favorite on load", function () {
+  var storage = new fakes.FakeStorage();
+  var legacyRecord = {
+    schemaVersion: contracts.SCHEMA_VERSION,
+    favorites: [{
+      schemaVersion: contracts.SCHEMA_VERSION,
+      id: "legacy-home",
+      serviceId: "opaque:legacy-service",
+      displayName: "Maison",
+      stopLabel: "Châtelet",
+      lineLabel: "1",
+      destinationLabel: "La Défense",
+      sortOrder: 0
+    }],
+    apiKey: TEST_KEY
+  };
+  var loaded;
+
+  storage.setItem(configuration.STORAGE_KEY, JSON.stringify(legacyRecord));
+  loaded = configuration.loadConfiguration(storage);
+
+  assert.deepEqual(loaded, legacyRecord);
+  assert.equal(loaded.apiKey, TEST_KEY);
+  assert.equal(loaded.favorites.length, 1);
+  ["lineMode", "lineColor", "lineTextColor"].forEach(function (field) {
+    assert.equal(Object.prototype.hasOwnProperty.call(loaded.favorites[0], field), false);
+  });
+});
 test("configuration opening uses the active watch language and safely falls back to English", function () {
   var target = harness();
   var state;

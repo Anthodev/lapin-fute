@@ -55,20 +55,20 @@ function fixtureManager(): CatalogManager {
     PRAGMA foreign_keys = ON;
     CREATE TABLE metadata(key TEXT PRIMARY KEY, value TEXT NOT NULL);
     CREATE TABLE places(place_id TEXT PRIMARY KEY, stop_label TEXT NOT NULL, locality_label TEXT, mode TEXT NOT NULL, canonical_tuple TEXT NOT NULL UNIQUE);
-    CREATE TABLE services(service_id TEXT PRIMARY KEY, place_id TEXT NOT NULL REFERENCES places(place_id), stop_label TEXT NOT NULL, line_label TEXT NOT NULL, destination_label TEXT NOT NULL, monitoring_ref TEXT NOT NULL, line_ref TEXT NOT NULL, direction_id TEXT NOT NULL, destination_ref TEXT NOT NULL, canonical_tuple TEXT NOT NULL UNIQUE);
+    CREATE TABLE services(service_id TEXT PRIMARY KEY, place_id TEXT NOT NULL REFERENCES places(place_id), stop_label TEXT NOT NULL, line_label TEXT NOT NULL, destination_label TEXT NOT NULL, line_color TEXT NOT NULL, line_text_color TEXT NOT NULL, monitoring_ref TEXT NOT NULL, line_ref TEXT NOT NULL, direction_id TEXT NOT NULL, destination_ref TEXT NOT NULL, canonical_tuple TEXT NOT NULL UNIQUE);
     CREATE VIRTUAL TABLE place_search USING fts5(search_text, place_id UNINDEXED);
   `);
   const metadata = database.prepare("INSERT INTO metadata(key, value) VALUES (?, ?)");
-  metadata.run("schema_version", "1"); metadata.run("catalog_version", "1");
+  metadata.run("schema_version", "1"); metadata.run("catalog_version", "2");
   metadata.run("source_revision", "http-fixture-revision");
   metadata.run("created_at", "2026-08-30T12:00:00.000Z");
   const place = database.prepare("INSERT INTO places VALUES (?, ?, ?, ?, ?)");
   const search = database.prepare("INSERT INTO place_search(search_text, place_id) VALUES (?, ?)");
-  const service = database.prepare("INSERT INTO services VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)");
+  const service = database.prepare("INSERT INTO services VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)");
   FIXTURE.forEach((entry, index) => {
     place.run(entry.id, entry.label, entry.locality, entry.mode, `place:v1|${index}:${entry.id}`);
     search.run(normalizedSearchText(entry), entry.id);
-    service.run(entry.serviceId, entry.id, entry.label, entry.line, entry.destination, entry.monitoringRef, entry.lineRef, `direction-${index}`, `raw-terminal-${index}`, `service:v1|${index}:${entry.serviceId}`);
+    service.run(entry.serviceId, entry.id, entry.label, entry.line, entry.destination, "#123456", "#ffffff", entry.monitoringRef, entry.lineRef, `direction-${index}`, `raw-terminal-${index}`, `service:v1|${index}:${entry.serviceId}`);
   });
   database.close();
   const manager = new CatalogManager();
@@ -100,7 +100,7 @@ test("GET routes return exact public response bodies without source identifiers 
   assert.equal(services.status, 200);
   assert.ok(isServiceOptionsResult(services.body));
   assert.deepEqual(services.body, { schemaVersion: SCHEMA_VERSION, placeId: PLACE_ID, services: [
-    { serviceId: SERVICE_ID, stopLabel: "Châtelet", lineLabel: "4", destinationLabel: "Bagneux – Lucie Aubrac" },
+    { serviceId: SERVICE_ID, stopLabel: "Châtelet", lineLabel: "4", destinationLabel: "Bagneux – Lucie Aubrac", lineMode: "METRO", lineColor: "#123456", lineTextColor: "#ffffff" },
   ] });
   const publicJson = JSON.stringify([places.body, services.body]);
   for (const forbidden of [PERSONAL_KEY, "raw-monitoring-metro-chatelet", "raw-line-metro-4", "raw-terminal-0", "direction-0"]) {

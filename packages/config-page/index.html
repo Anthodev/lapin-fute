@@ -2,37 +2,134 @@
 <html lang="en">
   <head>
     <meta charset="utf-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
     <meta name="referrer" content="no-referrer">
-    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'none'; img-src 'none'; base-uri 'none'; form-action 'none'">
+    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self'; base-uri 'none'; form-action 'none'; object-src 'none'">
     <title>Lapin Futé</title>
     <link rel="stylesheet" href="./styles/config-page.css">
   </head>
   <body>
-    <main>
-      <h1 id="page-title">Lapin Futé</h1>
+    <header class="masthead">
+      <div class="route-mark" aria-hidden="true">LF</div>
+      <div>
+        <h1 id="page-title">Lapin Futé</h1>
+        <p id="intro"></p>
+      </div>
+    </header>
 
+    <main>
+      <div id="config-view">
       <section aria-labelledby="key-title">
-        <h2 id="key-title">API key</h2>
+        <div class="section-heading">
+          <span class="step" aria-hidden="true">01</span>
+          <h2 id="key-title">PRIM access</h2>
+        </div>
         <p class="status" id="key-status"></p>
+        <p class="support"><span id="key-explanation"></span> <a id="key-link" href="https://prim.iledefrance-mobilites.fr/en/aide-et-contact/documentation/donnees-disponibles/api/generer-un-jeton-pour-acceder-aux-api" target="_blank" rel="noopener noreferrer"></a></p>
         <label class="field-label" for="key-input" id="key-label"></label>
         <div class="key-row">
-          <input id="key-input" type="password" autocomplete="new-password" autocapitalize="off" autocorrect="off" spellcheck="false">
-          <button type="button" id="key-toggle" aria-pressed="false">Show</button>
+          <input id="key-input" type="password" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false">
+          <button type="button" id="key-toggle" class="quiet" aria-pressed="false">Show</button>
         </div>
         <p class="error" id="key-error" role="alert" hidden></p>
-        <p class="pending" id="key-pending" hidden></p>
-        <button type="button" id="key-remove" class="danger" hidden>Remove key</button>
+        <p class="pending" id="key-pending" role="status" hidden></p>
+        <button type="button" id="key-remove" class="danger quiet" hidden>Remove key</button>
       </section>
 
       <section aria-labelledby="favorites-title">
-        <h2 id="favorites-title">Favorites</h2>
+        <div class="section-heading">
+          <span class="step" aria-hidden="true">02</span>
+          <h2 id="favorites-title">Favorite departures</h2>
+        </div>
         <p class="status" id="favorites-empty" hidden></p>
-        <ul id="favorites-list"></ul>
+        <ol id="favorites-list" class="favorites"></ol>
       </section>
 
-      <button type="button" id="save" class="primary">Save</button>
+      <section aria-labelledby="add-title" id="add-section">
+        <div class="section-heading">
+          <span class="step" aria-hidden="true">03</span>
+          <h2 id="add-title">Add a favorite</h2>
+        </div>
+        <label class="field-label" for="place-search" id="search-label"></label>
+        <input id="place-search" type="search" inputmode="search" autocomplete="off" autocapitalize="sentences" spellcheck="false">
+        <p class="support" id="search-hint"></p>
+        <p id="catalog-status" class="status" role="status" aria-live="polite"></p>
+        <ul id="place-results" class="choice-list"></ul>
+
+        <div id="service-step" hidden>
+          <label class="field-label" for="service-select" id="services-label"></label>
+          <select id="service-select"></select>
+        </div>
+
+        <div id="preview" class="preview" hidden>
+          <p class="eyebrow" id="preview-title"></p>
+          <p><span id="preview-line" class="line-chip"></span> <strong id="preview-stop"></strong></p>
+          <p id="preview-destination" class="destination"></p>
+          <p id="preview-departures" class="recorded-preview"></p>
+          <label class="field-label" for="favorite-name" id="favorite-name-label"></label>
+          <input id="favorite-name" type="text" autocomplete="off" maxlength="96">
+          <button type="button" id="favorite-add" class="secondary"></button>
+        </div>
+      </section>
+      </div>
+
+      <section id="about-view" class="about-view" aria-labelledby="about-title" hidden>
+        <button type="button" id="about-back" class="quiet"></button>
+        <div class="section-heading about-heading">
+          <span class="step" aria-hidden="true">LF</span>
+          <h2 id="about-title"></h2>
+        </div>
+
+        <div id="about-en" lang="en">
+          <p class="about-version">Version 0.1.0</p>
+          <h3>Publisher and contact</h3>
+          <p><strong>Author and publisher:</strong> Anthodev, a private individual acting on a non-professional basis.</p>
+          <p><strong>Publication director:</strong> Anthodev.</p>
+          <p>Public contact: <a href="https://github.com/Anthodev/lapin-fute/issues" target="_blank" rel="noopener noreferrer">GitHub Issues</a>.</p>
+          <h3>Hosting</h3>
+          <p>GitHub, Inc., 88 Colin P. Kelly Jr. St., San Francisco, CA 94107, USA. Electronic support: <a href="https://support.github.com/contact" target="_blank" rel="noopener noreferrer">GitHub Support</a>.</p>
+          <h3>Privacy and data flow</h3>
+          <p>This app page sets no cookies and uses no analytics or telemetry.</p>
+          <p>Your saved personal PRIM key stays in your phone’s localStorage. When you request departures, the phone sends the key over HTTPS to the Lapin Futé backend. The backend relays it transiently to PRIM and does not store it.</p>
+          <p>When you search for a stop, the search terms are sent to the same-origin Lapin Futé catalog endpoint solely to return matching stops. The app does not persist them; hosting infrastructure may log requested URLs and other connection metadata.</p>
+          <p>GitHub Pages hosts this page. GitHub may process connection data and requested URLs under its <a href="https://docs.github.com/en/site-policy/privacy-policies/github-general-privacy-statement" target="_blank" rel="noopener noreferrer">General Privacy Statement</a>.</p>
+          <h3>Data and credits</h3>
+          <p>Transport line names and colors come from the Île-de-France Mobilités <a href="https://data.iledefrance-mobilites.fr/explore/dataset/referentiel-des-lignes/" target="_blank" rel="noopener noreferrer">Référentiel des lignes</a> database, licensed under <a href="https://opendatacommons.org/licenses/odbl/1-0/" target="_blank" rel="noopener noreferrer">ODbL 1.0</a>. Official line pictograms are © Île-de-France Mobilités and are reused subject to the <a href="https://prim.iledefrance-mobilites.fr/fr/conditions-utilisation" target="_blank" rel="noopener noreferrer">IDFM/PRIM terms of use</a>.</p>
+          <p>Real-time departures come from the Île-de-France Mobilités <a href="https://prim.iledefrance-mobilites.fr/" target="_blank" rel="noopener noreferrer">PRIM platform</a> using your personal key and remain subject to the terms and licences published by PRIM.</p>
+          <h3>Independence and source</h3>
+          <p>Lapin Futé is an independent personal project. It is not affiliated with, endorsed by or sponsored by Île-de-France Mobilités, PRIM, ILICO, Pebble or their respective owners. Cited names and trademarks belong to their owners.</p>
+          <p>Source code: <a href="https://github.com/Anthodev/lapin-fute" target="_blank" rel="noopener noreferrer">github.com/Anthodev/lapin-fute</a>.</p>
+        </div>
+
+        <div id="about-fr" lang="fr" hidden>
+          <p class="about-version">Version 0.1.0</p>
+          <h3>Édition et contact</h3>
+          <p><strong>Auteur et éditeur :</strong> Anthodev, personne physique agissant à titre privé et non professionnel.</p>
+          <p><strong>Directeur de la publication :</strong> Anthodev.</p>
+          <p>Contact public : <a href="https://github.com/Anthodev/lapin-fute/issues" target="_blank" rel="noopener noreferrer">GitHub Issues</a>.</p>
+          <h3>Hébergement</h3>
+          <p>GitHub, Inc., 88 Colin P. Kelly Jr. St., San Francisco, CA 94107, États-Unis. Assistance électronique : <a href="https://support.github.com/contact" target="_blank" rel="noopener noreferrer">support GitHub</a>.</p>
+          <h3>Vie privée et circulation des données</h3>
+          <p>Cette page de l’application ne dépose aucun cookie et n’utilise ni mesure d’audience, ni analyse comportementale, ni télémétrie.</p>
+          <p>Votre clé PRIM personnelle enregistrée reste dans le localStorage de votre téléphone. Lors d’une demande de départs, le téléphone transmet la clé en HTTPS au serveur Lapin Futé. Le serveur la relaie temporairement vers PRIM sans la conserver.</p>
+          <p>Lors d’une recherche d’arrêt, les termes saisis sont transmis au point d’accès catalogue de Lapin Futé sur la même origine, uniquement pour retourner les arrêts correspondants. L’application ne les conserve pas ; l’infrastructure d’hébergement peut journaliser les URL demandées et d’autres métadonnées de connexion.</p>
+          <p>Cette page est hébergée par GitHub Pages. GitHub peut traiter des données de connexion et les URL demandées selon sa <a href="https://docs.github.com/fr/site-policy/privacy-policies/github-general-privacy-statement" target="_blank" rel="noopener noreferrer">déclaration de confidentialité générale</a>.</p>
+          <h3>Données et crédits</h3>
+          <p>Les noms et couleurs des lignes proviennent de la base <a href="https://data.iledefrance-mobilites.fr/explore/dataset/referentiel-des-lignes/" target="_blank" rel="noopener noreferrer">Référentiel des lignes</a> d’Île-de-France Mobilités, sous licence <a href="https://opendatacommons.org/licenses/odbl/1-0/" target="_blank" rel="noopener noreferrer">ODbL 1.0</a>. Les pictogrammes officiels des lignes sont © Île-de-France Mobilités et réutilisés selon les <a href="https://prim.iledefrance-mobilites.fr/fr/conditions-utilisation" target="_blank" rel="noopener noreferrer">conditions d’utilisation IDFM/PRIM</a>.</p>
+          <p>Les départs en temps réel proviennent de la plateforme <a href="https://prim.iledefrance-mobilites.fr/" target="_blank" rel="noopener noreferrer">PRIM</a> d’Île-de-France Mobilités au moyen de votre clé personnelle. Ils restent soumis aux conditions et licences publiées par PRIM.</p>
+          <h3>Indépendance et code source</h3>
+          <p>Lapin Futé est un projet personnel indépendant, sans affiliation, approbation ni parrainage d’Île-de-France Mobilités, de PRIM, d’ILICO, de Pebble ou de leurs ayants droit. Les noms et marques cités appartiennent à leurs titulaires.</p>
+          <p>Code source : <a href="https://github.com/Anthodev/lapin-fute" target="_blank" rel="noopener noreferrer">github.com/Anthodev/lapin-fute</a>.</p>
+        </div>
+      </section>
     </main>
+
+    <footer id="config-footer">
+      <div class="footer-actions">
+        <button type="button" id="about-open" class="quiet"></button>
+        <button type="button" id="save" class="primary">Save settings</button>
+      </div>
+    </footer>
     <noscript><p class="status">This page requires JavaScript.</p></noscript>
     <script type="module" src="./src/config-page.js"></script>
   </body>

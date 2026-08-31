@@ -24,7 +24,7 @@ import {
 } from "../../contracts/src/index.ts";
 import type { TransportMode } from "../../contracts/src/index.ts";
 
-export const CATALOG_VERSION = 1 as const;
+export const CATALOG_VERSION = 2 as const;
 export const DOWNLOAD_TIMEOUT_MS = 15 * 60 * 1_000;
 export const MAX_COMPRESSED_DOWNLOAD_BYTES = 2 * 1024 ** 3;
 export const MAX_SELECTED_ENTRY_BYTES = 8 * 1024 ** 3;
@@ -222,6 +222,12 @@ function transportMode(value: unknown): TransportMode {
 function canonicalLineId(value: unknown, field: string): string {
   const text = nonEmpty(value, field);
   return text.startsWith("IDFM:") ? text.slice("IDFM:".length) : text;
+}
+
+function normalizeLineColor(value: unknown, field: string): string {
+  const text = nonEmpty(value, field);
+  if (!/^#?[0-9a-f]{6}$/iu.test(text)) fail("INVALID_SOURCE", `${field} must be a six-digit hexadecimal color`);
+  return `#${text.replace(/^#/u, "").toLowerCase()}`;
 }
 
 function isoTimestamp(value: string, field: string): string {
@@ -500,6 +506,8 @@ function createSchema(database: DatabaseSync): void {
       stop_label TEXT NOT NULL,
       line_label TEXT NOT NULL,
       destination_label TEXT NOT NULL,
+      line_color TEXT NOT NULL,
+      line_text_color TEXT NOT NULL,
       monitoring_ref TEXT NOT NULL,
       line_ref TEXT NOT NULL,
       direction_id TEXT NOT NULL,
@@ -575,7 +583,9 @@ function createSchema(database: DatabaseSync): void {
       shortname_line TEXT NOT NULL,
       transport_mode TEXT NOT NULL,
       transport_submode TEXT NOT NULL,
-      status TEXT NOT NULL
+      status TEXT NOT NULL,
+      line_color TEXT NOT NULL,
+      line_text_color TEXT NOT NULL
     ) STRICT;
     CREATE TABLE stage_arrets_lignes (
       route_id TEXT NOT NULL,
@@ -596,7 +606,7 @@ function prepareSpecs(database: DatabaseSync): Readonly<Record<keyof CatalogReco
   const arret = database.prepare("INSERT INTO stage_arrets VALUES (?, ?)");
   const zone = database.prepare("INSERT INTO stage_zones VALUES (?, ?, ?)");
   const relation = database.prepare("INSERT OR IGNORE INTO stage_relations VALUES (?, ?, ?)");
-  const line = database.prepare("INSERT INTO stage_lines VALUES (?, ?, ?, ?, ?, ?)");
+  const line = database.prepare("INSERT INTO stage_lines VALUES (?, ?, ?, ?, ?, ?, ?, ?)");
   const arretLigne = database.prepare("INSERT OR IGNORE INTO stage_arrets_lignes VALUES (?, ?)");
 
   return {
@@ -649,8 +659,8 @@ function prepareSpecs(database: DatabaseSync): Readonly<Record<keyof CatalogReco
       insert: (row) => relation.run(nonEmpty(row.zdaid, "relations.zdaid"), nonEmpty(row.arrid, "relations.arrid"), nonEmpty(row.artid, "relations.artid")),
     },
     lines: {
-      required: ["id_line", "name_line", "shortname_line", "transportmode", "transportsubmode", "status"],
-      insert: (row) => line.run(canonicalLineId(row.id_line, "lines.id_line"), nonEmpty(row.name_line, "lines.name_line"), optionalText(row.shortname_line), nonEmpty(row.transportmode, "lines.transportmode"), optionalText(row.transportsubmode), nonEmpty(row.status, "lines.status")),
+      required: ["id_line", "name_line", "shortname_line", "transportmode", "transportsubmode", "status", "colourweb_hexa", "textcolourweb_hexa"],
+      insert: (row) => line.run(canonicalLineId(row.id_line, "lines.id_line"), nonEmpty(row.name_line, "lines.name_line"), optionalText(row.shortname_line), nonEmpty(row.transportmode, "lines.transportmode"), optionalText(row.transportsubmode), nonEmpty(row.status, "lines.status"), normalizeLineColor(row.colourweb_hexa, "lines.colourweb_hexa"), normalizeLineColor(row.textcolourweb_hexa, "lines.textcolourweb_hexa")),
     },
     arretsLignes: {
       required: ["id", "stop_id"],
@@ -959,7 +969,9 @@ function deriveCandidates(database: DatabaseSync): void {
     CREATE TABLE stage_line_modes (
       id_line TEXT PRIMARY KEY,
       mode TEXT NOT NULL,
-      line_label TEXT NOT NULL
+      line_label TEXT NOT NULL,
+      line_color TEXT NOT NULL,
+      line_text_color TEXT NOT NULL
     ) STRICT;
 
     INSERT INTO stage_line_modes
@@ -971,7 +983,9 @@ function deriveCandidates(database: DatabaseSync): void {
         WHEN lower(trim(transport_mode)) = 'rail' AND lower(trim(transport_submode)) = 'local' THEN 'RER'
         WHEN lower(trim(transport_mode)) = 'rail' AND lower(trim(transport_submode)) = 'suburbanrailway' THEN 'TRANSILIEN'
       END,
-      coalesce(nullif(trim(shortname_line), ''), trim(name_line))
+      coalesce(nullif(trim(shortname_line), ''), trim(name_line)),
+      line_color,
+      line_text_color
     FROM stage_lines
     WHERE lower(trim(status)) = 'active'
       AND (
@@ -1040,6 +1054,8 @@ function deriveCandidates(database: DatabaseSync): void {
         zone.zdatown AS locality_label,
         line_mode.id_line AS id_line,
         line_mode.line_label AS line_label,
+        line_mode.line_color AS line_color,
+        line_mode.line_text_color AS line_text_color,
         CASE
           WHEN line_mode.mode IN ('RER', 'TRANSILIEN') THEN terminal.stop_name
           ELSE coalesce(nullif(trim(trip.trip_headsign), ''), terminal.stop_name)
@@ -1089,7 +1105,8 @@ function deriveCandidates(database: DatabaseSync): void {
         AND trim(destination_code.object_code) <> ''
     )
     SELECT mode, zdaid, min(stop_label) AS stop_label, min(locality_label) AS locality_label,
-      id_line, min(line_label) AS line_label, min(destination_label) AS destination_label,
+      id_line, min(line_label) AS line_label, min(line_color) AS line_color,
+      min(line_text_color) AS line_text_color, min(destination_label) AS destination_label,
       monitoring_ref, line_ref, direction_id, destination_ref,
       max(CASE WHEN resolution = 'arrets' THEN 1 ELSE 0 END) AS via_arrets
     FROM joined
@@ -1107,7 +1124,7 @@ function insertFinalCatalog(database: DatabaseSync, sourceRevision: string, crea
 
   const insertPlace = database.prepare("INSERT INTO places VALUES (?, ?, ?, ?, ?)");
   const insertSearch = database.prepare("INSERT INTO place_search(search_text, place_id) VALUES (?, ?)");
-  const insertService = database.prepare("INSERT INTO services VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)");
+  const insertService = database.prepare("INSERT INTO services VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)");
   const selectPlace = database.prepare("SELECT canonical_tuple FROM places WHERE place_id = ?");
   const selectService = database.prepare("SELECT place_id, canonical_tuple FROM services WHERE service_id = ?");
 
@@ -1146,7 +1163,7 @@ function insertFinalCatalog(database: DatabaseSync, sourceRevision: string, crea
 
     const candidates = database.prepare(`
       SELECT mode, zdaid, stop_label, line_label, destination_label,
-        id_line, monitoring_ref, line_ref, direction_id, destination_ref
+        line_color, line_text_color, id_line, monitoring_ref, line_ref, direction_id, destination_ref
       FROM stage_candidates
       ORDER BY mode, zdaid, id_line, monitoring_ref, direction_id, destination_ref
     `).iterate() as Iterable<QueryRow>;
@@ -1174,6 +1191,8 @@ function insertFinalCatalog(database: DatabaseSync, sourceRevision: string, crea
           nonEmpty(row.stop_label, "candidate.stop_label"),
           nonEmpty(row.line_label, "candidate.line_label"),
           nonEmpty(row.destination_label, "candidate.destination_label"),
+          normalizeLineColor(row.line_color, "candidate.line_color"),
+          normalizeLineColor(row.line_text_color, "candidate.line_text_color"),
           nonEmpty(row.monitoring_ref, "candidate.monitoring_ref"),
           nonEmpty(row.line_ref, "candidate.line_ref"),
           nonEmpty(row.direction_id, "candidate.direction_id"),
@@ -1206,6 +1225,8 @@ function validateByteBounds(database: DatabaseSync): void {
       OR length(CAST(stop_label AS BLOB)) > ?
       OR length(CAST(line_label AS BLOB)) > ?
       OR length(CAST(destination_label AS BLOB)) > ?
+      OR length(CAST(line_color AS BLOB)) <> 7
+      OR length(CAST(line_text_color AS BLOB)) <> 7
     LIMIT 1
   `).get(LIMITS.idUtf8Bytes, LIMITS.labelUtf8Bytes, LIMITS.labelUtf8Bytes, LIMITS.labelUtf8Bytes);
   if (invalidService !== undefined) fail("CATALOG_LIMIT", "service exceeds a shared UTF-8 byte limit");
@@ -1228,7 +1249,7 @@ function validateOpenCatalog(database: DatabaseSync): CatalogBuildResult {
   database.exec("PRAGMA foreign_keys = ON");
   exactColumns(database, "metadata", ["key", "value"]);
   exactColumns(database, "places", ["place_id", "stop_label", "locality_label", "mode", "canonical_tuple"]);
-  exactColumns(database, "services", ["service_id", "place_id", "stop_label", "line_label", "destination_label", "monitoring_ref", "line_ref", "direction_id", "destination_ref", "canonical_tuple"]);
+  exactColumns(database, "services", ["service_id", "place_id", "stop_label", "line_label", "destination_label", "line_color", "line_text_color", "monitoring_ref", "line_ref", "direction_id", "destination_ref", "canonical_tuple"]);
   exactColumns(database, "place_search", ["search_text", "place_id"]);
 
   const sourceRevision = metadataValue(database, "source_revision");
@@ -1276,9 +1297,11 @@ function validateOpenCatalog(database: DatabaseSync): CatalogBuildResult {
   const unresolved = database.prepare(`
     SELECT 1 FROM services
     WHERE trim(monitoring_ref) = '' OR trim(line_ref) = '' OR trim(direction_id) = '' OR trim(destination_ref) = ''
+      OR line_color NOT GLOB '#[0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]'
+      OR line_text_color NOT GLOB '#[0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]'
     LIMIT 1
   `).get();
-  if (unresolved !== undefined) fail("CATALOG_UNRESOLVED", "catalog contains an unresolvable offered service");
+  if (unresolved !== undefined) fail("CATALOG_UNRESOLVED", "catalog contains an unresolvable or malformed offered service");
 
   for (const row of database.prepare("SELECT place_id, canonical_tuple FROM places").iterate() as Iterable<QueryRow>) {
     if (opaqueId("plc_", String(row.canonical_tuple)) !== row.place_id) fail("HASH_COLLISION", "place ID does not match its canonical tuple");

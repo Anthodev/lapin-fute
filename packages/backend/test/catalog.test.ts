@@ -23,6 +23,8 @@ interface ServiceSeed {
   readonly stopLabel: string;
   readonly lineLabel: string;
   readonly destinationLabel: string;
+  readonly lineColor?: string;
+  readonly lineTextColor?: string;
   readonly monitoringRef: string;
   readonly lineRef: string;
   readonly directionId: string;
@@ -208,6 +210,8 @@ function buildCatalog(seed: CatalogSeed = {}): BuiltCatalog {
       stop_label TEXT NOT NULL,
       line_label TEXT NOT NULL,
       destination_label TEXT NOT NULL,
+      line_color TEXT NOT NULL,
+      line_text_color TEXT NOT NULL,
       monitoring_ref TEXT NOT NULL,
       line_ref TEXT NOT NULL,
       direction_id TEXT NOT NULL,
@@ -219,7 +223,7 @@ function buildCatalog(seed: CatalogSeed = {}): BuiltCatalog {
 
   const metadata = database.prepare("INSERT INTO metadata(key, value) VALUES (?, ?)");
   metadata.run("schema_version", "1");
-  metadata.run("catalog_version", seed.catalogVersion ?? "1");
+  metadata.run("catalog_version", seed.catalogVersion ?? "2");
   metadata.run("source_revision", seed.revision ?? "fixture-revision-a");
   metadata.run("created_at", "2026-08-30T12:00:00.000Z");
 
@@ -258,12 +262,14 @@ function buildCatalog(seed: CatalogSeed = {}): BuiltCatalog {
       stop_label,
       line_label,
       destination_label,
+      line_color,
+      line_text_color,
       monitoring_ref,
       line_ref,
       direction_id,
       destination_ref,
       canonical_tuple
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `);
   for (const service of services) {
     const identity = serviceIdentity(service);
@@ -274,6 +280,8 @@ function buildCatalog(seed: CatalogSeed = {}): BuiltCatalog {
       service.stopLabel,
       service.lineLabel,
       service.destinationLabel,
+      service.lineColor ?? "#123456",
+      service.lineTextColor ?? "#ffffff",
       service.monitoringRef,
       service.lineRef,
       service.directionId,
@@ -424,7 +432,7 @@ test("reload preserves stable IDs, distinguishes directions, rejects invalid can
     destinationLabel: "Saint-Rémy-lès-Chevreuse",
   });
 
-  const invalid = buildCatalog({ catalogVersion: "2" });
+  const invalid = buildCatalog({ catalogVersion: "1" });
   assert.throws(() => manager.reload(invalid.path), /Invalid catalog candidate/u);
   assert.equal(manager.resolveService(southId).status, "RESOLVED");
 
@@ -455,13 +463,33 @@ test("reload preserves stable IDs, distinguishes directions, rejects invalid can
   assert.equal(manager.listServices("plc_missing"), undefined);
   assert.deepEqual(Object.keys(manager.listServices(replacement.placeIds.metro)![0]!).sort(), [
     "destinationLabel",
+    "lineColor",
     "lineLabel",
+    "lineMode",
+    "lineTextColor",
     "serviceId",
     "stopLabel",
   ]);
+  assert.deepEqual(manager.listServices(replacement.placeIds.metro)![0], {
+    serviceId: replacement.serviceIds["metro-south"],
+    stopLabel: "Châtelet",
+    lineLabel: "4",
+    destinationLabel: "Bagneux – Lucie Aubrac",
+    lineMode: "METRO",
+    lineColor: "#123456",
+    lineTextColor: "#ffffff",
+  });
 });
 
 test("candidate validation rejects incomplete FTS coverage", () => {
   const invalid = buildCatalog({ omitSearchFor: "metro" });
   assert.throws(() => SqliteCatalogReader.open(invalid.path), /search consistency/u);
+});
+
+test("candidate validation rejects non-normalized presentation colors", () => {
+  const invalid = buildCatalog({
+    omitServiceKeys: ["metro-south"],
+    services: [{ ...BASE_SERVICES.find((service) => service.key === "metro-south")!, lineColor: "#ABCDEF" }],
+  });
+  assert.throws(() => SqliteCatalogReader.open(invalid.path), /service data/u);
 });

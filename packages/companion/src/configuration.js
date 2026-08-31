@@ -11,7 +11,10 @@ var FAVORITE_STRING_KEYS = [
   "displayName",
   "stopLabel",
   "lineLabel",
-  "destinationLabel"
+  "destinationLabel",
+  "lineMode",
+  "lineColor",
+  "lineTextColor"
 ];
 
 function emptyConfiguration() {

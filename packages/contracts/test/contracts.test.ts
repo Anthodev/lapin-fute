@@ -41,6 +41,9 @@ const favorite = {
   stopLabel: "Châtelet",
   lineLabel: "Métro 1",
   destinationLabel: "La Défense",
+  lineMode: "METRO",
+  lineColor: "#ffbe00",
+  lineTextColor: "#000000",
   sortOrder: 0,
 };
 
@@ -92,6 +95,25 @@ test("domain validators enforce exact fields, versions, bounds, and secret rules
   assert.equal(isFavorite({ ...favorite, unknown: true }), false);
   assert.equal(isFavorite({ ...favorite, schemaVersion: 2 }), false);
   assert.equal(isFavorite({ ...favorite, stopLabel: "é".repeat(49) }), false);
+  assert.equal(isFavorite({ ...favorite, lineMode: "metro" }), false);
+  assert.equal(isFavorite({ ...favorite, lineColor: "#FFBE00" }), false);
+  assert.equal(isFavorite({ ...favorite, lineTextColor: "000000" }), false);
+  const {
+    lineMode: _legacyLineMode,
+    lineColor: _legacyLineColor,
+    lineTextColor: _legacyLineTextColor,
+    ...legacyFavorite
+  } = favorite;
+  assert.equal(isFavorite(legacyFavorite), true);
+  assert.equal(isFavorite({ ...legacyFavorite, lineMode: favorite.lineMode }), false);
+  assert.equal(isFavorite({
+    ...legacyFavorite,
+    lineMode: favorite.lineMode,
+    lineColor: favorite.lineColor,
+  }), false);
+  assert.equal(isFavorite({ ...legacyFavorite, lineMode: undefined }), false);
+  const { lineColor: _favoriteLineColor, ...favoriteWithoutColor } = favorite;
+  assert.equal(isFavorite(favoriteWithoutColor), false);
   assert.equal(utf8Bytes("é".repeat(48)), LIMITS.labelUtf8Bytes);
   assert.equal(isDepartureResult({
     ...result,
@@ -259,6 +281,9 @@ test("catalog validators enforce exact public fields, bounds, and no raw source 
     stopLabel: "Châtelet",
     lineLabel: "Métro 1",
     destinationLabel: "La Défense",
+    lineMode: "METRO",
+    lineColor: "#ffbe00",
+    lineTextColor: "#000000",
   };
   const requiredPlace = { placeId: placeItem.placeId, stopLabel: placeItem.stopLabel, mode: placeItem.mode };
 
@@ -297,6 +322,13 @@ test("catalog validators enforce exact public fields, bounds, and no raw source 
 
   assert.equal(isServiceOption({ ...serviceOption, serviceId: opaque64 }), true);
   assert.equal(isServiceOption({ ...serviceOption, destinationLabel: "" }), false);
+  assert.equal(isServiceOption({ ...serviceOption, lineMode: "metro" }), false);
+  assert.equal(isServiceOption({ ...serviceOption, lineMode: "TER" }), false);
+  assert.equal(isServiceOption({ ...serviceOption, lineColor: "#FFBE00" }), false);
+  assert.equal(isServiceOption({ ...serviceOption, lineColor: "#12345" }), false);
+  assert.equal(isServiceOption({ ...serviceOption, lineTextColor: "transparent" }), false);
+  const { lineTextColor: _lineTextColor, ...serviceWithoutTextColor } = serviceOption;
+  assert.equal(isServiceOption(serviceWithoutTextColor), false);
   assert.equal(isServiceOption({ ...serviceOption, directionId: 1 }), false);
   assert.equal(isServiceOption({ ...serviceOption, destinationRef: "Q-1" }), false);
   assert.equal(isServiceOption({ serviceId: opaque64, stopLabel: "Châtelet", lineLabel: "1" }), false);

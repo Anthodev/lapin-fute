@@ -7,6 +7,9 @@
     "stopLabel": "Châtelet",
     "lineLabel": "Métro 1",
     "destinationLabel": "La Défense",
+    "lineMode": "METRO",
+    "lineColor": "#ffbe00",
+    "lineTextColor": "#000000",
     "sortOrder": 0
   },
   "result": {
