@@ -1,0 +1,28 @@
+{
+  "Siri": {
+    "ServiceDelivery": {
+      "ResponseTimestamp": "2026-01-15T08:30:00Z",
+      "StopMonitoringDelivery": [
+        {
+          "ResponseTimestamp": "2026-01-15T08:29:58Z",
+          "MonitoredStopVisit": [
+            {
+              "RecordedAtTime": "2026-01-15T08:29:47Z",
+              "MonitoringRef": { "value": "IDFM:SP:3001" },
+              "MonitoredVehicleJourney": {
+                "LineRef": { "value": "IDFM:C3001" },
+                "DirectionRef": { "value": "IDFM:3001D" },
+                "DestinationRef": { "value": "IDFM:3001DST" },
+                "MonitoredCall": {
+                  "ExpectedDepartureTime": "2026-01-15T08:36:00Z",
+                  "AimedDepartureTime": "2026-01-15T08:35:00Z",
+                  "DepartureStatus": "ontime"
+                }
+              }
+            }
+          ]
+        }
+      ]
+    }
+  }
+}

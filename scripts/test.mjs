@@ -10,6 +10,8 @@ run(process.execPath, [
   "--test",
   "packages/contracts/test/contracts.test.ts",
   "packages/backend/test/backend.test.ts",
+  "packages/backend/test/departures.test.ts",
+  "packages/backend/test/departure-endpoint.test.ts",
   "packages/backend/test/catalog.test.ts",
   "packages/backend/test/catalog-import.test.ts",
   "packages/backend/test/catalog-http.test.ts",

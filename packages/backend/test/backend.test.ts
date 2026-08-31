@@ -141,8 +141,16 @@ test("relay sends a GET to the canonical origin with the key only in apikey", as
 
   assert.equal(capturedTarget?.origin, PRIM_ORIGIN);
   assert.equal(capturedTarget?.href.includes(TEST_KEY), false);
-  assert.deepEqual(capturedInit?.headers, { apikey: TEST_KEY });
-  assert.deepEqual(Object.keys(capturedInit?.headers ?? {}), ["apikey"]);
+  assert.deepEqual(capturedInit?.headers, {
+    apikey: TEST_KEY,
+    accept: "application/json",
+    "accept-encoding": "gzip",
+  });
+  assert.deepEqual(Object.keys(capturedInit?.headers ?? {}), [
+    "apikey",
+    "accept",
+    "accept-encoding",
+  ]);
   assert.equal(capturedInit?.method, "GET");
   assert.equal(capturedInit?.redirect, "manual");
   assert.equal(capturedInit?.credentials, "omit");

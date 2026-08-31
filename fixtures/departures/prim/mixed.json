@@ -1,0 +1,54 @@
+{
+  "Siri": {
+    "ServiceDelivery": {
+      "ResponseTimestamp": "2026-01-15T08:30:00Z",
+      "StopMonitoringDelivery": [
+        {
+          "ResponseTimestamp": "2026-01-15T08:29:57Z",
+          "MonitoredStopVisit": [
+            {
+              "RecordedAtTime": "2026-01-15T08:29:44Z",
+              "MonitoringRef": { "value": "IDFM:SP:4001" },
+              "MonitoredVehicleJourney": {
+                "LineRef": { "value": "IDFM:C4001" },
+                "DirectionRef": { "value": "IDFM:4001D" },
+                "DestinationRef": { "value": "IDFM:4001DST" },
+                "MonitoredCall": {
+                  "ExpectedDepartureTime": "2026-01-15T08:33:00Z",
+                  "AimedDepartureTime": "2026-01-15T08:32:30Z",
+                  "DepartureStatus": "ontime"
+                }
+              }
+            },
+            {
+              "RecordedAtTime": "2026-01-15T08:29:43Z",
+              "MonitoringRef": { "value": "IDFM:SP:4001" },
+              "MonitoredVehicleJourney": {
+                "LineRef": { "value": "IDFM:C4001" },
+                "DirectionRef": { "value": "IDFM:4001D" },
+                "DestinationRef": { "value": "IDFM:4001DST" },
+                "MonitoredCall": {
+                  "AimedDepartureTime": "2026-01-15T08:41:00Z"
+                }
+              }
+            },
+            {
+              "RecordedAtTime": "2026-01-15T08:29:42Z",
+              "MonitoringRef": { "value": "IDFM:SP:4001" },
+              "MonitoredVehicleJourney": {
+                "LineRef": { "value": "IDFM:C4001" },
+                "DirectionRef": { "value": "IDFM:4001D" },
+                "DestinationRef": { "value": "IDFM:4001DST" },
+                "MonitoredCall": {
+                  "ExpectedDepartureTime": "2026-01-15T08:49:00Z",
+                  "AimedDepartureTime": "2026-01-15T08:48:00Z",
+                  "DepartureStatus": "ontime"
+                }
+              }
+            }
+          ]
+        }
+      ]
+    }
+  }
+}
