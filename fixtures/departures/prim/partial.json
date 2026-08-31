@@ -1,0 +1,69 @@
+{
+  "Siri": {
+    "ServiceDelivery": {
+      "StopMonitoringDelivery": [
+        {
+          "MonitoredStopVisit": [
+            {
+              "RecordedAtTime": "2026-01-15T08:29:36Z",
+              "MonitoringRef": { "value": "IDFM:SP:1099" },
+              "MonitoredVehicleJourney": {
+                "LineRef": { "value": "IDFM:C1001" },
+                "DirectionRef": { "value": "IDFM:1099D" },
+                "DestinationRef": { "value": "IDFM:1099DST" },
+                "MonitoredCall": {
+                  "ExpectedDepartureTime": "2026-01-15T08:31:00Z",
+                  "AimedDepartureTime": "2026-01-15T08:31:00Z",
+                  "DepartureStatus": "ontime"
+                }
+              }
+            },
+            {
+              "RecordedAtTime": "2026-01-15T08:29:35Z",
+              "MonitoringRef": { "value": "IDFM:SP:1001" },
+              "MonitoredVehicleJourney": {
+                "LineRef": { "value": "IDFM:C1001" },
+                "DirectionRef": { "value": "IDFM:1001D" },
+                "DestinationRef": { "value": "IDFM:1001DST" },
+                "MonitoredCall": {
+                  "ExpectedDepartureTime": "2026-01-15T08:34:00Z",
+                  "AimedDepartureTime": "2026-01-15T08:33:00Z",
+                  "DepartureStatus": "ontime"
+                }
+              }
+            }
+          ]
+        },
+        {
+          "MonitoredStopVisit": [
+            {
+              "RecordedAtTime": "2026-01-15T08:29:34Z",
+              "MonitoringRef": { "value": "IDFM:SP:1001" },
+              "MonitoredVehicleJourney": {
+                "LineRef": { "value": "IDFM:C1099" },
+                "DirectionRef": { "value": "IDFM:1099D" },
+                "DestinationRef": { "value": "IDFM:1099DST" },
+                "MonitoredCall": {
+                  "ExpectedDepartureTime": "2026-01-15T08:36:00Z",
+                  "AimedDepartureTime": "2026-01-15T08:36:00Z",
+                  "DepartureStatus": "ontime"
+                }
+              }
+            },
+            {
+              "RecordedAtTime": "2026-01-15T08:29:33Z",
+              "MonitoringRef": { "value": "IDFM:SP:1001" },
+              "MonitoredVehicleJourney": {
+                "LineRef": { "value": "IDFM:C1001" },
+                "MonitoredCall": {
+                  "ExpectedDepartureTime": "2026-01-15T08:42:00Z",
+                  "DepartureStatus": "ontime"
+                }
+              }
+            }
+          ]
+        }
+      ]
+    }
+  }
+}

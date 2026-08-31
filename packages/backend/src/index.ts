@@ -1,16 +1,7 @@
 import {
-  CACHE_FRESH_SECONDS,
   LIMITS,
   PRIM_ORIGIN,
-  SCHEMA_VERSION,
-  isDepartureResult,
-  isErrorResult,
   isPersonalApiKey,
-  utf8Bytes,
-  type Departure,
-  type DepartureResult,
-  type ErrorCode,
-  type ErrorResult,
 } from "../../contracts/src/index.ts";
 
 export {
@@ -21,6 +12,11 @@ export {
   type CatalogReader,
   type CatalogServiceResolution,
 } from "./catalog.ts";
+
+export * from "./departures.ts";
+export * from "./prim-departures.ts";
+export * from "./departure-service.ts";
+export * from "./departure-endpoint.ts";
 
 export const REDACTED_SECRET = "[REDACTED]" as const;
 
@@ -149,7 +145,11 @@ export function createRedactingLogger(
 
 export interface PrimFetchInit {
   readonly method: "GET";
-  readonly headers: Readonly<{ apikey: string }>;
+  readonly headers: Readonly<{
+    apikey: string;
+    accept: "application/json";
+    "accept-encoding": "gzip";
+  }>;
   readonly redirect: "manual";
   readonly credentials: "omit";
   readonly cache: "no-store";
@@ -160,6 +160,9 @@ export interface PrimFetchResponse {
   readonly status: number;
   readonly redirected?: boolean;
   readonly type?: string;
+  readonly headers?: {
+    get(name: string): string | null;
+  };
   readonly body: ReadableStream<Uint8Array> | null;
 }
 
@@ -184,6 +187,7 @@ export interface PrimRelayRequest {
 export interface PrimRelayResponse {
   readonly status: number;
   readonly bytes: Uint8Array;
+  readonly retryAfter?: string;
 }
 
 const SYSTEM_TIMER: RelayTimer = {
@@ -340,7 +344,11 @@ async function performRelay(
 ): Promise<PrimRelayResponse> {
   const response = await fetch(target, {
     method: "GET",
-    headers: Object.freeze({ apikey: apiKey }),
+    headers: Object.freeze({
+      apikey: apiKey,
+      accept: "application/json",
+      "accept-encoding": "gzip",
+    }),
     redirect: "manual",
     credentials: "omit",
     cache: "no-store",
@@ -357,9 +365,24 @@ async function performRelay(
     throw new BackendBoundaryError(BACKEND_ERROR_CODE.PRIM_INVALID_RESPONSE);
   }
 
+  let retryAfter: string | undefined;
+  if (response.headers !== undefined) {
+    let value: string | null;
+    try {
+      value = response.headers.get("retry-after");
+    } catch {
+      throw new BackendBoundaryError(BACKEND_ERROR_CODE.PRIM_INVALID_RESPONSE);
+    }
+    if (value !== null && typeof value !== "string") {
+      throw new BackendBoundaryError(BACKEND_ERROR_CODE.PRIM_INVALID_RESPONSE);
+    }
+    if (value !== null) retryAfter = value;
+  }
+
   return {
     status: response.status,
     bytes: await readBoundedBody(response.body, controller),
+    ...(retryAfter === undefined ? {} : { retryAfter }),
   };
 }
 
@@ -409,309 +432,3 @@ export async function relayPrimRequest(
   }
 }
 
-export interface DepartureRequestBody {
-  readonly schemaVersion: typeof SCHEMA_VERSION;
-  readonly requestId: string;
-  readonly favoriteId: string;
-  readonly serviceId: string;
-}
-
-export interface DepartureHandlerRequest {
-  readonly authorization: unknown;
-  readonly body: unknown;
-}
-
-export type PublicDepartureData = Omit<DepartureResult, "requestId" | "favoriteId">;
-export type PublicDepartureError = Omit<ErrorResult, "requestId" | "favoriteId">;
-export type DepartureResolverResult = PublicDepartureData | PublicDepartureError;
-
-export interface DepartureResolverRequest {
-  readonly serviceId: string;
-  readonly apiKey: string;
-}
-
-export type DepartureResolver = (
-  request: DepartureResolverRequest,
-) => Promise<DepartureResolverResult>;
-
-export interface DepartureHandlerDependencies {
-  readonly resolve: DepartureResolver;
-  readonly nowMilliseconds?: () => number;
-}
-
-export type DepartureHandlerResponse = DepartureResult | ErrorResult;
-
-interface DepartureBinding {
-  readonly requestId: string;
-  readonly favoriteId?: string;
-}
-
-interface CachedDeparture {
-  readonly storedAtMilliseconds: number;
-  readonly data: PublicDepartureData;
-}
-
-const DEPARTURE_REQUEST_KEYS = ["schemaVersion", "requestId", "favoriteId", "serviceId"] as const;
-const PUBLIC_DEPARTURE_KEYS = [
-  "schemaVersion",
-  "fetchedAt",
-  "sourceUpdatedAt",
-  "freshness",
-  "departures",
-] as const;
-const PUBLIC_ERROR_KEYS = [
-  "schemaVersion",
-  "code",
-  "occurredAt",
-  "retryAfterSeconds",
-] as const;
-const INVALID_REQUEST_ID = "invalid-request";
-const UINT32_MAX = 0xffff_ffff;
-const DEPARTURE_CACHE_FRESH_MS = CACHE_FRESH_SECONDS * 1_000;
-const DEPARTURE_CACHE = new Map<string, CachedDeparture>();
-
-function record(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function hasOnlyKeys(value: Record<string, unknown>, allowed: readonly string[]): boolean {
-  return Object.keys(value).every((key) => allowed.includes(key));
-}
-
-function boundedId(value: unknown): value is string {
-  return typeof value === "string"
-    && utf8Bytes(value) >= 1
-    && utf8Bytes(value) <= LIMITS.idUtf8Bytes;
-}
-
-function departureBinding(value: unknown): DepartureBinding {
-  if (!record(value)) return { requestId: INVALID_REQUEST_ID };
-
-  try {
-    const requestId = boundedId(value.requestId) ? value.requestId : INVALID_REQUEST_ID;
-    const favoriteId = boundedId(value.favoriteId) ? value.favoriteId : undefined;
-    return favoriteId === undefined ? { requestId } : { requestId, favoriteId };
-  } catch {
-    return { requestId: INVALID_REQUEST_ID };
-  }
-}
-
-function isDepartureRequestBody(value: unknown): value is DepartureRequestBody {
-  if (!record(value)) return false;
-
-  try {
-    return hasOnlyKeys(value, DEPARTURE_REQUEST_KEYS)
-      && value.schemaVersion === SCHEMA_VERSION
-      && boundedId(value.requestId)
-      && boundedId(value.favoriteId)
-      && boundedId(value.serviceId);
-  } catch {
-    return false;
-  }
-}
-
-function isPublicDepartureData(value: unknown): value is PublicDepartureData {
-  if (!record(value)) return false;
-
-  try {
-    return hasOnlyKeys(value, PUBLIC_DEPARTURE_KEYS)
-      && isDepartureResult({
-        ...value,
-        requestId: INVALID_REQUEST_ID,
-        favoriteId: INVALID_REQUEST_ID,
-      });
-  } catch {
-    return false;
-  }
-}
-
-function isPublicDepartureError(value: unknown): value is PublicDepartureError {
-  if (!record(value)) return false;
-
-  try {
-    return hasOnlyKeys(value, PUBLIC_ERROR_KEYS)
-      && isErrorResult({ ...value, requestId: INVALID_REQUEST_ID });
-  } catch {
-    return false;
-  }
-}
-
-function nowMilliseconds(dependencies: DepartureHandlerDependencies): number {
-  const fallback = Date.now();
-  try {
-    const value = dependencies.nowMilliseconds?.() ?? fallback;
-    return Number.isFinite(value) && value >= 0 ? value : fallback;
-  } catch {
-    return fallback;
-  }
-}
-
-function occurredAt(milliseconds: number): number {
-  return Math.min(UINT32_MAX, Math.floor(milliseconds / 1_000));
-}
-
-function stableError(
-  binding: DepartureBinding,
-  code: ErrorCode,
-  milliseconds: number,
-): ErrorResult {
-  const result: ErrorResult = {
-    schemaVersion: SCHEMA_VERSION,
-    requestId: binding.requestId,
-    code,
-    occurredAt: occurredAt(milliseconds),
-  };
-  if (binding.favoriteId !== undefined) result.favoriteId = binding.favoriteId;
-  return result;
-}
-
-function copyDeparture(value: Departure): Departure {
-  const copy: Departure = {
-    expectedAt: value.expectedAt,
-    minutes: value.minutes,
-    status: value.status,
-  };
-  if (value.aimedAt !== undefined) copy.aimedAt = value.aimedAt;
-  if (value.nextIntervalMinutes !== undefined) {
-    copy.nextIntervalMinutes = value.nextIntervalMinutes;
-  }
-  return copy;
-}
-
-function normalizePublicDeparture(value: PublicDepartureData): PublicDepartureData {
-  const normalized: PublicDepartureData = {
-    schemaVersion: SCHEMA_VERSION,
-    fetchedAt: value.fetchedAt,
-    freshness: value.freshness,
-    departures: value.departures.map(copyDeparture),
-  };
-  if (value.sourceUpdatedAt !== undefined) {
-    normalized.sourceUpdatedAt = value.sourceUpdatedAt;
-  }
-  return normalized;
-}
-
-function bindDeparture(
-  data: PublicDepartureData,
-  request: DepartureRequestBody,
-): DepartureResult {
-  const result: DepartureResult = {
-    schemaVersion: SCHEMA_VERSION,
-    requestId: request.requestId,
-    favoriteId: request.favoriteId,
-    fetchedAt: data.fetchedAt,
-    freshness: data.freshness,
-    departures: data.departures.map(copyDeparture),
-  };
-  if (data.sourceUpdatedAt !== undefined) result.sourceUpdatedAt = data.sourceUpdatedAt;
-  return result;
-}
-
-function bindPublicError(
-  error: PublicDepartureError,
-  request: DepartureRequestBody,
-): ErrorResult {
-  const result: ErrorResult = {
-    schemaVersion: SCHEMA_VERSION,
-    requestId: request.requestId,
-    favoriteId: request.favoriteId,
-    code: error.code,
-    occurredAt: error.occurredAt,
-  };
-  if (error.retryAfterSeconds !== undefined) {
-    result.retryAfterSeconds = error.retryAfterSeconds;
-  }
-  return result;
-}
-
-function cachedDeparture(
-  serviceId: string,
-  milliseconds: number,
-): PublicDepartureData | undefined {
-  const cached = DEPARTURE_CACHE.get(serviceId);
-  if (cached === undefined) return undefined;
-
-  const age = milliseconds - cached.storedAtMilliseconds;
-  if (age < 0 || age >= DEPARTURE_CACHE_FRESH_MS) {
-    DEPARTURE_CACHE.delete(serviceId);
-    return undefined;
-  }
-  return cached.data;
-}
-
-export async function handleDepartureRequest(
-  request: DepartureHandlerRequest,
-  dependencies: DepartureHandlerDependencies,
-): Promise<DepartureHandlerResponse> {
-  let authorization: unknown;
-  let bodyValue: unknown;
-  try {
-    authorization = request.authorization;
-    bodyValue = request.body;
-  } catch {
-    authorization = undefined;
-    bodyValue = undefined;
-  }
-
-  const binding = departureBinding(bodyValue);
-  let apiKey: string;
-  try {
-    apiKey = parseBearerAuthorization(authorization);
-  } catch (failure) {
-    const code: ErrorCode = failure instanceof BackendBoundaryError
-      && failure.code === BACKEND_ERROR_CODE.API_KEY_REQUIRED
-      ? "API_KEY_REQUIRED"
-      : "API_KEY_INVALID";
-    return stableError(binding, code, nowMilliseconds(dependencies));
-  }
-
-  if (!isDepartureRequestBody(bodyValue)) {
-    apiKey = "";
-    return stableError(binding, "INVALID_SERVICE", nowMilliseconds(dependencies));
-  }
-
-  const requestBody = bodyValue;
-  const currentMilliseconds = nowMilliseconds(dependencies);
-  const cached = cachedDeparture(requestBody.serviceId, currentMilliseconds);
-  if (cached !== undefined) {
-    apiKey = "";
-    const result = bindDeparture(cached, requestBody);
-    return isDepartureResult(result)
-      ? result
-      : stableError(binding, "INVALID_RESPONSE", currentMilliseconds);
-  }
-
-  let resolved: unknown;
-  try {
-    resolved = await dependencies.resolve({
-      serviceId: requestBody.serviceId,
-      apiKey,
-    });
-  } catch {
-    return stableError(binding, "SOURCE_UNAVAILABLE", nowMilliseconds(dependencies));
-  } finally {
-    apiKey = "";
-  }
-
-  if (isPublicDepartureData(resolved)) {
-    const normalized = normalizePublicDeparture(resolved);
-    const storedAtMilliseconds = nowMilliseconds(dependencies);
-    DEPARTURE_CACHE.set(requestBody.serviceId, {
-      storedAtMilliseconds,
-      data: normalized,
-    });
-    const result = bindDeparture(normalized, requestBody);
-    return isDepartureResult(result)
-      ? result
-      : stableError(binding, "INVALID_RESPONSE", storedAtMilliseconds);
-  }
-
-  if (isPublicDepartureError(resolved)) {
-    const error = bindPublicError(resolved, requestBody);
-    return isErrorResult(error)
-      ? error
-      : stableError(binding, "INVALID_RESPONSE", nowMilliseconds(dependencies));
-  }
-
-  return stableError(binding, "INVALID_RESPONSE", nowMilliseconds(dependencies));
-}
