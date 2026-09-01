@@ -3,6 +3,8 @@
 var test = require("node:test");
 var assert = require("node:assert/strict");
 var vm = require("node:vm");
+var path = require("node:path");
+var url = require("node:url");
 var companion = require("../src");
 var fixture = require("../../../fixtures/departures/foundation.json");
 var fakes = require("./fakes");
@@ -14,13 +16,17 @@ var T = contracts.MESSAGE_TYPE;
 var TEST_KEY = "test-personal-prim-key";
 
 function harness(options) {
-  var Pebble = new fakes.FakePebble(true);
-  var storage = new fakes.FakeStorage();
-  var clock = new fakes.FakeClock();
-  var xhr = fakes.createXHRFactory();
+  var Pebble;
+  var storage;
+  var clock;
+  var xhr;
   var defer;
   var instance;
   options = options || {};
+  Pebble = options.Pebble || new fakes.FakePebble(true);
+  storage = options.storage || new fakes.FakeStorage();
+  clock = options.clock || new fakes.FakeClock();
+  xhr = fakes.createXHRFactory();
   defer = typeof options.defer === "function" ? options.defer : fakes.createDefer(true);
   instance = companion.createCompanion({
     Pebble: Pebble,
@@ -58,12 +64,12 @@ function closeWith(target, payload) {
   });
 }
 
-function sendRequest(target, requestId) {
+function sendRequest(target, requestId, trigger) {
   target.Pebble.emit("appmessage", {
     payload: codec.encodeRequest({
       requestId: requestId,
       favoriteId: fixture.favorite.id,
-      trigger: contracts.REQUEST_TRIGGER.APP_OPEN
+      trigger: typeof trigger === "number" ? trigger : contracts.REQUEST_TRIGGER.APP_OPEN
     })
   });
 }
@@ -94,6 +100,17 @@ function responseFor(requestId) {
   return result;
 }
 
+async function watchProtocol() {
+  var protocolPath = path.resolve(__dirname, "../../watch/src/embeddedjs/protocol.js");
+  return import(url.pathToFileURL(protocolPath).href);
+}
+
+function watchMessage(message) {
+  return new Map(Object.keys(message).map(function (key) {
+    return [key, message[key]];
+  }));
+}
+
 test("close fragment atomically stores one favorites-and-key record and exposes the key only to Authorization", function () {
   var target = harness();
   var stored;
@@ -101,10 +118,11 @@ test("close fragment atomically stores one favorites-and-key record and exposes 
   var pageState;
 
   closeWith(target, configurationPayload("REPLACE", TEST_KEY));
-  assert.deepEqual(target.storage.keys(), [configuration.STORAGE_KEY]);
+  assert.deepEqual(target.storage.keys(), [configuration.CONFIG_STORAGE_KEY]);
   assert.equal(target.storage.writes.length, 1);
-  stored = JSON.parse(target.storage.getItem(configuration.STORAGE_KEY));
-  assert.equal(stored.apiKey, TEST_KEY);
+  stored = JSON.parse(target.storage.getItem(configuration.CONFIG_STORAGE_KEY));
+  assert.equal(stored.primApiKey, TEST_KEY);
+  assert.equal(stored.keyStatus, contracts.KEY_STATUS.CONFIGURED);
   assert.deepEqual(stored.favorites, [fixture.favorite]);
 
   sentText = JSON.stringify(target.Pebble.sent);
@@ -144,12 +162,17 @@ test("a pre-presentation v1 record keeps its API key and legacy favorite on load
   };
   var loaded;
 
-  storage.setItem(configuration.STORAGE_KEY, JSON.stringify(legacyRecord));
+  storage.setItem(configuration.LEGACY_CONFIG_STORAGE_KEY, JSON.stringify(legacyRecord));
   loaded = configuration.loadConfiguration(storage);
 
-  assert.deepEqual(loaded, legacyRecord);
-  assert.equal(loaded.apiKey, TEST_KEY);
+  assert.equal(loaded.primApiKey, TEST_KEY);
+  assert.equal(loaded.keyStatus, contracts.KEY_STATUS.CONFIGURED);
   assert.equal(loaded.favorites.length, 1);
+  assert.equal(
+    JSON.parse(storage.getItem(configuration.CONFIG_STORAGE_KEY)).primApiKey,
+    TEST_KEY
+  );
+  assert.deepEqual(storage.keys(), [configuration.CONFIG_STORAGE_KEY]);
   ["lineMode", "lineColor", "lineTextColor"].forEach(function (field) {
     assert.equal(Object.prototype.hasOwnProperty.call(loaded.favorites[0], field), false);
   });
@@ -176,15 +199,43 @@ test("KEEP, REPLACE, and REMOVE apply to one atomic phone-local record", functio
 
   closeWith(target, configurationPayload("REPLACE", TEST_KEY));
   closeWith(target, configurationPayload("KEEP"));
-  stored = JSON.parse(target.storage.getItem(configuration.STORAGE_KEY));
-  assert.equal(stored.apiKey, TEST_KEY);
-  assert.deepEqual(target.storage.keys(), [configuration.STORAGE_KEY]);
+  stored = JSON.parse(target.storage.getItem(configuration.CONFIG_STORAGE_KEY));
+  assert.equal(stored.primApiKey, TEST_KEY);
+  assert.equal(stored.keyStatus, contracts.KEY_STATUS.CONFIGURED);
+  assert.deepEqual(target.storage.keys(), [configuration.CONFIG_STORAGE_KEY]);
 
   closeWith(target, configurationPayload("REMOVE"));
-  stored = JSON.parse(target.storage.getItem(configuration.STORAGE_KEY));
-  assert.equal(stored.apiKey, null);
-  assert.deepEqual(target.storage.keys(), [configuration.STORAGE_KEY]);
+  stored = JSON.parse(target.storage.getItem(configuration.CONFIG_STORAGE_KEY));
+  assert.equal(stored.primApiKey, null);
+  assert.equal(stored.keyStatus, contracts.KEY_STATUS.MISSING);
+  assert.deepEqual(target.storage.keys(), [configuration.CONFIG_STORAGE_KEY]);
   assert.equal(target.storage.writes.length, 3);
+});
+
+test("failed phone verification rolls back configuration bytes and watch state", function () {
+  var target = harness();
+  var beforeBytes;
+  var beforeMessages;
+  var originalSetItem;
+  var failNext = false;
+
+  closeWith(target, configurationPayload("REPLACE", TEST_KEY));
+  beforeBytes = target.storage.getItem(configuration.CONFIG_STORAGE_KEY);
+  beforeMessages = target.Pebble.sent.length;
+  originalSetItem = target.storage.setItem.bind(target.storage);
+  target.storage.setItem = function (key, value) {
+    originalSetItem(key, value);
+    if (failNext && key === configuration.CONFIG_STORAGE_KEY) {
+      failNext = false;
+      target.storage.values[key] = "corrupt";
+    }
+  };
+  failNext = true;
+  closeWith(target, configurationPayload("REMOVE"));
+  assert.equal(target.storage.getItem(configuration.CONFIG_STORAGE_KEY), beforeBytes);
+  assert.equal(target.Pebble.sent.length, beforeMessages);
+  sendRequest(target, "rollback-still-configured");
+  assert.equal(target.xhr.instances.length, 1);
 });
 test("untrusted webview responses are bounded and cannot persist a key inside favorites", function () {
   var target = harness();
@@ -211,9 +262,9 @@ test("untrusted webview responses are bounded and cannot persist a key inside fa
   ];
   closeWith(target, keepLeak);
   assert.equal(target.storage.writes.length, 1);
-  stored = JSON.parse(target.storage.getItem(configuration.STORAGE_KEY));
+  stored = JSON.parse(target.storage.getItem(configuration.CONFIG_STORAGE_KEY));
   assert.equal(JSON.stringify(stored.favorites).includes(TEST_KEY), false);
-  assert.equal(stored.apiKey, TEST_KEY);
+  assert.equal(stored.primApiKey, TEST_KEY);
 });
 
 
@@ -382,6 +433,318 @@ test("fresh results are rebound from cache for 60 seconds without a network time
   sendRequest(target, "cache-expired");
   assert.equal(target.xhr.instances.length, 2);
   assert.equal(target.clock.delays.length, 0);
+});
+
+test("selection replays by original fetched age and refreshes at exactly 60 seconds", function () {
+  var target = harness();
+  var aged = responseFor("aged-network");
+  var before;
+
+  aged.fetchedAt = Math.floor(target.clock.now() / 1000) - 59;
+  closeWith(target, configurationPayload("REPLACE", TEST_KEY));
+  sendRequest(target, "aged-network");
+  target.xhr.instances[0].respond(200, aged);
+  target.clock.advance(1000);
+  before = target.Pebble.sent.length;
+  sendRequest(target, "selection-refresh", contracts.REQUEST_TRIGGER.FAVORITE_SELECTION);
+  assert.equal(
+    target.Pebble.sent.length,
+    before + fixture.result.departures.length + 3
+  );
+  assert.equal(target.xhr.instances.length, 2);
+});
+
+test("stale cache commits before the same-request fresh result at the watch receiver", async function () {
+  var protocol = await watchProtocol();
+  var receiver = new protocol.ProtocolReceiver();
+  var target = harness();
+  var fresh = responseFor("cached-refresh");
+  var before;
+  var statuses;
+
+  closeWith(target, configurationPayload("REPLACE", TEST_KEY));
+  sendRequest(target, "network-seed");
+  target.xhr.instances[0].respond(200, responseFor("network-seed"));
+  target.clock.advance(60000);
+
+  assert.equal(receiver.expectResponse("cached-refresh", fixture.favorite.id), true);
+  before = target.Pebble.sent.length;
+  sendRequest(target, "cached-refresh", contracts.REQUEST_TRIGGER.FAVORITE_SELECTION);
+  statuses = target.Pebble.sent.slice(before).map(function (message) {
+    return receiver.receive(watchMessage(message));
+  });
+  assert.equal(statuses.filter(function (status) {
+    return status === protocol.RECEIVE_RESULT.RESULT_COMMITTED;
+  }).length, 1);
+  assert.equal(receiver.snapshot().result.fetchedAt, fixture.result.fetchedAt);
+
+  fresh.fetchedAt += 60;
+  before = target.Pebble.sent.length;
+  target.xhr.instances[1].respond(200, fresh);
+  statuses = target.Pebble.sent.slice(before).map(function (message) {
+    return receiver.receive(watchMessage(message));
+  });
+  assert.equal(statuses.filter(function (status) {
+    return status === protocol.RECEIVE_RESULT.RESULT_COMMITTED;
+  }).length, 1);
+  assert.equal(receiver.snapshot().result.fetchedAt, fresh.fetchedAt);
+});
+
+test("future fetched timestamps cannot extend cache freshness past receipt time", function () {
+  var target = harness();
+  var future = responseFor("future-network");
+
+  future.fetchedAt = Math.floor(target.clock.now() / 1000) + 3600;
+  closeWith(target, configurationPayload("REPLACE", TEST_KEY));
+  sendRequest(target, "future-network");
+  target.xhr.instances[0].respond(200, future);
+
+  target.clock.advance(60000);
+  sendRequest(target, "future-expired", contracts.REQUEST_TRIGGER.FAVORITE_SELECTION);
+  assert.equal(target.xhr.instances.length, 2);
+});
+
+test("future storedAt after restart replays cache but cannot suppress refresh", function () {
+  var storage = new fakes.FakeStorage();
+  var firstClock = new fakes.FakeClock();
+  var first = harness({ storage: storage, clock: firstClock });
+  var future = responseFor("future-stored");
+  var secondClock;
+  var second;
+  var begins;
+
+  future.fetchedAt = Math.floor(firstClock.now() / 1000) + 3600;
+  closeWith(first, configurationPayload("REPLACE", TEST_KEY));
+  sendRequest(first, "future-stored");
+  first.xhr.instances[0].respond(200, future);
+  first.companion.stop();
+
+  secondClock = new fakes.FakeClock(firstClock.now() - 1000);
+  second = harness({ storage: storage, clock: secondClock });
+  second.Pebble.emit("ready");
+  sendRequest(second, "future-restart");
+  assert.equal(second.xhr.instances.length, 1);
+  begins = messagesOfType(second, T.RESULT_BEGIN);
+  assert.equal(begins[begins.length - 1].REQUEST_ID, "future-restart");
+  assert.equal(begins[begins.length - 1].FETCHED_AT, future.fetchedAt);
+});
+
+test("a durable result replays across companion restart with original age and no key leak", function () {
+  var storage = new fakes.FakeStorage();
+  var clock = new fakes.FakeClock();
+  var first = harness({ storage: storage, clock: clock });
+  var second;
+  var begins;
+  var storedResults;
+
+  closeWith(first, configurationPayload("REPLACE", TEST_KEY));
+  sendRequest(first, "first-request");
+  first.xhr.instances[0].respond(200, responseFor("first-request"));
+  storedResults = storage.getItem(configuration.RESULTS_STORAGE_KEY);
+  assert.equal(typeof storedResults, "string");
+  assert.equal(storedResults.includes(TEST_KEY), false);
+
+  first.companion.stop();
+  clock.advance(1000);
+  second = harness({ storage: storage, clock: clock });
+  second.Pebble.emit("ready");
+  sendRequest(second, "restart-request");
+  assert.equal(second.xhr.instances.length, 0);
+  begins = messagesOfType(second, T.RESULT_BEGIN);
+  assert.equal(begins[begins.length - 1].REQUEST_ID, "restart-request");
+  assert.equal(begins[begins.length - 1].FETCHED_AT, fixture.result.fetchedAt);
+  assert.deepEqual(second.companion.metrics(), {
+    requests: 0,
+    cacheHits: 1,
+    cacheMisses: 0,
+    successes: 0,
+    failures: 0,
+    totalLatencyMs: 0,
+    lastLatencyMs: 0
+  });
+});
+
+test("unknown configuration versions preserve stored bytes and prior watch state", function () {
+  var storage = new fakes.FakeStorage();
+  var bytes = JSON.stringify({ schemaVersion: 99, favorites: [] });
+  var target;
+
+  storage.setItem(configuration.CONFIG_STORAGE_KEY, bytes);
+  target = harness({ storage: storage });
+  target.Pebble.emit("ready");
+  assert.equal(storage.getItem(configuration.CONFIG_STORAGE_KEY), bytes);
+  assert.equal(target.Pebble.sent.length, 0);
+  assert.equal(target.xhr.instances.length, 0);
+});
+
+test("invalid key status persists across restart and replacement re-enables XHR", function () {
+  var storage = new fakes.FakeStorage();
+  var first = harness({ storage: storage });
+  var second;
+  var stored;
+
+  closeWith(first, configurationPayload("REPLACE", TEST_KEY));
+  sendRequest(first, "invalid-first");
+  first.xhr.instances[0].respond(401, {
+    schemaVersion: contracts.SCHEMA_VERSION,
+    requestId: "invalid-first",
+    favoriteId: fixture.favorite.id,
+    code: "SOURCE_UNAVAILABLE",
+    occurredAt: Math.floor(first.clock.now() / 1000)
+  });
+  stored = JSON.parse(storage.getItem(configuration.CONFIG_STORAGE_KEY));
+  assert.equal(stored.keyStatus, contracts.KEY_STATUS.INVALID);
+  assert.equal(stored.primApiKey, TEST_KEY);
+
+  first.companion.stop();
+  second = harness({ storage: storage });
+  second.Pebble.emit("ready");
+  sendRequest(second, "invalid-restart");
+  assert.equal(second.xhr.instances.length, 0);
+  closeWith(second, configurationPayload("REPLACE", "replacement-key"));
+  sendRequest(second, "replacement-request");
+  assert.equal(second.xhr.instances.length, 1);
+  assert.equal(second.xhr.instances[0].headers.Authorization, "Bearer replacement-key");
+});
+
+test("failed INVALID config write stays durable and fail-closed across reconstruction", function () {
+  var storage = new fakes.FakeStorage();
+  var first = harness({ storage: storage });
+  var second;
+  var beforeBytes;
+  var marker;
+  var configBegins;
+  var originalSetItem;
+  var failNext = false;
+
+  closeWith(first, configurationPayload("REPLACE", TEST_KEY));
+  beforeBytes = storage.getItem(configuration.CONFIG_STORAGE_KEY);
+  originalSetItem = storage.setItem.bind(storage);
+  storage.setItem = function (key, value) {
+    originalSetItem(key, value);
+    if (failNext && key === configuration.CONFIG_STORAGE_KEY) {
+      failNext = false;
+      storage.values[key] = "corrupt";
+    }
+  };
+  failNext = true;
+  sendRequest(first, "invalid-write");
+  first.xhr.instances[0].respond(401, "");
+  assert.equal(storage.getItem(configuration.CONFIG_STORAGE_KEY), beforeBytes);
+  marker = storage.getItem(configuration.INVALID_KEY_STATUS_STORAGE_KEY);
+  assert.equal(typeof marker, "string");
+  assert.equal(marker.includes(TEST_KEY), false);
+  configBegins = messagesOfType(first, T.CONFIG_BEGIN);
+  assert.equal(
+    configBegins[configBegins.length - 1].KEY_STATUS,
+    contracts.KEY_STATUS.INVALID
+  );
+
+  first.companion.stop();
+  second = harness({ storage: storage });
+  second.Pebble.emit("ready");
+  configBegins = messagesOfType(second, T.CONFIG_BEGIN);
+  assert.equal(
+    configBegins[configBegins.length - 1].KEY_STATUS,
+    contracts.KEY_STATUS.INVALID
+  );
+  sendRequest(second, "invalid-write-restart");
+  assert.equal(second.xhr.instances.length, 0);
+  closeWith(second, configurationPayload("KEEP"));
+  sendRequest(second, "invalid-write-after-keep");
+  assert.equal(second.xhr.instances.length, 0);
+
+  closeWith(second, configurationPayload("REPLACE", "replacement-key"));
+  assert.equal(storage.getItem(configuration.INVALID_KEY_STATUS_STORAGE_KEY), null);
+  sendRequest(second, "invalid-write-after-replace");
+  assert.equal(second.xhr.instances.length, 1);
+  assert.equal(second.xhr.instances[0].headers.Authorization, "Bearer replacement-key");
+});
+
+test("same-key replacement clear interruption remains durably INVALID", function () {
+  var storage = new fakes.FakeStorage();
+  var first = harness({ storage: storage });
+  var second;
+  var originalRemoveItem;
+  var originalSetItem;
+  var failConfigWrite = false;
+  var failMarkerRemoval = false;
+  var stored;
+  var configBegins;
+
+  closeWith(first, configurationPayload("REPLACE", TEST_KEY));
+  originalSetItem = storage.setItem.bind(storage);
+  storage.setItem = function (key, value) {
+    originalSetItem(key, value);
+    if (failConfigWrite && key === configuration.CONFIG_STORAGE_KEY) {
+      failConfigWrite = false;
+      storage.values[key] = "corrupt";
+    }
+  };
+  failConfigWrite = true;
+  sendRequest(first, "marker-same-key");
+  first.xhr.instances[0].respond(401, "");
+  assert.equal(
+    typeof storage.getItem(configuration.INVALID_KEY_STATUS_STORAGE_KEY),
+    "string"
+  );
+
+  originalRemoveItem = storage.removeItem.bind(storage);
+  storage.removeItem = function (key) {
+    if (failMarkerRemoval && key === configuration.INVALID_KEY_STATUS_STORAGE_KEY) {
+      failMarkerRemoval = false;
+      throw new Error("simulated interruption");
+    }
+    originalRemoveItem(key);
+  };
+  failMarkerRemoval = true;
+  closeWith(first, configurationPayload("REPLACE", TEST_KEY));
+  stored = JSON.parse(storage.getItem(configuration.CONFIG_STORAGE_KEY));
+  assert.equal(stored.primApiKey, TEST_KEY);
+  assert.equal(stored.keyStatus, contracts.KEY_STATUS.INVALID);
+  assert.equal(
+    typeof storage.getItem(configuration.INVALID_KEY_STATUS_STORAGE_KEY),
+    "string"
+  );
+  configBegins = messagesOfType(first, T.CONFIG_BEGIN);
+  assert.equal(
+    configBegins[configBegins.length - 1].KEY_STATUS,
+    contracts.KEY_STATUS.INVALID
+  );
+
+  first.companion.stop();
+  second = harness({ storage: storage });
+  second.Pebble.emit("ready");
+  configBegins = messagesOfType(second, T.CONFIG_BEGIN);
+  assert.equal(
+    configBegins[configBegins.length - 1].KEY_STATUS,
+    contracts.KEY_STATUS.INVALID
+  );
+  sendRequest(second, "same-key-after-interruption");
+  assert.equal(second.xhr.instances.length, 0);
+
+  closeWith(second, configurationPayload("REPLACE", TEST_KEY));
+  sendRequest(second, "same-key-after-success");
+  assert.equal(second.xhr.instances.length, 1);
+  assert.equal(second.xhr.instances[0].headers.Authorization, "Bearer " + TEST_KEY);
+});
+
+test("deleting a favorite prunes its durable result without touching config atomicity", function () {
+  var target = harness();
+  var removeFavorite = configurationPayload("KEEP");
+  var stored;
+
+  closeWith(target, configurationPayload("REPLACE", TEST_KEY));
+  sendRequest(target, "cache-before-delete");
+  target.xhr.instances[0].respond(200, responseFor("cache-before-delete"));
+  removeFavorite.favorites = [];
+  closeWith(target, removeFavorite);
+  stored = JSON.parse(target.storage.getItem(configuration.RESULTS_STORAGE_KEY));
+  assert.deepEqual(stored.results, []);
+  assert.equal(
+    JSON.parse(target.storage.getItem(configuration.CONFIG_STORAGE_KEY)).primApiKey,
+    TEST_KEY
+  );
 });
 test("a late older response cannot overwrite or emit after the newest request for a favorite", function () {
   var target = harness();

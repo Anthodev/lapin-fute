@@ -45,6 +45,7 @@ controller = createController({
   clock: { now: Date.now },
   queue,
   model: new WatchModel(),
+  storage: localStorage,
   view
 });
 controller.start();

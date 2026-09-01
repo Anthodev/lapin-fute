@@ -226,7 +226,10 @@ export function utf8Bytes(value: string): number {
 }
 
 function boundedString(value: unknown, maximum: number): value is string {
-  return typeof value === "string" && utf8Bytes(value) >= 1 && utf8Bytes(value) <= maximum;
+  return typeof value === "string"
+    && utf8Bytes(value) >= 1
+    && utf8Bytes(value) <= maximum
+    && !/[\u0000-\u001f\u007f]/u.test(value);
 }
 
 export function isLineColor(value: unknown): value is string {

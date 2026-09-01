@@ -46,7 +46,10 @@ export function utf8Bytes(value) {
 }
 
 function boundedString(value, maximum) {
-  return typeof value === "string" && utf8Bytes(value) >= 1 && utf8Bytes(value) <= maximum;
+  return typeof value === "string"
+    && utf8Bytes(value) >= 1
+    && utf8Bytes(value) <= maximum
+    && !/[\u0000-\u001f\u007f]/u.test(value);
 }
 
 export function isLineColor(value) {
@@ -81,7 +84,7 @@ export const COPY = {
     keyRemovePending: "The saved key will be removed.",
     keyReplacementPending: "A replacement key is ready to save.",
     keyErrorTooLong: "The key must be at most 512 UTF-8 bytes.",
-    keyErrorNewline: "The key must not contain line breaks.",
+    keyErrorNewline: "The key must not contain control characters.",
     favoritesTitle: "Favorite departures",
     favoritesEmpty: "No favorites yet. Search for a stop to add one.",
     favoriteAddTitle: "Add a favorite",
@@ -129,7 +132,7 @@ export const COPY = {
     keyRemovePending: "La clé enregistrée sera supprimée.",
     keyReplacementPending: "Une nouvelle clé est prête à être enregistrée.",
     keyErrorTooLong: "La clé doit contenir au maximum 512 octets UTF-8.",
-    keyErrorNewline: "La clé ne doit pas contenir de retour à la ligne.",
+    keyErrorNewline: "La clé ne doit pas contenir de caractère de contrôle.",
     favoritesTitle: "Départs favoris",
     favoritesEmpty: "Aucun favori. Recherchez un arrêt pour en ajouter un.",
     favoriteAddTitle: "Ajouter un favori",
@@ -379,7 +382,7 @@ export function reduceConfigState(state, action) {
 // ApiKeyUpdate carries the value only for REPLACE.
 
 export function apiKeyError(value) {
-  if (/[\r\n]/u.test(value)) return "keyErrorNewline";
+  if (/[\u0000-\u001f\u007f]/u.test(value)) return "keyErrorNewline";
   if (utf8Bytes(value) > LIMITS.apiKeyUtf8Bytes) return "keyErrorTooLong";
   return null;
 }

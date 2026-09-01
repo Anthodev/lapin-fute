@@ -83,6 +83,10 @@ FakeStorage.prototype.setItem = function (key, value) {
   this.writes.push({ key: key, value: String(value) });
 };
 
+FakeStorage.prototype.removeItem = function (key) {
+  delete this.values[key];
+};
+
 FakeStorage.prototype.keys = function () {
   return Object.keys(this.values);
 };

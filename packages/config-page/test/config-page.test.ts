@@ -196,7 +196,7 @@ test("the config page consumes the companion-produced opening fragment exactly",
   const key = "stored-personal-key";
   const url = companionConfiguration.configurationUrl(
     "https://config.example.test/index.html",
-    { schemaVersion: 1, favorites: fixtureList, apiKey: key },
+    { schemaVersion: 1, favorites: fixtureList, primApiKey: key, keyStatus: 1 },
     "fr_FR",
   );
   assert.equal(typeof url, "string");
@@ -286,7 +286,7 @@ test("key lifecycle plans KEEP, REPLACE, and REMOVE through pure state", () => {
   assert.equal(isPersonalApiKey(replaceUpdate.value), true);
 });
 
-test("replace validation rejects oversized or line-bearing keys in both locales", () => {
+test("replace validation rejects oversized or control-bearing keys in both locales", () => {
   assert.equal(apiKeyError("k".repeat(LIMITS.apiKeyUtf8Bytes)), null);
   assert.equal(apiKeyError("k".repeat(LIMITS.apiKeyUtf8Bytes + 1)), "keyErrorTooLong");
   assert.equal(apiKeyError("é".repeat(256)), null);
@@ -294,6 +294,7 @@ test("replace validation rejects oversized or line-bearing keys in both locales"
   assert.equal(apiKeyError("é".repeat(257)), "keyErrorTooLong");
   assert.equal(apiKeyError("line1\nline2"), "keyErrorNewline");
   assert.equal(apiKeyError("line1\rline2"), "keyErrorNewline");
+  assert.equal(apiKeyError("key\u0001header"), "keyErrorNewline");
 
   const tooLong = planConfigResult({
     hasKey: false,
@@ -566,6 +567,8 @@ test("bilingual About copy exposes the required legal, privacy, attribution, and
     "localStorage",
     "no analytics or telemetry",
     "aucun cookie",
+    "survives app updates and uninstall/reinstall",
+    "Désinstaller l’application de la montre",
     "Référentiel des lignes",
     "conditions d’utilisation IDFM/PRIM",
     "search terms are sent",

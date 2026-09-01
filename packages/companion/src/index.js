@@ -50,7 +50,10 @@ function isFixture(value) {
 function Companion(options) {
   options = options || {};
   requiredAdapter(options.Pebble && typeof options.Pebble.addEventListener === "function", "Pebble adapter is required");
-  requiredAdapter(options.storage && typeof options.storage.getItem === "function" && typeof options.storage.setItem === "function", "storage adapter is required");
+  requiredAdapter(options.storage
+    && typeof options.storage.getItem === "function"
+    && typeof options.storage.setItem === "function"
+    && typeof options.storage.removeItem === "function", "storage adapter is required");
   requiredAdapter(typeof options.XHR === "function", "XHR adapter is required");
   requiredAdapter(options.clock
     && typeof options.clock.now === "function", "clock adapter is required");
@@ -68,9 +71,21 @@ function Companion(options) {
   this._fixture = options.fixture || null;
   this._fixtureEnabled = false;
   this._configuration = configuration.loadConfiguration(this._storage);
+  this._configurationValid = this._configuration !== null;
+  this._credentialBlocked = this._configurationValid
+    && this._configuration.keyStatus === contracts.KEY_STATUS.INVALID;
+  if (!this._configurationValid) this._configuration = configuration.emptyConfiguration();
   this._watchFavorites = [];
-  this._keyStatus = contracts.KEY_STATUS.MISSING;
-  this._cache = Object.create(null);
+  this._results = configuration.emptyResults();
+  this._metrics = {
+    requests: 0,
+    cacheHits: 0,
+    cacheMisses: 0,
+    successes: 0,
+    failures: 0,
+    totalLatencyMs: 0,
+    lastLatencyMs: 0
+  };
   this._requestGenerations = Object.create(null);
   this._inFlightRequests = Object.create(null);
   this._requestGeneration = 0;
@@ -126,9 +141,6 @@ Companion.prototype._refreshWatchState = function () {
   var configured = this._configuration.favorites.map(contracts.copyFavorite);
   this._fixtureEnabled = this._fixture !== null && configured.length === 0;
   this._watchFavorites = this._fixtureEnabled ? [contracts.copyFavorite(this._fixture.favorite)] : configured;
-  this._keyStatus = this._fixtureEnabled || this._configuration.apiKey !== null
-    ? contracts.KEY_STATUS.CONFIGURED
-    : contracts.KEY_STATUS.MISSING;
 };
 
 Companion.prototype._nextSequenceId = function () {
@@ -138,43 +150,104 @@ Companion.prototype._nextSequenceId = function () {
 };
 
 Companion.prototype._sendConfiguration = function () {
-  if (!configuration.areFavoritesSecretFree(this._watchFavorites, this._configuration.apiKey, null)) return;
+  var keyStatus = this._fixtureEnabled
+    ? contracts.KEY_STATUS.CONFIGURED
+    : (this._credentialBlocked
+      ? contracts.KEY_STATUS.INVALID
+      : this._configuration.keyStatus);
+  if (!this._configurationValid
+      || !configuration.areFavoritesSecretFree(
+        this._watchFavorites,
+        this._configuration.primApiKey,
+        null
+      )) return;
   this._queue.enqueue(codec.encodeConfiguration(
     this._nextSequenceId(),
     this._watchFavorites,
-    this._keyStatus,
+    keyStatus,
     configuration.activeWatchLanguage(this._Pebble)
   ));
 };
 
 Companion.prototype._onReady = function () {
-  this._configuration = configuration.loadConfiguration(this._storage);
+  var wasBlocked = this._credentialBlocked;
+  var loaded = configuration.loadConfiguration(this._storage);
+  if (loaded === null) {
+    this._configurationValid = false;
+    return;
+  }
+  if (wasBlocked && loaded.primApiKey !== null) {
+    loaded.keyStatus = contracts.KEY_STATUS.INVALID;
+  }
+  this._configuration = loaded;
+  this._configurationValid = true;
+  this._credentialBlocked = loaded.keyStatus === contracts.KEY_STATUS.INVALID;
+  this._results = configuration.loadResults(this._storage, loaded.favorites);
   this._refreshWatchState();
   this._sendConfiguration();
 };
 
 Companion.prototype._onShowConfiguration = function () {
-  var language = configuration.activeWatchLanguage(this._Pebble);
-  var url = configuration.configurationUrl(this._configurationUrl, this._configuration, language);
+  var language;
+  var url;
+  if (!this._configurationValid) return;
+  language = configuration.activeWatchLanguage(this._Pebble);
+  url = configuration.configurationUrl(this._configurationUrl, this._configuration, language);
   if (url !== null && typeof this._Pebble.openURL === "function") this._Pebble.openURL(url);
 };
 
 Companion.prototype._onWebviewClosed = function (event) {
-  var update = configuration.parseCloseFragment(event && event.response);
+  var update;
   var next;
+  var pending;
+  var pruned;
+  if (!this._configurationValid) return;
+  update = configuration.parseCloseFragment(event && event.response);
   if (update === null) return;
   next = configuration.applyConfigurationUpdate(this._configuration, update);
-  if (next === null || !configuration.saveConfiguration(this._storage, next)) return;
+  if (next === null) return;
+  if (update.apiKeyUpdate.action === "REPLACE") {
+    if (this._credentialBlocked
+        || this._configuration.keyStatus === contracts.KEY_STATUS.INVALID) {
+      pending = {
+        schemaVersion: contracts.SCHEMA_VERSION,
+        favorites: next.favorites.map(contracts.copyFavorite),
+        primApiKey: next.primApiKey,
+        keyStatus: contracts.KEY_STATUS.INVALID
+      };
+      if (!configuration.saveConfiguration(this._storage, pending)) return;
+      if (!configuration.clearInvalidKeyStatus(this._storage)
+          || !configuration.saveConfiguration(this._storage, next)) {
+        next = pending;
+      }
+    } else if (!configuration.clearInvalidKeyStatus(this._storage)
+        || !configuration.saveConfiguration(this._storage, next)) {
+      return;
+    }
+  } else {
+    if (!configuration.saveConfiguration(this._storage, next)) return;
+    if (update.apiKeyUpdate.action === "REMOVE") {
+      configuration.clearInvalidKeyStatus(this._storage);
+    }
+  }
+  pruned = configuration.pruneResults(this._results, next.favorites);
+  if (JSON.stringify(pruned) !== JSON.stringify(this._results)) {
+    configuration.saveResults(this._storage, pruned);
+  }
   this._configuration = next;
-  this._cache = Object.create(null);
+  this._results = pruned;
   this._requestGenerations = Object.create(null);
+  this._credentialBlocked = next.primApiKey !== null
+    && next.keyStatus === contracts.KEY_STATUS.INVALID;
   this._refreshWatchState();
   this._sendConfiguration();
 };
 
 Companion.prototype._onAppMessage = function (event) {
-  var request = codec.decodeRequest(normalizeIncomingPayload(event && event.payload));
-  if (request === null || request.trigger !== contracts.REQUEST_TRIGGER.APP_OPEN) return;
+  var request;
+  if (!this._configurationValid) return;
+  request = codec.decodeRequest(normalizeIncomingPayload(event && event.payload));
+  if (request === null) return;
   if (this._findFavorite(request.favoriteId) === null) {
     this._sendError(request, "INVALID_SERVICE");
     return;
@@ -191,20 +264,22 @@ Companion.prototype._findFavorite = function (favoriteId) {
 };
 
 Companion.prototype._cacheResult = function (result) {
-  this._cache[result.favoriteId] = {
-    storedAt: this._clock.now(),
-    result: contracts.copyDepartureResult(result)
-  };
+  var next = configuration.putResult(
+    this._results,
+    this._configuration.favorites,
+    result,
+    Math.floor(this._clock.now())
+  );
+  if (next === null) return false;
+  if (!configuration.saveResults(this._storage, next)) return false;
+  this._results = next;
+  return true;
 };
 
 Companion.prototype._cachedResult = function (request) {
-  var cached = this._cache[request.favoriteId];
-  var age;
-  if (!cached) return null;
-  age = this._clock.now() - cached.storedAt;
-  if (age < 0 || age >= contracts.CACHE_FRESH_SECONDS * 1000) return null;
-  return contracts.copyDepartureResult(cached.result, request.requestId);
+  return configuration.findResult(this._results, request.favoriteId, request.requestId);
 };
+
 Companion.prototype._beginRequest = function (favoriteId) {
   this._requestGeneration += 1;
   this._requestGenerations[favoriteId] = this._requestGeneration;
@@ -215,27 +290,36 @@ Companion.prototype._isLatestRequest = function (favoriteId, generation) {
   return this._requestGenerations[favoriteId] === generation;
 };
 
-
 Companion.prototype._dispatchRequest = function (request) {
-  var generation = this._beginRequest(request.favoriteId);
   var cached = this._cachedResult(request);
+  var cachedMessages;
   var fixtureResult;
   var favorite;
+  var generation;
+  var age;
+  var refreshRequired;
   if (cached !== null) {
-    this._queue.enqueue(codec.encodeResult(cached));
-    return;
+    this._metrics.cacheHits += 1;
+    age = this._clock.now() - Math.min(cached.result.fetchedAt * 1000, cached.storedAt);
+    refreshRequired = !(age >= 0 && age < contracts.CACHE_FRESH_SECONDS * 1000);
+    cachedMessages = codec.encodeResult(cached.result);
+    if (refreshRequired) cachedMessages.push(codec.encodeRequest(request));
+    this._queue.enqueue(cachedMessages);
+    if (!refreshRequired) return;
+  } else {
+    this._metrics.cacheMisses += 1;
   }
   if (this._fixtureEnabled && this._fixture.favorite.id === request.favoriteId) {
     fixtureResult = contracts.copyDepartureResult(this._fixture.result, request.requestId);
-    this._cacheResult(fixtureResult);
     this._queue.enqueue(codec.encodeResult(fixtureResult));
     return;
   }
-  if (this._configuration.apiKey === null) {
+  if (this._configuration.primApiKey === null) {
     this._sendError(request, "API_KEY_REQUIRED");
     return;
   }
-  if (this._keyStatus === contracts.KEY_STATUS.INVALID) {
+  if (this._credentialBlocked
+      || this._configuration.keyStatus === contracts.KEY_STATUS.INVALID) {
     this._sendError(request, "API_KEY_INVALID");
     return;
   }
@@ -244,6 +328,7 @@ Companion.prototype._dispatchRequest = function (request) {
     this._sendError(request, "INVALID_SERVICE");
     return;
   }
+  generation = this._beginRequest(request.favoriteId);
   this._fetch(request, favorite, generation);
 };
 
@@ -251,8 +336,8 @@ Companion.prototype._fetch = function (request, favorite, generation) {
   var self = this;
   var xhr;
   var settled = false;
-  var key = this._configuration.apiKey;
-  if (!configuration.isFavoriteSecretFree(favorite, key, null)) return;
+  var key = null;
+  var startedAt = this._clock.now();
   if (this._backendUrl.indexOf("https://") !== 0) {
     this._sendError(request, "SOURCE_UNAVAILABLE");
     return;
@@ -260,8 +345,12 @@ Companion.prototype._fetch = function (request, favorite, generation) {
 
   function once(callback) {
     return function () {
+      var latency;
       if (settled) return;
       settled = true;
+      latency = Math.max(0, self._clock.now() - startedAt);
+      self._metrics.lastLatencyMs = latency;
+      self._metrics.totalLatencyMs += latency;
       if (self._inFlightRequests[generation] === xhr) {
         delete self._inFlightRequests[generation];
       }
@@ -274,17 +363,24 @@ Companion.prototype._fetch = function (request, favorite, generation) {
     xhr = new this._XHR();
     xhr.open("POST", this._backendUrl, true);
     xhr.timeout = contracts.LIMITS.httpTimeoutMs;
-    xhr.setRequestHeader("Authorization", "Bearer " + key);
     xhr.setRequestHeader("Content-Type", "application/json");
     xhr.setRequestHeader("Accept", "application/json");
     xhr.onload = once(function () { self._handleResponse(request, xhr); });
-    xhr.onerror = once(function () { self._sendError(request, "SOURCE_UNAVAILABLE"); });
-    xhr.ontimeout = once(function () { self._sendError(request, "SOURCE_UNAVAILABLE"); });
-    xhr.onabort = once(function () { self._sendError(request, "SOURCE_UNAVAILABLE"); });
-    if (!this._isLatestRequest(request.favoriteId, generation)) {
+    xhr.onerror = once(function () {
+      self._metrics.failures += 1;
+      self._sendError(request, "SOURCE_UNAVAILABLE");
+    });
+    xhr.ontimeout = xhr.onerror;
+    xhr.onabort = xhr.onerror;
+    if (!this._isLatestRequest(request.favoriteId, generation)) return;
+    key = this._configuration.primApiKey;
+    if (!contracts.isPersonalApiKey(key)) {
       key = null;
+      this._sendError(request, "API_KEY_REQUIRED");
       return;
     }
+    xhr.setRequestHeader("Authorization", "Bearer " + key);
+    this._metrics.requests += 1;
     this._inFlightRequests[generation] = xhr;
     xhr.send(JSON.stringify({
       schemaVersion: contracts.SCHEMA_VERSION,
@@ -300,6 +396,7 @@ Companion.prototype._fetch = function (request, favorite, generation) {
     }
     if (!settled) {
       settled = true;
+      this._metrics.failures += 1;
       if (this._isLatestRequest(request.favoriteId, generation)) {
         this._sendError(request, "SOURCE_UNAVAILABLE");
       }
@@ -326,14 +423,21 @@ Companion.prototype._handleResponse = function (request, xhr) {
     if (!contracts.isDepartureResult(body)
         || body.requestId !== request.requestId
         || body.favoriteId !== request.favoriteId) {
+      this._metrics.failures += 1;
       this._sendError(request, "INVALID_RESPONSE");
       return;
     }
+    this._metrics.successes += 1;
     this._cacheResult(body);
     this._queue.enqueue(codec.encodeResult(body));
     return;
   }
 
+  this._metrics.failures += 1;
+  if (status === 401 || status === 403) {
+    this._sendError(request, "API_KEY_INVALID");
+    return;
+  }
   if (body !== null && contracts.isErrorResult(body)) {
     if (body.requestId !== request.requestId
         || (typeof body.favoriteId !== "undefined" && body.favoriteId !== request.favoriteId)) {
@@ -390,12 +494,33 @@ Companion.prototype._sendError = function (request, code, retryAfterSeconds) {
 };
 
 Companion.prototype._sendErrorResult = function (error) {
+  var invalid;
   this._queue.enqueue([codec.encodeError(error)]);
-  if (error.code === "API_KEY_INVALID") {
-    this._keyStatus = contracts.KEY_STATUS.INVALID;
-    this._cache = Object.create(null);
-    this._sendConfiguration();
-  }
+  if (error.code !== "API_KEY_INVALID"
+      || this._configuration.primApiKey === null
+      || this._configuration.keyStatus === contracts.KEY_STATUS.INVALID) return;
+  invalid = {
+    schemaVersion: contracts.SCHEMA_VERSION,
+    favorites: this._configuration.favorites.map(contracts.copyFavorite),
+    primApiKey: this._configuration.primApiKey,
+    keyStatus: contracts.KEY_STATUS.INVALID
+  };
+  configuration.saveInvalidConfiguration(this._storage, invalid);
+  this._configuration = invalid;
+  this._credentialBlocked = true;
+  this._sendConfiguration();
+};
+
+Companion.prototype.metrics = function () {
+  return {
+    requests: this._metrics.requests,
+    cacheHits: this._metrics.cacheHits,
+    cacheMisses: this._metrics.cacheMisses,
+    successes: this._metrics.successes,
+    failures: this._metrics.failures,
+    totalLatencyMs: this._metrics.totalLatencyMs,
+    lastLatencyMs: this._metrics.lastLatencyMs
+  };
 };
 
 function createCompanion(options) {

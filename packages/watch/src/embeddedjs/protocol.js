@@ -262,25 +262,37 @@ function copyError(error) {
 }
 
 export class ProtocolReceiver {
-  constructor() {
+  constructor(initialConfiguration = null) {
     this.configuration = null;
     this.result = null;
     this.error = null;
     this.configStage = null;
     this.resultStage = null;
     this.expected = null;
+    this.refreshCandidate = null;
+    if (initialConfiguration) this.restoreConfiguration(initialConfiguration);
+  }
+
+  restoreConfiguration(configuration) {
+    this.configuration = copyConfiguration(configuration);
+    this.result = null;
+    this.error = null;
+    this.discardStaging();
+    this.cancelExpectedResponse();
   }
 
   expectResponse(requestId, favoriteId) {
     if (!boundedString(requestId, LIMITS.idUtf8Bytes)
         || !boundedString(favoriteId, LIMITS.idUtf8Bytes)) return false;
-    this.expected = { requestId, favoriteId };
+    this.expected = { requestId, favoriteId, refresh: false };
+    this.refreshCandidate = null;
     this.resultStage = null;
     return true;
   }
 
   cancelExpectedResponse() {
     this.expected = null;
+    this.refreshCandidate = null;
     this.resultStage = null;
   }
 
@@ -366,6 +378,24 @@ export class ProtocolReceiver {
       return RECEIVE_RESULT.CONFIG_COMMITTED;
     }
 
+    if (type === MESSAGE_TYPE.REQUEST) {
+      const candidate = this.refreshCandidate;
+      if (this.expected
+          || !candidate
+          || candidate.requestId !== requestId
+          || candidate.favoriteId !== decoded.FAVORITE_ID) {
+        return RECEIVE_RESULT.REJECTED;
+      }
+      this.expected = {
+        requestId,
+        favoriteId: decoded.FAVORITE_ID,
+        refresh: true
+      };
+      this.refreshCandidate = null;
+      this.resultStage = null;
+      return RECEIVE_RESULT.STAGED;
+    }
+
     if (type === MESSAGE_TYPE.RESULT_BEGIN) {
       if (!this.expected
           || this.expected.requestId !== requestId
@@ -423,9 +453,14 @@ export class ProtocolReceiver {
         this.resultStage = null;
         return RECEIVE_RESULT.REJECTED;
       }
+      const refresh = this.expected.refresh;
       this.result = copyResult(stage);
       this.error = null;
-      this.cancelExpectedResponse();
+      this.expected = null;
+      this.resultStage = null;
+      this.refreshCandidate = refresh
+        ? null
+        : { requestId, favoriteId: decoded.FAVORITE_ID };
       return RECEIVE_RESULT.RESULT_COMMITTED;
     }
 

@@ -170,7 +170,7 @@ function boundedString(value, maximum) {
   var size;
   if (typeof value !== "string") return false;
   size = utf8Bytes(value);
-  return size >= 1 && size <= maximum;
+  return size >= 1 && size <= maximum && !/[\u0000-\u001f\u007f]/.test(value);
 }
 
 function isLineColor(value) {

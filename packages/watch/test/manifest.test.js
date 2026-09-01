@@ -33,6 +33,7 @@ const expectedModules = [
   "./protocol",
   "./message-queue",
   "./localization",
+  "./storage",
   "./ui",
   "./contracts"
 ];

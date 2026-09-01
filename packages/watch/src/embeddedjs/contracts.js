@@ -145,7 +145,7 @@ export function utf8Bytes(value) {
 export function boundedString(value, maximum) {
   if (typeof value !== "string") return false;
   const size = utf8Bytes(value);
-  return size >= 1 && size <= maximum;
+  return size >= 1 && size <= maximum && !/[\u0000-\u001f\u007f]/u.test(value);
 }
 
 export function uint32(value) {
