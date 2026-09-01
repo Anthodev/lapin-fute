@@ -95,6 +95,7 @@ test("domain validators enforce exact fields, versions, bounds, and secret rules
   assert.equal(isFavorite({ ...favorite, unknown: true }), false);
   assert.equal(isFavorite({ ...favorite, schemaVersion: 2 }), false);
   assert.equal(isFavorite({ ...favorite, stopLabel: "é".repeat(49) }), false);
+  assert.equal(isFavorite({ ...favorite, stopLabel: "unsafe\u0001label" }), false);
   assert.equal(isFavorite({ ...favorite, lineMode: "metro" }), false);
   assert.equal(isFavorite({ ...favorite, lineColor: "#FFBE00" }), false);
   assert.equal(isFavorite({ ...favorite, lineTextColor: "000000" }), false);
@@ -137,6 +138,7 @@ test("domain validators enforce exact fields, versions, bounds, and secret rules
   assert.equal(isPersonalApiKey("x".repeat(LIMITS.apiKeyUtf8Bytes)), true);
   assert.equal(isPersonalApiKey("x".repeat(LIMITS.apiKeyUtf8Bytes + 1)), false);
   assert.equal(isPersonalApiKey("key\nheader"), false);
+  assert.equal(isPersonalApiKey("key\u0001header"), false);
 });
 
 test("symbolic payload aliases retain the frozen explicit numeric order", () => {

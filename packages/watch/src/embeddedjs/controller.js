@@ -1,5 +1,6 @@
 import { QUEUE_STATE } from "./message-queue.js";
 import { ProtocolReceiver, RECEIVE_RESULT, encodeRequest } from "./protocol.js";
+import { loadWatchConfiguration, saveWatchConfiguration } from "./storage.js";
 
 function eventName(received) {
   if (received === RECEIVE_RESULT.CONFIG_COMMITTED) return "CONFIG_COMMITTED";
@@ -24,9 +25,12 @@ export function createController(options) {
   const clock = options.clock;
   const queue = options.queue;
   const model = options.model;
+  const storage = options.storage || null;
   const view = options.view;
   const receiver = new ProtocolReceiver();
+  let committedConfiguration = null;
   let sequence = 0;
+  let restoredRequestPending = false;
   let started = false;
   let closed = false;
 
@@ -60,7 +64,16 @@ export function createController(options) {
     start() {
       if (closed || started) return controller;
       started = true;
-      render();
+      const configuration = storage ? loadWatchConfiguration(storage) : null;
+      if (configuration) {
+        committedConfiguration = configuration;
+        receiver.restoreConfiguration(configuration);
+        model.commitProtocol(receiver.snapshot(), "CONFIG_RESTORED");
+        restoredRequestPending = true;
+        render();
+      } else {
+        render();
+      }
       return controller;
     },
 
@@ -68,8 +81,21 @@ export function createController(options) {
       if (closed) return RECEIVE_RESULT.REJECTED;
       const received = receiver.receive(message);
       const event = eventName(received);
+      if (event === "CONFIG_COMMITTED") restoredRequestPending = false;
       if (event !== null) {
-        const effect = model.commitProtocol(receiver.snapshot(), event);
+        let snapshot = receiver.snapshot();
+        if (event === "CONFIG_COMMITTED" && storage) {
+          if (!saveWatchConfiguration(storage, snapshot.configuration)) {
+            receiver.restoreConfiguration(committedConfiguration);
+            snapshot = receiver.snapshot();
+            const effect = model.commitProtocol(snapshot, "CONFIG_COMMITTED");
+            render();
+            if (effect.requestFixture) requestFixture();
+            return RECEIVE_RESULT.REJECTED;
+          }
+          committedConfiguration = snapshot.configuration;
+        }
+        const effect = model.commitProtocol(snapshot, event);
         render();
         if (effect.requestFixture) requestFixture();
       }
@@ -77,7 +103,13 @@ export function createController(options) {
     },
 
     onQueueState(state) {
-      if (closed || !state || state.type !== QUEUE_STATE.FAILED) return;
+      if (closed || !state) return;
+      if (state.type === QUEUE_STATE.WRITABLE && restoredRequestPending) {
+        restoredRequestPending = false;
+        requestFixture();
+        return;
+      }
+      if (state.type !== QUEUE_STATE.FAILED) return;
       receiver.cancelExpectedResponse();
       model.markSendFailure();
       render();

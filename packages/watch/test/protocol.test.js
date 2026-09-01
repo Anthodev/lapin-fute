@@ -217,6 +217,30 @@ test("result stages atomically only for the expected request and favorite", () =
   });
 });
 
+test("matching request handshake permits one cached result replacement", () => {
+  const receiver = new ProtocolReceiver();
+  const request = encodeRequest({
+    requestId: "request-1",
+    favoriteId: "home",
+    trigger: REQUEST_TRIGGER.APP_OPEN
+  });
+  const freshBegin = resultBegin();
+  freshBegin.set("FETCHED_AT", 1_788_000_060);
+
+  assert.equal(receiver.expectResponse("request-1", "home"), true);
+  assert.equal(receiver.receive(resultBegin()), RECEIVE_RESULT.STAGED);
+  assert.equal(receiver.receive(departure()), RECEIVE_RESULT.STAGED);
+  assert.equal(receiver.receive(resultCommit()), RECEIVE_RESULT.RESULT_COMMITTED);
+  assert.equal(receiver.snapshot().result.fetchedAt, 1_788_000_000);
+
+  assert.equal(receiver.receive(request), RECEIVE_RESULT.STAGED);
+  assert.equal(receiver.receive(freshBegin), RECEIVE_RESULT.STAGED);
+  assert.equal(receiver.receive(departure()), RECEIVE_RESULT.STAGED);
+  assert.equal(receiver.receive(resultCommit()), RECEIVE_RESULT.RESULT_COMMITTED);
+  assert.equal(receiver.snapshot().result.fetchedAt, 1_788_000_060);
+  assert.equal(receiver.receive(request), RECEIVE_RESULT.REJECTED);
+});
+
 test("late items, count mismatches, unsupported schema, and mismatched errors preserve state", () => {
   const receiver = new ProtocolReceiver();
   commitConfiguration(receiver);
@@ -251,4 +275,33 @@ test("matching error commits without destroying the prior complete result", () =
     occurredAt: 1_788_000_001,
     retryAfterSeconds: 30
   });
+});
+
+test("receiver seeds, restores, and idempotently repeats complete configuration", () => {
+  const initial = {
+    keyStatus: KEY_STATUS.CONFIGURED,
+    language: "fr",
+    favorites: [{
+      id: "home",
+      serviceId: "opaque:service:1",
+      displayName: "Maison",
+      stopLabel: "Châtelet",
+      lineLabel: "Métro 1",
+      destinationLabel: "La Défense",
+      sortOrder: 0
+    }]
+  };
+  const receiver = new ProtocolReceiver(initial);
+  initial.favorites[0].stopLabel = "mutated after construction";
+  assert.equal(receiver.snapshot().configuration.favorites[0].stopLabel, "Châtelet");
+
+  commitConfiguration(receiver);
+  const committed = receiver.snapshot();
+  commitConfiguration(receiver);
+  assert.deepEqual(receiver.snapshot(), committed);
+
+  assert.equal(receiver.receive(configBegin("interrupted", 1, "en")), RECEIVE_RESULT.STAGED);
+  receiver.restoreConfiguration(committed.configuration);
+  assert.equal(receiver.receive(configCommit("interrupted")), RECEIVE_RESULT.REJECTED);
+  assert.deepEqual(receiver.snapshot(), committed);
 });

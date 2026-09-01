@@ -19,9 +19,11 @@ run(process.execPath, [
   "packages/companion/test/protocol.test.js",
   "packages/companion/test/companion.test.js",
   "packages/watch/test/manifest.test.js",
+  "packages/watch/test/controller-storage.test.js",
   "packages/watch/test/protocol.test.js",
   "packages/watch/test/message-queue.test.js",
   "packages/watch/test/model.test.js",
+  "packages/watch/test/storage.test.js",
   "packages/watch/test/localization.test.js",
   "packages/watch/test/fixture-boot.test.js",
 ]);
