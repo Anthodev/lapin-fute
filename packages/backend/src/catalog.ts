@@ -48,6 +48,9 @@ interface ServiceRow {
   readonly stopLabel: string;
   readonly lineLabel: string;
   readonly destinationLabel: string;
+  readonly lineMode: TransportMode;
+  readonly lineColor: string;
+  readonly lineTextColor: string;
 }
 
 interface ResolutionRow {
@@ -87,7 +90,7 @@ interface ExpectedColumn {
 const CLOSE_READER = Symbol("closeCatalogReader");
 const OPAQUE_ID_BYTES = 47;
 const CATALOG_SCHEMA_VERSION = "1";
-const CATALOG_FORMAT_VERSION = "1";
+const CATALOG_FORMAT_VERSION = "2";
 const REQUIRED_METADATA = [
   "schema_version",
   "catalog_version",
@@ -123,6 +126,8 @@ const TABLE_COLUMNS: Readonly<Record<string, readonly ExpectedColumn[]>> = {
     { name: "stop_label", type: "TEXT", notNull: true },
     { name: "line_label", type: "TEXT", notNull: true },
     { name: "destination_label", type: "TEXT", notNull: true },
+    { name: "line_color", type: "TEXT", notNull: true },
+    { name: "line_text_color", type: "TEXT", notNull: true },
     { name: "monitoring_ref", type: "TEXT", notNull: true },
     { name: "line_ref", type: "TEXT", notNull: true },
     { name: "direction_id", type: "TEXT", notNull: true },
@@ -322,6 +327,10 @@ function validateData(database: DatabaseSync): void {
       OR length(CAST(stop_label AS BLOB)) NOT BETWEEN 1 AND ${LIMITS.labelUtf8Bytes}
       OR length(CAST(line_label AS BLOB)) NOT BETWEEN 1 AND ${LIMITS.labelUtf8Bytes}
       OR length(CAST(destination_label AS BLOB)) NOT BETWEEN 1 AND ${LIMITS.labelUtf8Bytes}
+      OR length(CAST(line_color AS BLOB)) <> 7
+      OR line_color NOT GLOB '#[0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]'
+      OR length(CAST(line_text_color AS BLOB)) <> 7
+      OR line_text_color NOT GLOB '#[0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]'
       OR length(CAST(monitoring_ref AS BLOB)) < 1
       OR length(CAST(line_ref AS BLOB)) < 1
       OR length(CAST(direction_id AS BLOB)) < 1
@@ -482,12 +491,16 @@ export class SqliteCatalogReader implements CatalogReader {
     `);
     this.#listServicesStatement = database.prepare(`
       SELECT
-        service_id AS serviceId,
-        stop_label AS stopLabel,
-        line_label AS lineLabel,
-        destination_label AS destinationLabel
+        services.service_id AS serviceId,
+        services.stop_label AS stopLabel,
+        services.line_label AS lineLabel,
+        services.destination_label AS destinationLabel,
+        places.mode AS lineMode,
+        services.line_color AS lineColor,
+        services.line_text_color AS lineTextColor
       FROM services
-      WHERE place_id = ?
+      JOIN places ON places.place_id = services.place_id
+      WHERE services.place_id = ?
       ORDER BY
         line_label COLLATE NOCASE,
         destination_label COLLATE NOCASE,
@@ -544,6 +557,9 @@ export class SqliteCatalogReader implements CatalogReader {
       stopLabel: entry.stopLabel,
       lineLabel: entry.lineLabel,
       destinationLabel: entry.destinationLabel,
+      lineMode: entry.lineMode,
+      lineColor: entry.lineColor,
+      lineTextColor: entry.lineTextColor,
     }));
   }
 

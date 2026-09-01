@@ -22,12 +22,12 @@
       { "agency_name": "Fixture IDFM operator", "agency_url": "https://www.iledefrance-mobilites.fr/", "agency_timezone": "Europe/Paris" }
     ],
     "lines": [
-      { "id_line": "C100", "name_line": "Bus 42", "shortname_line": "42", "transportmode": "bus", "transportsubmode": "", "status": "active" },
-      { "id_line": "C200", "name_line": "Métro 4", "shortname_line": "4", "transportmode": "metro", "transportsubmode": "", "status": "active" },
-      { "id_line": "C300", "name_line": "Tram T3a", "shortname_line": "T3a", "transportmode": "tram", "transportsubmode": "", "status": "active" },
-      { "id_line": "C400", "name_line": "RER A", "shortname_line": "A", "transportmode": "rail", "transportsubmode": "local", "status": "active" },
-      { "id_line": "C500", "name_line": "Transilien L", "shortname_line": "L", "transportmode": "rail", "transportsubmode": "suburbanRailway", "status": "active" },
-      { "id_line": "C600", "name_line": "Funiculaire", "shortname_line": "F", "transportmode": "funicular", "transportsubmode": "", "status": "active" }
+      { "id_line": "C100", "name_line": "Bus 42", "shortname_line": "42", "transportmode": "bus", "transportsubmode": "", "status": "active", "colourweb_hexa": "E86A10", "textcolourweb_hexa": "FFFFFF" },
+      { "id_line": "C200", "name_line": "Métro 4", "shortname_line": "4", "transportmode": "metro", "transportsubmode": "", "status": "active", "colourweb_hexa": "#BE418D", "textcolourweb_hexa": "#FFFFFF" },
+      { "id_line": "C300", "name_line": "Tram T3a", "shortname_line": "T3a", "transportmode": "tram", "transportsubmode": "", "status": "active", "colourweb_hexa": "85216F", "textcolourweb_hexa": "FFFFFF" },
+      { "id_line": "C400", "name_line": "RER A", "shortname_line": "A", "transportmode": "rail", "transportsubmode": "local", "status": "active", "colourweb_hexa": "E3051C", "textcolourweb_hexa": "FFFFFF" },
+      { "id_line": "C500", "name_line": "Transilien L", "shortname_line": "L", "transportmode": "rail", "transportsubmode": "suburbanRailway", "status": "active", "colourweb_hexa": "7584BC", "textcolourweb_hexa": "000000" },
+      { "id_line": "C600", "name_line": "Funiculaire", "shortname_line": "F", "transportmode": "funicular", "transportsubmode": "", "status": "active", "colourweb_hexa": "000000", "textcolourweb_hexa": "FFFFFF" }
     ],
     "routes": [
       { "route_id": "IDFM:C100", "route_short_name": "42", "route_long_name": "Bus 42" },

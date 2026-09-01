@@ -109,7 +109,7 @@ export type ApiKeyAction = (typeof API_KEY_ACTION)[number];
 export type AppMessageKey = (typeof APP_MESSAGE_KEY_ORDER)[number];
 export type WireLanguage = (typeof WIRE_LANGUAGE)[keyof typeof WIRE_LANGUAGE];
 
-export interface Favorite {
+export type Favorite = {
   schemaVersion: typeof SCHEMA_VERSION;
   id: string;
   serviceId: string;
@@ -118,7 +118,18 @@ export interface Favorite {
   lineLabel: string;
   destinationLabel: string;
   sortOrder: number;
-}
+} & (
+  | {
+    lineMode: TransportMode;
+    lineColor: string;
+    lineTextColor: string;
+  }
+  | {
+    lineMode?: never;
+    lineColor?: never;
+    lineTextColor?: never;
+  }
+);
 
 export interface Departure {
   expectedAt: number;
@@ -163,6 +174,9 @@ export interface ServiceOption {
   stopLabel: string;
   lineLabel: string;
   destinationLabel: string;
+  lineMode: TransportMode;
+  lineColor: string;
+  lineTextColor: string;
 }
 
 export interface ServiceOptionsResult {
@@ -187,14 +201,14 @@ export type AppMessage = Partial<Record<AppMessageKey, AppMessageValue>>;
 const encoder = new TextEncoder();
 const UINT32_MAX = 0xffff_ffff;
 const domainKeys = {
-  favorite: ["schemaVersion", "id", "serviceId", "displayName", "stopLabel", "lineLabel", "destinationLabel", "sortOrder"],
+  favorite: ["schemaVersion", "id", "serviceId", "displayName", "stopLabel", "lineLabel", "destinationLabel", "lineMode", "lineColor", "lineTextColor", "sortOrder"],
   departure: ["expectedAt", "aimedAt", "minutes", "status", "nextIntervalMinutes"],
   result: ["schemaVersion", "requestId", "favoriteId", "fetchedAt", "sourceUpdatedAt", "freshness", "departures"],
   error: ["schemaVersion", "requestId", "favoriteId", "code", "occurredAt", "retryAfterSeconds"],
   keyUpdate: ["schemaVersion", "action", "value"],
   placeSearchItem: ["placeId", "stopLabel", "localityLabel", "mode"],
   placeSearchResult: ["schemaVersion", "places"],
-  serviceOption: ["serviceId", "stopLabel", "lineLabel", "destinationLabel"],
+  serviceOption: ["serviceId", "stopLabel", "lineLabel", "destinationLabel", "lineMode", "lineColor", "lineTextColor"],
   serviceOptionsResult: ["schemaVersion", "placeId", "services"],
   catalogError: ["schemaVersion", "code"],
 } as const;
@@ -215,6 +229,10 @@ function boundedString(value: unknown, maximum: number): value is string {
   return typeof value === "string" && utf8Bytes(value) >= 1 && utf8Bytes(value) <= maximum;
 }
 
+export function isLineColor(value: unknown): value is string {
+  return typeof value === "string" && /^#[0-9a-f]{6}$/u.test(value);
+}
+
 function uint32(value: unknown): value is number {
   return Number.isInteger(value) && Number(value) >= 0 && Number(value) <= UINT32_MAX;
 }
@@ -229,6 +247,10 @@ function optionalBoundedString(value: unknown, maximum: number): boolean {
 
 export function isFavorite(value: unknown): value is Favorite {
   if (!object(value) || !exactKeys(value, domainKeys.favorite)) return false;
+  const hasLineMode = Object.hasOwn(value, "lineMode");
+  const hasLineColor = Object.hasOwn(value, "lineColor");
+  const hasLineTextColor = Object.hasOwn(value, "lineTextColor");
+  if (hasLineMode !== hasLineColor || hasLineMode !== hasLineTextColor) return false;
   return value.schemaVersion === SCHEMA_VERSION
     && boundedString(value.id, LIMITS.idUtf8Bytes)
     && boundedString(value.serviceId, LIMITS.idUtf8Bytes)
@@ -236,6 +258,11 @@ export function isFavorite(value: unknown): value is Favorite {
     && boundedString(value.stopLabel, LIMITS.labelUtf8Bytes)
     && boundedString(value.lineLabel, LIMITS.labelUtf8Bytes)
     && boundedString(value.destinationLabel, LIMITS.labelUtf8Bytes)
+    && (!hasLineMode || (
+      TRANSPORT_MODE.includes(value.lineMode as TransportMode)
+      && isLineColor(value.lineColor)
+      && isLineColor(value.lineTextColor)
+    ))
     && Number.isInteger(value.sortOrder)
     && Number(value.sortOrder) >= 0
     && Number(value.sortOrder) < LIMITS.favorites;
@@ -297,7 +324,10 @@ export function isServiceOption(value: unknown): value is ServiceOption {
   return boundedString(value.serviceId, LIMITS.idUtf8Bytes)
     && boundedString(value.stopLabel, LIMITS.labelUtf8Bytes)
     && boundedString(value.lineLabel, LIMITS.labelUtf8Bytes)
-    && boundedString(value.destinationLabel, LIMITS.labelUtf8Bytes);
+    && boundedString(value.destinationLabel, LIMITS.labelUtf8Bytes)
+    && TRANSPORT_MODE.includes(value.lineMode as TransportMode)
+    && isLineColor(value.lineColor)
+    && isLineColor(value.lineTextColor);
 }
 
 export function isServiceOptionsResult(value: unknown): value is ServiceOptionsResult {

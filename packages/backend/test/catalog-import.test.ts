@@ -107,6 +107,13 @@ test("import covers five modes, gates perimeter and unsupported modes, preserves
   const metroServices = manager.listServices(metro.placeId) ?? [];
   assert.equal(metroServices.length, 2);
   assert.notEqual(metroServices[0]?.serviceId, metroServices[1]?.serviceId);
+  assert.deepEqual(
+    metroServices.map(({ lineMode, lineColor, lineTextColor }) => ({ lineMode, lineColor, lineTextColor })),
+    [
+      { lineMode: "METRO", lineColor: "#be418d", lineTextColor: "#ffffff" },
+      { lineMode: "METRO", lineColor: "#be418d", lineTextColor: "#ffffff" },
+    ],
+  );
   const rer = place(manager, "chatelet les halles", "RER");
   const east = service(manager, rer.placeId, "Marne-la-Vallée Chessy");
   const west = service(manager, rer.placeId, "Saint-Germain-en-Laye");
@@ -127,6 +134,46 @@ test("import covers five modes, gates perimeter and unsupported modes, preserves
   assert.deepEqual(busServices.map((entry) => entry.destinationLabel), ["Hôpital Européen"]);
   assert.equal(busServices.some((entry) => entry.destinationLabel === "Wrong perimeter destination"), false);
   assert.doesNotMatch(JSON.stringify([...manager.searchPlaces("chatelet"), ...metroServices, ...busServices]), /STIF:|IDFM:|DEST:/u);
+});
+
+test("import normalizes valid colors and rejects invalid or missing authoritative colors", async (t) => {
+  const directory = workspace(t);
+  const validSources = sourcesFor("fixture-2026-08-a");
+  const invalidSources: CatalogRecordSourceSet = {
+    ...validSources,
+    lines: validSources.lines.map((line, index) => index === 0
+      ? { ...line, colourweb_hexa: "not-a-color" }
+      : line),
+  };
+  const invalidCandidate = join(directory, "invalid-color.sqlite");
+  await assert.rejects(
+    buildCatalogCandidateFromRecords({
+      candidatePath: invalidCandidate,
+      sourceRevision: "fixture-invalid-color",
+      sources: invalidSources,
+    }),
+    /six-digit hexadecimal color/u,
+  );
+  assert.equal(existsSync(invalidCandidate), false);
+
+  const missingSources: CatalogRecordSourceSet = {
+    ...validSources,
+    lines: validSources.lines.map((line, index) => {
+      if (index !== 0) return line;
+      const { textcolourweb_hexa: _missing, ...withoutTextColor } = line;
+      return withoutTextColor;
+    }),
+  };
+  const missingCandidate = join(directory, "missing-color.sqlite");
+  await assert.rejects(
+    buildCatalogCandidateFromRecords({
+      candidatePath: missingCandidate,
+      sourceRevision: "fixture-missing-color",
+      sources: missingSources,
+    }),
+    /missing textcolourweb_hexa/u,
+  );
+  assert.equal(existsSync(missingCandidate), false);
 });
 
 test("activation preserves stable services, removes stale IDs, and failed replacement leaves the active file untouched", async (t) => {

@@ -25,6 +25,7 @@ var ERROR_CODE = Object.freeze([
   "RATE_LIMITED",
   "INVALID_RESPONSE"
 ]);
+var TRANSPORT_MODE = Object.freeze(["BUS", "METRO", "TRAM", "RER", "TRANSILIEN"]);
 var API_KEY_ACTION = Object.freeze(["KEEP", "REPLACE", "REMOVE"]);
 var KEY_STATUS = Object.freeze({ MISSING: 0, CONFIGURED: 1, INVALID: 2 });
 var REQUEST_TRIGGER = Object.freeze({ APP_OPEN: 0, FAVORITE_SELECTION: 1, MANUAL_SELECT: 2 });
@@ -103,6 +104,9 @@ var FAVORITE_KEYS = [
   "stopLabel",
   "lineLabel",
   "destinationLabel",
+  "lineMode",
+  "lineColor",
+  "lineTextColor",
   "sortOrder"
 ];
 var DEPARTURE_KEYS = ["expectedAt", "aimedAt", "minutes", "status", "nextIntervalMinutes"];
@@ -169,6 +173,10 @@ function boundedString(value, maximum) {
   return size >= 1 && size <= maximum;
 }
 
+function isLineColor(value) {
+  return typeof value === "string" && /^#[0-9a-f]{6}$/.test(value);
+}
+
 function uint32(value) {
   return typeof value === "number" && isFinite(value) && Math.floor(value) === value && value >= 0 && value <= UINT32_MAX;
 }
@@ -178,15 +186,26 @@ function optionalUint32(value) {
 }
 
 function isFavorite(value) {
-  return isObject(value)
-    && hasOnlyKeys(value, FAVORITE_KEYS)
-    && value.schemaVersion === SCHEMA_VERSION
+  var hasLineColor;
+  var hasLineMode;
+  var hasLineTextColor;
+  if (!isObject(value) || !hasOnlyKeys(value, FAVORITE_KEYS)) return false;
+  hasLineMode = Object.prototype.hasOwnProperty.call(value, "lineMode");
+  hasLineColor = Object.prototype.hasOwnProperty.call(value, "lineColor");
+  hasLineTextColor = Object.prototype.hasOwnProperty.call(value, "lineTextColor");
+  if (hasLineMode !== hasLineColor || hasLineMode !== hasLineTextColor) return false;
+  return value.schemaVersion === SCHEMA_VERSION
     && boundedString(value.id, LIMITS.idUtf8Bytes)
     && boundedString(value.serviceId, LIMITS.idUtf8Bytes)
     && (typeof value.displayName === "undefined" || boundedString(value.displayName, LIMITS.labelUtf8Bytes))
     && boundedString(value.stopLabel, LIMITS.labelUtf8Bytes)
     && boundedString(value.lineLabel, LIMITS.labelUtf8Bytes)
     && boundedString(value.destinationLabel, LIMITS.labelUtf8Bytes)
+    && (!hasLineMode || (
+      TRANSPORT_MODE.indexOf(value.lineMode) !== -1
+      && isLineColor(value.lineColor)
+      && isLineColor(value.lineTextColor)
+    ))
     && typeof value.sortOrder === "number"
     && Math.floor(value.sortOrder) === value.sortOrder
     && value.sortOrder >= 0
@@ -262,9 +281,14 @@ function copyFavorite(favorite) {
     serviceId: favorite.serviceId,
     stopLabel: favorite.stopLabel,
     lineLabel: favorite.lineLabel,
-    destinationLabel: favorite.destinationLabel,
-    sortOrder: favorite.sortOrder
+    destinationLabel: favorite.destinationLabel
   };
+  if (Object.prototype.hasOwnProperty.call(favorite, "lineMode")) {
+    copy.lineMode = favorite.lineMode;
+    copy.lineColor = favorite.lineColor;
+    copy.lineTextColor = favorite.lineTextColor;
+  }
+  copy.sortOrder = favorite.sortOrder;
   if (typeof favorite.displayName !== "undefined") copy.displayName = favorite.displayName;
   return copy;
 }
@@ -301,6 +325,7 @@ module.exports = {
   FRESHNESS: FRESHNESS,
   DEPARTURE_STATUS: DEPARTURE_STATUS,
   ERROR_CODE: ERROR_CODE,
+  TRANSPORT_MODE: TRANSPORT_MODE,
   API_KEY_ACTION: API_KEY_ACTION,
   KEY_STATUS: KEY_STATUS,
   REQUEST_TRIGGER: REQUEST_TRIGGER,
@@ -313,6 +338,7 @@ module.exports = {
   isObject: isObject,
   hasOnlyKeys: hasOnlyKeys,
   boundedString: boundedString,
+  isLineColor: isLineColor,
   isFavorite: isFavorite,
   isFavoriteList: isFavoriteList,
   isDeparture: isDeparture,

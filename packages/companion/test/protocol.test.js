@@ -23,11 +23,50 @@ test("PebbleKit constants exactly mirror the canonical alias and numeric contrac
   assert.deepEqual(contracts.MESSAGE_TYPE, shared.MESSAGE_TYPE);
   assert.deepEqual(contracts.KEY_STATUS, shared.KEY_STATUS);
   assert.deepEqual(contracts.REQUEST_TRIGGER, shared.REQUEST_TRIGGER);
+  assert.deepEqual(contracts.TRANSPORT_MODE, shared.TRANSPORT_MODE);
   assert.deepEqual(contracts.WIRE_LANGUAGE, shared.WIRE_LANGUAGE);
   assert.deepEqual(contracts.LIMITS, shared.LIMITS);
   assert.equal(contracts.SCHEMA_VERSION, shared.SCHEMA_VERSION);
   assert.equal(contracts.CACHE_FRESH_SECONDS, shared.CACHE_FRESH_SECONDS);
   assert.equal(contracts.FAVORITE_SETTLE_MS, shared.FAVORITE_SETTLE_MS);
+});
+
+test("presentation fields form an optional complete group and remain outside AppMessage", function () {
+  var copied = contracts.copyFavorite(fixture.favorite);
+  var legacy;
+  var legacyCopy;
+  var presentationFields = ["lineMode", "lineColor", "lineTextColor"];
+  assert.deepEqual(copied, fixture.favorite);
+  assert.equal(contracts.isFavorite(copied), true);
+  assert.equal(contracts.isFavorite(Object.assign({}, copied, { lineColor: "#FFBE00" })), false);
+  assert.equal(contracts.isFavorite(Object.assign({}, copied, { lineMode: "metro" })), false);
+  delete copied.lineTextColor;
+  assert.equal(contracts.isFavorite(copied), false);
+
+  legacy = contracts.copyFavorite(fixture.favorite);
+  presentationFields.forEach(function (field) { delete legacy[field]; });
+  assert.equal(contracts.isFavorite(legacy), true);
+  assert.equal(contracts.isFavorite(Object.assign({}, legacy, { lineMode: "METRO" })), false);
+  assert.equal(contracts.isFavorite(Object.assign({}, legacy, {
+    lineMode: "METRO",
+    lineColor: "#ffbe00"
+  })), false);
+  legacyCopy = contracts.copyFavorite(legacy);
+  assert.deepEqual(legacyCopy, legacy);
+  presentationFields.forEach(function (field) {
+    assert.equal(Object.prototype.hasOwnProperty.call(legacyCopy, field), false);
+  });
+
+  assert.equal(codec.encodeConfiguration(
+    "presentation-wire",
+    [fixture.favorite],
+    contracts.KEY_STATUS.CONFIGURED,
+    "en"
+  ).some(function (message) {
+    return Object.prototype.hasOwnProperty.call(message, "lineMode")
+      || Object.prototype.hasOwnProperty.call(message, "lineColor")
+      || Object.prototype.hasOwnProperty.call(message, "lineTextColor");
+  }), false);
 });
 
 test("recorded fixture round trips through symbolic configuration and result payloads", async function () {

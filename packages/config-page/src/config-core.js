@@ -20,6 +20,9 @@ export const LIMITS = {
   idUtf8Bytes: 64,
   labelUtf8Bytes: 96,
   favorites: 8,
+  catalogQueryMinCharacters: 2,
+  catalogQueryMaxCharacters: 100,
+  catalogSearchResults: 20,
 };
 
 const FAVORITE_FIELDS = [
@@ -30,6 +33,9 @@ const FAVORITE_FIELDS = [
   "stopLabel",
   "lineLabel",
   "destinationLabel",
+  "lineMode",
+  "lineColor",
+  "lineTextColor",
   "sortOrder",
 ];
 
@@ -41,6 +47,10 @@ export function utf8Bytes(value) {
 
 function boundedString(value, maximum) {
   return typeof value === "string" && utf8Bytes(value) >= 1 && utf8Bytes(value) <= maximum;
+}
+
+export function isLineColor(value) {
+  return typeof value === "string" && /^#[0-9a-f]{6}$/u.test(value);
 }
 
 // --- Locale -----------------------------------------------------------------
@@ -55,46 +65,100 @@ export function selectLocale(language) {
 
 export const COPY = {
   en: {
-    pageTitle: "Lapin Futé — Settings",
-    keyTitle: "PRIM API key",
-    keyStatusConfigured: "A key is configured on your phone.",
-    keyStatusMissing: "No API key is configured.",
-    keyLabel: "API key",
-    keyPlaceholder: "Enter a new key",
+    pageTitle: "Lapin Futé settings",
+    intro: "Choose the departures you want at hand on your Pebble.",
+    keyTitle: "PRIM access",
+    keyStatusConfigured: "A key is configured on this phone.",
+    keyStatusMissing: "No key is configured.",
+    keyExplanation: "Your personal key stays in plaintext on your phone. This page never receives the saved key.",
+    keyLink: "Create a PRIM token",
+    keyLabel: "Replace with a new key",
+    keyPlaceholder: "Paste a new key",
     keyShow: "Show",
     keyHide: "Hide",
-    keyRemove: "Remove key",
-    keyUndoRemove: "Keep key",
-    keyRemovePending: "The key will be removed when you save.",
-    keyErrorTooLong: "The key must be at most 512 bytes.",
+    keyRemove: "Remove saved key",
+    keyUndoRemove: "Keep saved key",
+    keyRemovePending: "The saved key will be removed.",
+    keyReplacementPending: "A replacement key is ready to save.",
+    keyErrorTooLong: "The key must be at most 512 UTF-8 bytes.",
     keyErrorNewline: "The key must not contain line breaks.",
-    favoritesTitle: "Favorites",
-    favoritesEmpty: "No favorites yet.",
+    favoritesTitle: "Favorite departures",
+    favoritesEmpty: "No favorites yet. Search for a stop to add one.",
+    favoriteAddTitle: "Add a favorite",
+    searchLabel: "Stop or station",
+    searchPlaceholder: "Search by name",
+    searchHint: "Enter at least 2 characters.",
+    searchLoading: "Searching…",
+    searchNoResults: "No matching stop or station.",
+    backendUnavailable: "The service catalog is unavailable. Your edits are safe; try again.",
+    invalidService: "This service is no longer available. Search again.",
+    servicesLoading: "Loading lines and directions…",
+    servicesLabel: "Line and direction",
+    servicesEmpty: "No service is available for this stop.",
+    previewRecorded: "Recorded example",
+    minutesShort: "min",
+    previewTitle: "Preview",
+    favoriteNameLabel: "Favorite name (optional)",
+    favoriteNamePlaceholder: "For example, Home",
+    favoriteAdd: "Add favorite",
+    favoriteLimit: "You have reached the 8-favorite limit.",
     favoriteMoveUp: "Move up",
     favoriteMoveDown: "Move down",
+    favoriteRename: "Rename",
     favoriteRemove: "Remove",
-    save: "Save",
+    renamePrompt: "Favorite name",
+    save: "Save settings",
+    aboutOpen: "About",
+    aboutBack: "Back to settings",
+    aboutTitle: "About Lapin Futé",
   },
   fr: {
-    pageTitle: "Lapin Futé — Réglages",
-    keyTitle: "Clé API PRIM",
-    keyStatusConfigured: "Une clé est configurée sur votre téléphone.",
-    keyStatusMissing: "Aucune clé API n’est configurée.",
-    keyLabel: "Clé API",
-    keyPlaceholder: "Saisir une nouvelle clé",
+    pageTitle: "Réglages Lapin Futé",
+    intro: "Choisissez les prochains départs à garder sous la main sur votre Pebble.",
+    keyTitle: "Accès PRIM",
+    keyStatusConfigured: "Une clé est configurée sur ce téléphone.",
+    keyStatusMissing: "Aucune clé n’est configurée.",
+    keyExplanation: "Votre clé personnelle reste en clair sur votre téléphone. Cette page ne reçoit jamais la clé enregistrée.",
+    keyLink: "Créer un jeton PRIM",
+    keyLabel: "Remplacer par une nouvelle clé",
+    keyPlaceholder: "Coller une clé",
     keyShow: "Afficher",
     keyHide: "Masquer",
-    keyRemove: "Supprimer la clé",
-    keyUndoRemove: "Conserver la clé",
-    keyRemovePending: "La clé sera supprimée à l’enregistrement.",
-    keyErrorTooLong: "La clé doit contenir au maximum 512 octets.",
+    keyRemove: "Supprimer la clé enregistrée",
+    keyUndoRemove: "Conserver la clé enregistrée",
+    keyRemovePending: "La clé enregistrée sera supprimée.",
+    keyReplacementPending: "Une nouvelle clé est prête à être enregistrée.",
+    keyErrorTooLong: "La clé doit contenir au maximum 512 octets UTF-8.",
     keyErrorNewline: "La clé ne doit pas contenir de retour à la ligne.",
-    favoritesTitle: "Favoris",
-    favoritesEmpty: "Aucun favori pour le moment.",
+    favoritesTitle: "Départs favoris",
+    favoritesEmpty: "Aucun favori. Recherchez un arrêt pour en ajouter un.",
+    favoriteAddTitle: "Ajouter un favori",
+    searchLabel: "Arrêt ou gare",
+    searchPlaceholder: "Rechercher par nom",
+    searchHint: "Saisissez au moins 2 caractères.",
+    searchLoading: "Recherche…",
+    searchNoResults: "Aucun arrêt ni gare ne correspond.",
+    backendUnavailable: "Le catalogue est indisponible. Vos modifications sont conservées ; réessayez.",
+    invalidService: "Ce service n’est plus disponible. Relancez la recherche.",
+    servicesLoading: "Chargement des lignes et directions…",
+    servicesLabel: "Ligne et direction",
+    servicesEmpty: "Aucun service n’est disponible pour cet arrêt.",
+    previewRecorded: "Exemple enregistré",
+    minutesShort: "min",
+    previewTitle: "Aperçu",
+    favoriteNameLabel: "Nom du favori (facultatif)",
+    favoriteNamePlaceholder: "Par exemple, Maison",
+    favoriteAdd: "Ajouter le favori",
+    favoriteLimit: "Vous avez atteint la limite de 8 favoris.",
     favoriteMoveUp: "Monter",
     favoriteMoveDown: "Descendre",
+    favoriteRename: "Renommer",
     favoriteRemove: "Supprimer",
-    save: "Enregistrer",
+    renamePrompt: "Nom du favori",
+    save: "Enregistrer les réglages",
+    aboutOpen: "À propos",
+    aboutBack: "Retour aux réglages",
+    aboutTitle: "À propos de Lapin Futé",
   },
 };
 
@@ -107,6 +171,10 @@ export function copyFor(language) {
 export function isFavoriteShape(value) {
   if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
   if (!Object.keys(value).every((field) => FAVORITE_FIELDS.includes(field))) return false;
+  const hasLineMode = Object.hasOwn(value, "lineMode");
+  const hasLineColor = Object.hasOwn(value, "lineColor");
+  const hasLineTextColor = Object.hasOwn(value, "lineTextColor");
+  if (hasLineMode !== hasLineColor || hasLineMode !== hasLineTextColor) return false;
   return (
     value.schemaVersion === SCHEMA_VERSION &&
     boundedString(value.id, LIMITS.idUtf8Bytes) &&
@@ -115,8 +183,79 @@ export function isFavoriteShape(value) {
     boundedString(value.stopLabel, LIMITS.labelUtf8Bytes) &&
     boundedString(value.lineLabel, LIMITS.labelUtf8Bytes) &&
     boundedString(value.destinationLabel, LIMITS.labelUtf8Bytes) &&
+    (!hasLineMode || (
+      TRANSPORT_MODES.includes(value.lineMode) &&
+      isLineColor(value.lineColor) &&
+      isLineColor(value.lineTextColor)
+    )) &&
     Number.isInteger(value.sortOrder)
   );
+}
+
+const PLACE_FIELDS = ["placeId", "stopLabel", "localityLabel", "mode"];
+const SERVICE_FIELDS = ["serviceId", "stopLabel", "lineLabel", "destinationLabel", "lineMode", "lineColor", "lineTextColor"];
+const TRANSPORT_MODES = ["BUS", "METRO", "TRAM", "RER", "TRANSILIEN"];
+
+function exactFields(value, allowed, required) {
+  return typeof value === "object" && value !== null && !Array.isArray(value)
+    && Object.keys(value).every((field) => allowed.includes(field))
+    && required.every((field) => Object.hasOwn(value, field));
+}
+
+export function isPlaceSearchItem(value) {
+  return exactFields(value, PLACE_FIELDS, ["placeId", "stopLabel", "mode"])
+    && boundedString(value.placeId, LIMITS.idUtf8Bytes)
+    && boundedString(value.stopLabel, LIMITS.labelUtf8Bytes)
+    && (value.localityLabel === undefined || boundedString(value.localityLabel, LIMITS.labelUtf8Bytes))
+    && TRANSPORT_MODES.includes(value.mode);
+}
+
+export function isPlaceSearchResult(value) {
+  return exactFields(value, ["schemaVersion", "places"], ["schemaVersion", "places"])
+    && value.schemaVersion === SCHEMA_VERSION
+    && Array.isArray(value.places)
+    && value.places.length <= LIMITS.catalogSearchResults
+    && value.places.every(isPlaceSearchItem);
+}
+
+export function isServiceOption(value) {
+  return exactFields(value, SERVICE_FIELDS, SERVICE_FIELDS)
+    && boundedString(value.serviceId, LIMITS.idUtf8Bytes)
+    && boundedString(value.stopLabel, LIMITS.labelUtf8Bytes)
+    && boundedString(value.lineLabel, LIMITS.labelUtf8Bytes)
+    && boundedString(value.destinationLabel, LIMITS.labelUtf8Bytes)
+    && TRANSPORT_MODES.includes(value.lineMode)
+    && isLineColor(value.lineColor)
+    && isLineColor(value.lineTextColor);
+}
+
+export function isServiceOptionsResult(value, placeId) {
+  return exactFields(value, ["schemaVersion", "placeId", "services"], ["schemaVersion", "placeId", "services"])
+    && value.schemaVersion === SCHEMA_VERSION
+    && value.placeId === placeId
+    && Array.isArray(value.services)
+    && value.services.every(isServiceOption);
+}
+
+export function favoriteFromService(id, service, sortOrder, displayName = undefined) {
+  if (!boundedString(id, LIMITS.idUtf8Bytes) || !isServiceOption(service)
+      || !Number.isInteger(sortOrder) || sortOrder < 0) return null;
+  const favorite = {
+    schemaVersion: SCHEMA_VERSION,
+    id,
+    serviceId: service.serviceId,
+    stopLabel: service.stopLabel,
+    lineLabel: service.lineLabel,
+    destinationLabel: service.destinationLabel,
+    lineMode: service.lineMode,
+    lineColor: service.lineColor,
+    lineTextColor: service.lineTextColor,
+    sortOrder,
+  };
+  if (displayName !== undefined && boundedString(displayName, LIMITS.labelUtf8Bytes)) {
+    favorite.displayName = displayName;
+  }
+  return favorite;
 }
 
 function renumber(favorites) {
@@ -191,6 +330,28 @@ export function reduceConfigState(state, action) {
       return { ...state, keyDraft: { value: "", removeRequested: true } };
     case "key-remove-cancelled":
       return { ...state, keyDraft: { ...state.keyDraft, removeRequested: false } };
+    case "favorite-add": {
+      if (state.favorites.length >= LIMITS.favorites || !isFavoriteShape(action.favorite)
+          || state.favorites.some((favorite) => favorite.id === action.favorite.id)) return state;
+      return {
+        ...state,
+        favorites: renumber([...state.favorites, { ...action.favorite }]),
+      };
+    }
+    case "favorite-rename": {
+      const displayName = typeof action.displayName === "string" ? action.displayName.trim() : "";
+      if (displayName.length > 0 && !boundedString(displayName, LIMITS.labelUtf8Bytes)) return state;
+      let changed = false;
+      const favorites = state.favorites.map((favorite) => {
+        if (favorite.id !== action.id) return favorite;
+        changed = true;
+        const renamed = { ...favorite };
+        if (displayName.length === 0) delete renamed.displayName;
+        else renamed.displayName = displayName;
+        return renamed;
+      });
+      return changed ? { ...state, favorites } : state;
+    }
     case "favorite-remove": {
       if (!state.favorites.some((favorite) => favorite.id === action.id)) return state;
       return {
@@ -260,8 +421,13 @@ function stampFavorite(favorite, sortOrder) {
     stopLabel: favorite.stopLabel,
     lineLabel: favorite.lineLabel,
     destinationLabel: favorite.destinationLabel,
-    sortOrder,
   };
+  if (Object.hasOwn(favorite, "lineMode")) {
+    stamped.lineMode = favorite.lineMode;
+    stamped.lineColor = favorite.lineColor;
+    stamped.lineTextColor = favorite.lineTextColor;
+  }
+  stamped.sortOrder = sortOrder;
   if (favorite.displayName !== undefined) stamped.displayName = favorite.displayName;
   return stamped;
 }

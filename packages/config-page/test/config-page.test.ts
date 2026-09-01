@@ -23,8 +23,11 @@ import {
   copyFor,
   createCloseSession,
   encodeCloseFragment,
+  favoriteFromService,
   initialConfigState,
   isFavoriteShape,
+  isPlaceSearchResult,
+  isServiceOptionsResult,
   parseConfigFragment,
   planApiKeyUpdate,
   planConfigResult,
@@ -32,12 +35,34 @@ import {
   selectLocale,
   utf8Bytes,
 } from "../src/config-core.js";
+import {
+  SEARCH_DEBOUNCE_MS,
+  CatalogClientError,
+  createCatalogClient,
+} from "../src/catalog-client.js";
+import { RECORDED_PREVIEW } from "../src/preview-fixture.js";
+import { lineBadgeAssetUrl } from "../src/line-badge-assets.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const require = createRequire(import.meta.url);
 const companionConfiguration = require("../../companion/src/configuration.js");
 
 function favorite(id: string, sortOrder: number): Favorite {
+  return {
+    schemaVersion: 1,
+    id,
+    serviceId: `service:${id}`,
+    stopLabel: `Arrêt ${id}`,
+    lineLabel: "Métro 1",
+    destinationLabel: "La Défense",
+    lineMode: "METRO",
+    lineColor: "#ffbe00",
+    lineTextColor: "#000000",
+    sortOrder,
+  };
+}
+
+function legacyFavorite(id: string, sortOrder: number): Favorite {
   return {
     schemaVersion: 1,
     id,
@@ -66,6 +91,9 @@ test("mirrored constants equal the canonical contract", () => {
   assert.equal(LIMITS.idUtf8Bytes, CANONICAL_LIMITS.idUtf8Bytes);
   assert.equal(LIMITS.labelUtf8Bytes, CANONICAL_LIMITS.labelUtf8Bytes);
   assert.equal(LIMITS.favorites, CANONICAL_LIMITS.favorites);
+  assert.equal(LIMITS.catalogQueryMinCharacters, CANONICAL_LIMITS.catalogQueryMinCharacters);
+  assert.equal(LIMITS.catalogQueryMaxCharacters, CANONICAL_LIMITS.catalogQueryMaxCharacters);
+  assert.equal(LIMITS.catalogSearchResults, CANONICAL_LIMITS.catalogSearchResults);
 });
 
 test("french language tags select french copy and everything else falls back to english", () => {
@@ -126,6 +154,43 @@ test("opening fragment parsing is secret-free and validates favorites", () => {
     }),
   );
   assert.deepEqual(invalid.favorites.map((entry) => entry.id), ["ok"]);
+});
+test("legacy favorites round trip without inventing presentation properties and partial groups reject", () => {
+  const legacy = legacyFavorite("legacy", 0);
+  const parsed = parseConfigFragment(fragmentWith([legacy]));
+  const presentationFields = ["lineMode", "lineColor", "lineTextColor"] as const;
+
+  assert.equal(isFavorite(legacy), true);
+  assert.equal(isFavoriteShape(legacy), true);
+  assert.deepEqual(parsed.favorites, [legacy]);
+  for (const field of presentationFields) {
+    assert.equal(Object.hasOwn(parsed.favorites[0], field), false);
+  }
+
+  const partials = [
+    { ...legacy, lineMode: "METRO" },
+    { ...legacy, lineMode: "METRO", lineColor: "#ffbe00" },
+    { ...legacy, lineColor: "#ffbe00", lineTextColor: "#000000" },
+  ];
+  for (const partial of partials) {
+    assert.equal(isFavorite(partial), false);
+    assert.equal(isFavoriteShape(partial), false);
+    assert.deepEqual(parseConfigFragment(openingFragment({
+      hasKey: true,
+      favorites: [partial],
+      language: "fr_FR",
+    })).favorites, []);
+  }
+  assert.equal(isFavorite({ ...legacy, lineMode: undefined }), false);
+  assert.equal(isFavoriteShape({ ...legacy, lineMode: undefined }), false);
+
+  const outcome = planConfigResult(initialConfigState(parsed));
+  assert.equal(outcome.ok, true);
+  if (!outcome.ok) return;
+  assert.deepEqual(outcome.payload.favorites, [legacy]);
+  for (const field of presentationFields) {
+    assert.equal(Object.hasOwn(outcome.payload.favorites[0], field), false);
+  }
 });
 test("the config page consumes the companion-produced opening fragment exactly", () => {
   const key = "stored-personal-key";
@@ -288,6 +353,9 @@ test("favorite edits replace the whole list atomically with renumbered order", (
       stopLabel: "Arrêt work",
       lineLabel: "Métro 1",
       destinationLabel: "La Défense",
+      lineMode: "METRO",
+      lineColor: "#ffbe00",
+      lineTextColor: "#000000",
       sortOrder: 0,
       displayName: "Bureau",
     },
@@ -367,11 +435,182 @@ test("the close fragment carries the key value only for REPLACE and is one-shot"
   assert.equal(encodeCloseFragment(removeOutcome.payload).includes("super-secret-key"), false);
 });
 
-test("page sources contain no storage, network, timer, or logging surface", () => {
-  const forbidden =
-    /fetch\(|XMLHttpRequest|localStorage|sessionStorage|document\.cookie|WebSocket|console\.|setInterval|setTimeout\(/;
-  for (const file of ["config-core.js", "config-page.js"]) {
-    const source = readFileSync(join(here, "../src", file), "utf8");
-    assert.doesNotMatch(source, forbidden);
+test("three backend services can be added, renamed, reordered, and removed atomically", () => {
+  const services = [
+    { serviceId: "svc-a", stopLabel: "Châtelet", lineLabel: "4", destinationLabel: "Bagneux", lineMode: "METRO", lineColor: "#be418d", lineTextColor: "#ffffff" },
+    { serviceId: "svc-b", stopLabel: "République", lineLabel: "96", destinationLabel: "Porte des Lilas", lineMode: "BUS", lineColor: "#007852", lineTextColor: "#ffffff" },
+    { serviceId: "svc-c", stopLabel: "Nation", lineLabel: "A", destinationLabel: "Cergy", lineMode: "RER", lineColor: "#e3051c", lineTextColor: "#ffffff" },
+  ];
+  let state = initialConfigState(parseConfigFragment(fragmentWith([])));
+  services.forEach((service, index) => {
+    const entry = favoriteFromService(`cfg-${index}`, service, index);
+    assert.ok(entry);
+    state = reduceConfigState(state, { type: "favorite-add", favorite: entry });
+  });
+  assert.deepEqual(state.favorites.map((entry) => entry.serviceId), ["svc-a", "svc-b", "svc-c"]);
+  assert.deepEqual(
+    state.favorites.map(({ lineMode, lineColor, lineTextColor }) => ({ lineMode, lineColor, lineTextColor })),
+    services.map(({ lineMode, lineColor, lineTextColor }) => ({ lineMode, lineColor, lineTextColor })),
+  );
+  state = reduceConfigState(state, { type: "favorite-rename", id: "cfg-1", displayName: "Travail" });
+  state = reduceConfigState(state, { type: "favorite-move", id: "cfg-2", delta: -2 });
+  state = reduceConfigState(state, { type: "favorite-remove", id: "cfg-0" });
+  assert.deepEqual(state.favorites.map((entry) => [entry.id, entry.sortOrder, entry.displayName]), [
+    ["cfg-2", 0, undefined],
+    ["cfg-1", 1, "Travail"],
+  ]);
+  const outcome = planConfigResult(state);
+  assert.equal(outcome.ok, true);
+  if (outcome.ok) assert.equal(outcome.payload.favorites.every(isFavorite), true);
+});
+
+test("catalog response guards reject identifiers and malformed or oversized collections", () => {
+  const place = { placeId: "plc-a", stopLabel: "Châtelet", localityLabel: "Paris", mode: "METRO" };
+  const service = { serviceId: "svc-a", stopLabel: "Châtelet", lineLabel: "4", destinationLabel: "Bagneux", lineMode: "METRO", lineColor: "#be418d", lineTextColor: "#ffffff" };
+  assert.equal(isPlaceSearchResult({ schemaVersion: 1, places: [place] }), true);
+  assert.equal(isPlaceSearchResult({ schemaVersion: 1, places: Array(21).fill(place) }), false);
+  assert.equal(isPlaceSearchResult({ schemaVersion: 1, places: [{ ...place, monitoringRef: "raw" }] }), false);
+  assert.equal(isServiceOptionsResult({ schemaVersion: 1, placeId: "plc-a", services: [service] }, "plc-a"), true);
+  assert.equal(isServiceOptionsResult({ schemaVersion: 1, placeId: "other", services: [service] }, "plc-a"), false);
+  assert.equal(favoriteFromService("cfg-a", { ...service, lineRef: "raw" }, 0), null);
+  assert.equal(isServiceOptionsResult({ schemaVersion: 1, placeId: "plc-a", services: [{ ...service, lineColor: "#BE418D" }] }, "plc-a"), false);
+  assert.equal(isServiceOptionsResult({ schemaVersion: 1, placeId: "plc-a", services: [{ ...service, lineMode: "metro" }] }, "plc-a"), false);
+  const { lineTextColor: _missingTextColor, ...missingTextColor } = service;
+  assert.equal(favoriteFromService("cfg-a", missingTextColor, 0), null);
+});
+
+test("favorite preview uses the credential-free recorded departure fixture", () => {
+  const recorded = JSON.parse(
+    readFileSync(join(here, "../../../fixtures/departures/foundation.json"), "utf8"),
+  );
+  assert.deepEqual(
+    RECORDED_PREVIEW,
+    recorded.result.departures.map(({ minutes, status }: { minutes: number; status: string }) => ({ minutes, status })),
+  );
+  assert.equal(JSON.stringify(RECORDED_PREVIEW).includes(recorded.favorite.serviceId), false);
+});
+test("catalog search waits 300 ms, cancels superseded work, and validates responses", async () => {
+  const timers = new Map<number, () => void>();
+  const delays: number[] = [];
+  let nextTimer = 0;
+  const requests: string[] = [];
+  const client = createCatalogClient({
+    setTimer(callback: () => void, delay: number) {
+      const id = ++nextTimer;
+
+      delays.push(delay);
+      timers.set(id, callback);
+      return id;
+    },
+    clearTimer(id: number) {
+      timers.delete(id);
+    },
+    async fetchImpl(url: string) {
+      requests.push(url);
+      return {
+        ok: true,
+        async json() {
+          return { schemaVersion: 1, places: [] };
+        },
+      };
+    },
+  });
+  const superseded = client.searchPlaces("ch");
+  const latest = client.searchPlaces("cha");
+  await assert.rejects(superseded, (error: unknown) => error instanceof DOMException && error.name === "AbortError");
+  assert.deepEqual(delays, [SEARCH_DEBOUNCE_MS, SEARCH_DEBOUNCE_MS]);
+  assert.equal(timers.size, 1);
+  [...timers.values()][0]!();
+  assert.deepEqual(await latest, []);
+  assert.deepEqual(requests, ["/api/catalog/places?q=cha"]);
+
+  const invalid = createCatalogClient({
+    setTimer(callback: () => void) {
+      queueMicrotask(callback);
+      return 1;
+    },
+    clearTimer() {},
+    async fetchImpl() {
+      return { ok: true, async json() { return { schemaVersion: 1, places: [{ placeId: "leak" }] }; } };
+    },
+  });
+  await assert.rejects(invalid.searchPlaces("invalid"), (error: unknown) =>
+    error instanceof CatalogClientError && error.code === "BACKEND_UNAVAILABLE");
+});
+
+test("page keeps secrets out of durable and observable surfaces", () => {
+  const core = readFileSync(join(here, "../src/config-core.js"), "utf8");
+  const controller = readFileSync(join(here, "../src/config-page.js"), "utf8");
+  const client = readFileSync(join(here, "../src/catalog-client.js"), "utf8");
+  const html = readFileSync(join(here, "../index.html"), "utf8");
+  for (const source of [core, controller, client]) {
+    assert.doesNotMatch(source, /localStorage|sessionStorage|document\\.cookie|WebSocket|console\\./u);
   }
+  assert.doesNotMatch(client, /prim\\.iledefrance-mobilites/u);
+  assert.match(html, /type="password" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false"/u);
+  assert.match(html, /connect-src 'self'/u);
+  assert.doesNotMatch(html, /value=["'][^"']+["']/u);
+  assert.match(html, /img-src 'self'/u);
+  assert.doesNotMatch(html, /img-src 'none'/u);
+});
+
+test("bilingual About copy exposes the required legal, privacy, attribution, and safe-link facts", () => {
+  const html = readFileSync(join(here, "../index.html"), "utf8");
+  const controller = readFileSync(join(here, "../src/config-page.js"), "utf8");
+  for (const fact of [
+    "Version 0.1.0",
+    "Publication director:",
+    "Directeur de la publication :",
+    "Anthodev",
+    "88 Colin P. Kelly Jr. St.",
+    "localStorage",
+    "no analytics or telemetry",
+    "aucun cookie",
+    "Référentiel des lignes",
+    "conditions d’utilisation IDFM/PRIM",
+    "search terms are sent",
+    "termes saisis sont transmis",
+    "ODbL 1.0",
+    "github.com/Anthodev/lapin-fute",
+  ]) assert.equal(html.includes(fact), true, fact);
+  assert.doesNotMatch(html, /software licen[cs]e|licence du logiciel/iu);
+  assert.equal((html.match(/target="_blank"/gu) ?? []).length, (html.match(/rel="noopener noreferrer"/gu) ?? []).length);
+  assert.match(controller, /lineBadgeAssetUrl\(service\.lineMode, service\.lineLabel\)/u);
+  assert.match(controller, /image\.addEventListener\("error"/u);
+  assert.match(controller, /elements\.config_view\.hidden = true/u);
+  assert.match(controller, /aboutReturnFocus\.focus\(\)/u);
+});
+
+test("official rail badges cover every RER and Transilien line", () => {
+  for (const line of ["A", "B", "C", "D", "E"]) {
+    assert.match(lineBadgeAssetUrl("RER", line) ?? "", new RegExp(`/rer-${line.toLowerCase()}\\.png$`, "u"));
+  }
+  for (const line of ["H", "J", "K", "L", "N", "P", "R", "U", "V"]) {
+    assert.match(
+      lineBadgeAssetUrl("TRANSILIEN", line) ?? "",
+      new RegExp(`/transilien-${line.toLowerCase()}\\.png$`, "u"),
+    );
+  }
+});
+
+test("legacy favorites resolve no official image and use an accessible neutral fallback", () => {
+  const legacy = legacyFavorite("legacy-badge", 0);
+  const controller = readFileSync(join(here, "../src/config-page.js"), "utf8");
+
+  assert.equal(lineBadgeAssetUrl(legacy.lineMode, legacy.lineLabel), undefined);
+  assert.match(
+    controller,
+    /const assetUrl = service\.lineMode === undefined\s+\? undefined\s+:\s+lineBadgeAssetUrl\(service\.lineMode, service\.lineLabel\)/u,
+  );
+  assert.match(controller, /const NEUTRAL_LINE_BACKGROUND = "#52616f"/u);
+  assert.match(controller, /const NEUTRAL_LINE_TEXT = "#ffffff"/u);
+  assert.match(controller, /const backgroundColor = service\.lineColor \?\? NEUTRAL_LINE_BACKGROUND/u);
+  assert.match(controller, /const textColor = service\.lineTextColor \?\? NEUTRAL_LINE_TEXT/u);
+  assert.match(controller, /svg\.setAttribute\("role", "img"\)/u);
+  assert.match(controller, /svg\.setAttribute\("aria-label", service\.lineLabel\)/u);
+});
+
+test("the first-load gzip metric includes the eagerly imported badge resolver", () => {
+  const measurement = readFileSync(join(here, "../../../scripts/measure-config-page.mjs"), "utf8");
+  assert.match(measurement, /packages\/config-page\/src\/line-badge-assets\.js/u);
 });

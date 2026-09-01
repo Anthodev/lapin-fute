@@ -1,0 +1,371 @@
+{
+  "publisher": "Île-de-France Mobilités",
+  "dataset": "referentiel-des-lignes",
+  "datasetUrl": "https://data.iledefrance-mobilites.fr/explore/dataset/referentiel-des-lignes/",
+  "datasetLicense": "ODbL 1.0",
+  "datasetLicenseUrl": "https://opendatacommons.org/licenses/odbl/1-0/",
+  "pictogramReuseTermsUrl": "https://prim.iledefrance-mobilites.fr/fr/conditions-utilisation",
+  "retrievedAt": "2026-09-01T18:23:34.819Z",
+  "assets": [
+    {
+      "key": "METRO:1",
+      "file": "metro-1.png",
+      "mediaType": "image/png",
+      "bytes": 33966,
+      "sha256": "1e0240ea3bf8ab22b1a53eb3a783c09893f2d39e309406338ded0ca0c0d90cdc",
+      "source": "https://data.iledefrance-mobilites.fr/api/explore/v2.1/catalog/datasets/referentiel-des-lignes/files/8e63c8180c0378991029ec5141e4c6a5"
+    },
+    {
+      "key": "METRO:10",
+      "file": "metro-10.png",
+      "mediaType": "image/png",
+      "bytes": 51782,
+      "sha256": "c23ab314b5e9f1c82e63def23e15f1997e381152d2a886ee787aa139f555c726",
+      "source": "https://data.iledefrance-mobilites.fr/api/explore/v2.1/catalog/datasets/referentiel-des-lignes/files/4adaa198c6e4212d9f8bfe0e744ba857"
+    },
+    {
+      "key": "METRO:11",
+      "file": "metro-11.png",
+      "mediaType": "image/png",
+      "bytes": 38077,
+      "sha256": "7c83c903307ee1dc61c09567ac435336b72bb88a1466d5d2338839bb66d744c4",
+      "source": "https://data.iledefrance-mobilites.fr/api/explore/v2.1/catalog/datasets/referentiel-des-lignes/files/091275f9a999a893de5eb4703e1a74af"
+    },
+    {
+      "key": "METRO:12",
+      "file": "metro-12.png",
+      "mediaType": "image/png",
+      "bytes": 48009,
+      "sha256": "4172b39cb56654de68d9022127432f4bc336d7df953a448a6a034c0fc823570a",
+      "source": "https://data.iledefrance-mobilites.fr/api/explore/v2.1/catalog/datasets/referentiel-des-lignes/files/68749e9f1ce05a0a4cae6610f95eecc0"
+    },
+    {
+      "key": "METRO:13",
+      "file": "metro-13.png",
+      "mediaType": "image/png",
+      "bytes": 52718,
+      "sha256": "3645c8b3265ebb6c62ba17938a336793d9835f768b7441a6e7cd9dc9805a298d",
+      "source": "https://data.iledefrance-mobilites.fr/api/explore/v2.1/catalog/datasets/referentiel-des-lignes/files/0b8a36241880cd49a78f24dbaca0433b"
+    },
+    {
+      "key": "METRO:14",
+      "file": "metro-14.png",
+      "mediaType": "image/png",
+      "bytes": 41282,
+      "sha256": "87aba0a0f3f0771e03fdf4e4f1bf1ba94a0dbc9fb52e8f18834993020b293aba",
+      "source": "https://data.iledefrance-mobilites.fr/api/explore/v2.1/catalog/datasets/referentiel-des-lignes/files/7b99df056fae694cd8d96c160696d757"
+    },
+    {
+      "key": "METRO:2",
+      "file": "metro-2.png",
+      "mediaType": "image/png",
+      "bytes": 43580,
+      "sha256": "65502e82afc684865cf37ac99d3915c04ea392d93e9d6f680a442a7a5e67e58a",
+      "source": "https://data.iledefrance-mobilites.fr/api/explore/v2.1/catalog/datasets/referentiel-des-lignes/files/cdaa0aa338d1acbd2e9d31fe21fc6eb7"
+    },
+    {
+      "key": "METRO:3",
+      "file": "metro-3.png",
+      "mediaType": "image/png",
+      "bytes": 48270,
+      "sha256": "2c9ab4b4ffbafff9ac835495dc39d4cc60095523399c78d42e298717cdf05065",
+      "source": "https://data.iledefrance-mobilites.fr/api/explore/v2.1/catalog/datasets/referentiel-des-lignes/files/418ea5fcc3bf22ac253c1aafcd531684"
+    },
+    {
+      "key": "METRO:3B",
+      "file": "metro-3b.png",
+      "mediaType": "image/png",
+      "bytes": 59992,
+      "sha256": "139529c4437e29869b6769ac4ea90f9c2a9599f4ca51f63a9ff9f52fcc477b6c",
+      "source": "https://data.iledefrance-mobilites.fr/api/explore/v2.1/catalog/datasets/referentiel-des-lignes/files/157da4ee0a222feb976fc9acc40c568b"
+    },
+    {
+      "key": "METRO:4",
+      "file": "metro-4.png",
+      "mediaType": "image/png",
+      "bytes": 36581,
+      "sha256": "d0fa50af73e9d73c93d61c97c69b5416db588e25bd5f85a80479c88c55e8587c",
+      "source": "https://data.iledefrance-mobilites.fr/api/explore/v2.1/catalog/datasets/referentiel-des-lignes/files/827ff49af57d362f6a7c5f2d1022528c"
+    },
+    {
+      "key": "METRO:5",
+      "file": "metro-5.png",
+      "mediaType": "image/png",
+      "bytes": 43267,
+      "sha256": "73fa33f11b95cdd931f7061e848b3e72d6a0f66efe065f438266666497ae5a73",
+      "source": "https://data.iledefrance-mobilites.fr/api/explore/v2.1/catalog/datasets/referentiel-des-lignes/files/e1babbb11951e80ae32d076528ef2ad1"
+    },
+    {
+      "key": "METRO:6",
+      "file": "metro-6.png",
+      "mediaType": "image/png",
+      "bytes": 49686,
+      "sha256": "1f48b1c52a376919ec8cfc1e16dcf28aa4c49bdac013d3e52864f8eb97c62df5",
+      "source": "https://data.iledefrance-mobilites.fr/api/explore/v2.1/catalog/datasets/referentiel-des-lignes/files/11ba6d8a602ec0780fe8c01aa58b542d"
+    },
+    {
+      "key": "METRO:7",
+      "file": "metro-7.png",
+      "mediaType": "image/png",
+      "bytes": 39420,
+      "sha256": "3134cefd49203d075280f9abbf6fdb980b15c0852aadbbfe64ce780d7a81922b",
+      "source": "https://data.iledefrance-mobilites.fr/api/explore/v2.1/catalog/datasets/referentiel-des-lignes/files/b29f81837830b3a14fb876aaecc20e9c"
+    },
+    {
+      "key": "METRO:7B",
+      "file": "metro-7b.png",
+      "mediaType": "image/png",
+      "bytes": 50468,
+      "sha256": "8b07f29257e0ad136d9f72fac7f1cb0c8a240127f554badee5ce24b34727da1c",
+      "source": "https://data.iledefrance-mobilites.fr/api/explore/v2.1/catalog/datasets/referentiel-des-lignes/files/e08d6e9d99727bb7d55ffc5c44801f72"
+    },
+    {
+      "key": "METRO:8",
+      "file": "metro-8.png",
+      "mediaType": "image/png",
+      "bytes": 53640,
+      "sha256": "ae9a294865058c409ec163677c1d2948b53d43220670238f3a2e692d99dfcfdc",
+      "source": "https://data.iledefrance-mobilites.fr/api/explore/v2.1/catalog/datasets/referentiel-des-lignes/files/6dc2bda2dcd7cffbde8cf5a6c194ba59"
+    },
+    {
+      "key": "METRO:9",
+      "file": "metro-9.png",
+      "mediaType": "image/png",
+      "bytes": 49024,
+      "sha256": "00a5b3708bede481c1c52f07d2cee56936da7f9cd5df5aeec4abe402433281f0",
+      "source": "https://data.iledefrance-mobilites.fr/api/explore/v2.1/catalog/datasets/referentiel-des-lignes/files/5fe858163d92581d16bcab8aba61f26a"
+    },
+    {
+      "key": "RER:A",
+      "file": "rer-a.png",
+      "mediaType": "image/png",
+      "bytes": 31606,
+      "sha256": "e85f106d7abf214124472f77b4dbb4114cbb8f827b6920f103d26b4054c339bf",
+      "source": "https://data.iledefrance-mobilites.fr/api/explore/v2.1/catalog/datasets/referentiel-des-lignes/files/4049307fabd1b0db3fc129d52fbf0b76"
+    },
+    {
+      "key": "RER:B",
+      "file": "rer-b.png",
+      "mediaType": "image/png",
+      "bytes": 30315,
+      "sha256": "b0e4cc26bba92f7acaf82cabf4392b3d7f12a6196adeb9b38f19ee4093e64d3d",
+      "source": "https://data.iledefrance-mobilites.fr/api/explore/v2.1/catalog/datasets/referentiel-des-lignes/files/09417158011567b7a8165357e51e565d"
+    },
+    {
+      "key": "RER:C",
+      "file": "rer-c.png",
+      "mediaType": "image/png",
+      "bytes": 34780,
+      "sha256": "f054f2a23204f2b44e5d263eb99987eaa6a922e1c4002240646f7edd18d86b24",
+      "source": "https://data.iledefrance-mobilites.fr/api/explore/v2.1/catalog/datasets/referentiel-des-lignes/files/099e5a6dd7b15cfbd61d1e11c3d18fb6"
+    },
+    {
+      "key": "RER:D",
+      "file": "rer-d.png",
+      "mediaType": "image/png",
+      "bytes": 30691,
+      "sha256": "acee82a2e5d4967cb2ecf91ed7f55ba928158524a737834b8cef9915430bb3ae",
+      "source": "https://data.iledefrance-mobilites.fr/api/explore/v2.1/catalog/datasets/referentiel-des-lignes/files/b843a92141919dab06ea02ceddfbc9c3"
+    },
+    {
+      "key": "RER:E",
+      "file": "rer-e.png",
+      "mediaType": "image/png",
+      "bytes": 18443,
+      "sha256": "2b67ceb254808ddb6d80e381f0761ac8fa250dcb08dc2b68a8e481ff602e6978",
+      "source": "https://data.iledefrance-mobilites.fr/api/explore/v2.1/catalog/datasets/referentiel-des-lignes/files/dc5bd03a80dd0c1637c29dd4a38b14bf"
+    },
+    {
+      "key": "TRAM:T1",
+      "file": "tram-t1.png",
+      "mediaType": "image/png",
+      "bytes": 15353,
+      "sha256": "77b24092bf61b86ba53c21ae2982ef2791d6dd25bb5c7fbb2ed8823525f01524",
+      "source": "https://data.iledefrance-mobilites.fr/api/explore/v2.1/catalog/datasets/referentiel-des-lignes/files/f08f0e7ac27b864d4b38160465794b0f"
+    },
+    {
+      "key": "TRAM:T10",
+      "file": "tram-t10.png",
+      "mediaType": "image/png",
+      "bytes": 25236,
+      "sha256": "5924c617177fe6dcbed626f301aeaccbc0e77f940477b4e2915d6df8902730e8",
+      "source": "https://data.iledefrance-mobilites.fr/api/explore/v2.1/catalog/datasets/referentiel-des-lignes/files/0e6d747212fe8125acea04824c9de849"
+    },
+    {
+      "key": "TRAM:T11",
+      "file": "tram-t11.png",
+      "mediaType": "image/png",
+      "bytes": 17305,
+      "sha256": "482f9cf8c1bab3dec0952cc7fbdf602a16a8677c2f913cdd8fa3e1764070633c",
+      "source": "https://data.iledefrance-mobilites.fr/api/explore/v2.1/catalog/datasets/referentiel-des-lignes/files/b8957b0e036e5aa94716ecb7285bea30"
+    },
+    {
+      "key": "TRAM:T12",
+      "file": "tram-t12.png",
+      "mediaType": "image/png",
+      "bytes": 22923,
+      "sha256": "5a0d884b7b18483967d24f4309d0bdab72006807b30bec18b293a2ca5d6d13fa",
+      "source": "https://data.iledefrance-mobilites.fr/api/explore/v2.1/catalog/datasets/referentiel-des-lignes/files/9582f3df81d6e524d3a9065224cb75ca"
+    },
+    {
+      "key": "TRAM:T13",
+      "file": "tram-t13.png",
+      "mediaType": "image/png",
+      "bytes": 24950,
+      "sha256": "8d6a3079095b36265c836d4022732dfc989f375ca874a57fd7177050ef49c5ae",
+      "source": "https://data.iledefrance-mobilites.fr/api/explore/v2.1/catalog/datasets/referentiel-des-lignes/files/07d202b2a699910502ae61197977502d"
+    },
+    {
+      "key": "TRAM:T14",
+      "file": "tram-t14.svg",
+      "mediaType": "image/svg+xml",
+      "bytes": 1183,
+      "sha256": "7c79d62ae30950fe638667f63b0ec62bec9bc18a171b1309ca996e670d3d9e25",
+      "source": "https://data.iledefrance-mobilites.fr/api/explore/v2.1/catalog/datasets/referentiel-des-lignes/files/bfc31e2c9d3d13004836e5d5962c10e6"
+    },
+    {
+      "key": "TRAM:T2",
+      "file": "tram-t2.png",
+      "mediaType": "image/png",
+      "bytes": 21271,
+      "sha256": "97ccd49e16fc98fae820ecdfb01005f196622c60c2988f74a37b706c6b00beaf",
+      "source": "https://data.iledefrance-mobilites.fr/api/explore/v2.1/catalog/datasets/referentiel-des-lignes/files/e32a597dbda794251fe47f69308c01b9"
+    },
+    {
+      "key": "TRAM:T3a",
+      "file": "tram-t3a.png",
+      "mediaType": "image/png",
+      "bytes": 28668,
+      "sha256": "c686053f63ec69698fb7b0bef9a61324d49d493a0050cbf6cd48978776f513dc",
+      "source": "https://data.iledefrance-mobilites.fr/api/explore/v2.1/catalog/datasets/referentiel-des-lignes/files/9c354f0b1b03a22f88e6890606c961df"
+    },
+    {
+      "key": "TRAM:T3b",
+      "file": "tram-t3b.png",
+      "mediaType": "image/png",
+      "bytes": 27564,
+      "sha256": "370599296cf062c8c04cb55eea1edf73021ba31bddb70ade0bbcc5dacd27f096",
+      "source": "https://data.iledefrance-mobilites.fr/api/explore/v2.1/catalog/datasets/referentiel-des-lignes/files/919aee035abf4591de29f13988d63bc9"
+    },
+    {
+      "key": "TRAM:T4",
+      "file": "tram-t4.png",
+      "mediaType": "image/png",
+      "bytes": 17145,
+      "sha256": "d9487770d9d2a9419963bd8b48c721ed3fc9c6e39db4432d11fadce73931c7b6",
+      "source": "https://data.iledefrance-mobilites.fr/api/explore/v2.1/catalog/datasets/referentiel-des-lignes/files/c370af8b5511d975ebb6d62b5dc1b10f"
+    },
+    {
+      "key": "TRAM:T5",
+      "file": "tram-t5.png",
+      "mediaType": "image/png",
+      "bytes": 20583,
+      "sha256": "64665e11b712aa5384fb4cc662093adf8e08c2266c3287bbe56dc80781864096",
+      "source": "https://data.iledefrance-mobilites.fr/api/explore/v2.1/catalog/datasets/referentiel-des-lignes/files/96aee20f2627ccacff25a9bc23b96cbc"
+    },
+    {
+      "key": "TRAM:T6",
+      "file": "tram-t6.png",
+      "mediaType": "image/png",
+      "bytes": 24061,
+      "sha256": "af50b1a10d0af1da7a54d439d781feceebbd1fcbfcac691197acc3d34b165cf1",
+      "source": "https://data.iledefrance-mobilites.fr/api/explore/v2.1/catalog/datasets/referentiel-des-lignes/files/db63e7a26e27fc64926c696fe5d5a950"
+    },
+    {
+      "key": "TRAM:T7",
+      "file": "tram-t7.png",
+      "mediaType": "image/png",
+      "bytes": 18211,
+      "sha256": "8266449656ade20af5d56d379a35ffe6e8247af46ff8f2aec5670daba152d21a",
+      "source": "https://data.iledefrance-mobilites.fr/api/explore/v2.1/catalog/datasets/referentiel-des-lignes/files/5568fae6d1eb504a556118a6e8bd681a"
+    },
+    {
+      "key": "TRAM:T8",
+      "file": "tram-t8.png",
+      "mediaType": "image/png",
+      "bytes": 25991,
+      "sha256": "83c23f278d3e342e5955e1c3ee51bad3aa8824bfa2ed7702b5c34adab65e893e",
+      "source": "https://data.iledefrance-mobilites.fr/api/explore/v2.1/catalog/datasets/referentiel-des-lignes/files/abdb3df6ce90364cb3a504268a29d0ba"
+    },
+    {
+      "key": "TRAM:T9",
+      "file": "tram-t9.png",
+      "mediaType": "image/png",
+      "bytes": 24134,
+      "sha256": "dbc1cca5a06dec194d648705e4557133eac7dcda1993b57cda6126553eb4cfd0",
+      "source": "https://data.iledefrance-mobilites.fr/api/explore/v2.1/catalog/datasets/referentiel-des-lignes/files/ff7ac6917c6c0ef54bec9d3628571089"
+    },
+    {
+      "key": "TRANSILIEN:H",
+      "file": "transilien-h.png",
+      "mediaType": "image/png",
+      "bytes": 18391,
+      "sha256": "2c7a89150337ec76aeb32c5811550045ca3251aabbd1267c22db90bcb28c3cbe",
+      "source": "https://data.iledefrance-mobilites.fr/api/explore/v2.1/catalog/datasets/referentiel-des-lignes/files/b874ac42d638fc887ea98f56789a036d"
+    },
+    {
+      "key": "TRANSILIEN:J",
+      "file": "transilien-j.png",
+      "mediaType": "image/png",
+      "bytes": 22673,
+      "sha256": "a4b5bca4eca6806d70235b3ef759c3577d4fc59023cad950219ef0961a06dce5",
+      "source": "https://data.iledefrance-mobilites.fr/api/explore/v2.1/catalog/datasets/referentiel-des-lignes/files/62e9b7ac99c792f4b7ec85b226ad008e"
+    },
+    {
+      "key": "TRANSILIEN:K",
+      "file": "transilien-k.png",
+      "mediaType": "image/png",
+      "bytes": 32390,
+      "sha256": "119970ae6b664529a45ad7bd2b6e01867644dd0065b22d714be832b333a84db7",
+      "source": "https://data.iledefrance-mobilites.fr/api/explore/v2.1/catalog/datasets/referentiel-des-lignes/files/9ad21084ef4c6dce87364c6452422ef5"
+    },
+    {
+      "key": "TRANSILIEN:L",
+      "file": "transilien-l.png",
+      "mediaType": "image/png",
+      "bytes": 18332,
+      "sha256": "eb7099756e43f4edb95a20e0c7fced32c50d052daef1eb6321850b8a92ce7885",
+      "source": "https://data.iledefrance-mobilites.fr/api/explore/v2.1/catalog/datasets/referentiel-des-lignes/files/ae6ca077709c1256ae09d9954aa8ece8"
+    },
+    {
+      "key": "TRANSILIEN:N",
+      "file": "transilien-n.png",
+      "mediaType": "image/png",
+      "bytes": 27252,
+      "sha256": "c897905fc430689b777e9382e9f1ff7ebadb13b55107581827aabca12fe619f6",
+      "source": "https://data.iledefrance-mobilites.fr/api/explore/v2.1/catalog/datasets/referentiel-des-lignes/files/78201d213a8fc22a54bd4bb3e26cc339"
+    },
+    {
+      "key": "TRANSILIEN:P",
+      "file": "transilien-p.png",
+      "mediaType": "image/png",
+      "bytes": 25981,
+      "sha256": "2f046dff23249f4b3f69496a7381bfdcf92ed2c9b76947b99552afb30ea40de6",
+      "source": "https://data.iledefrance-mobilites.fr/api/explore/v2.1/catalog/datasets/referentiel-des-lignes/files/144bda900e4a01a6d3eb26d8e2d9803d"
+    },
+    {
+      "key": "TRANSILIEN:R",
+      "file": "transilien-r.png",
+      "mediaType": "image/png",
+      "bytes": 31292,
+      "sha256": "1a00bbe0b53e8ea8abfffa5cf34d555142b8e148a781810b3548cd5a2dfeb0d3",
+      "source": "https://data.iledefrance-mobilites.fr/api/explore/v2.1/catalog/datasets/referentiel-des-lignes/files/04ca3195d7cae3272e376492c8152900"
+    },
+    {
+      "key": "TRANSILIEN:U",
+      "file": "transilien-u.png",
+      "mediaType": "image/png",
+      "bytes": 26980,
+      "sha256": "4c9cffcf66d23f710a86aa12cd2c569ffc4d7831f96475e4db4b188c8fece356",
+      "source": "https://data.iledefrance-mobilites.fr/api/explore/v2.1/catalog/datasets/referentiel-des-lignes/files/04762929c9df4a9232485fc301b1fc40"
+    },
+    {
+      "key": "TRANSILIEN:V",
+      "file": "transilien-v.png",
+      "mediaType": "image/png",
+      "bytes": 23917,
+      "sha256": "b10d5a61b68fe3651affd308920088dbcfe789181f88e14f4d32e881b9477900",
+      "source": "https://data.iledefrance-mobilites.fr/api/explore/v2.1/catalog/datasets/referentiel-des-lignes/files/2f6517d91c45d6e415c7e624abaa8cc2"
+    }
+  ]
+}
