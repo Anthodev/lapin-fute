@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { cpSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { basename, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -32,8 +32,8 @@ export function readBuildConfiguration(environment) {
   };
 }
 
-export function createBootstrap(fixture, configuration) {
-  return `"use strict";\n\nvar createCompanion = require("./companion").createCompanion;\nvar fixture = ${JSON.stringify(fixture)};\n\ncreateCompanion({\n  Pebble: Pebble,\n  storage: localStorage,\n  XHR: XMLHttpRequest,\n  clock: { now: Date.now },\n  defer: function (callback) { setTimeout(callback, 0); },\n  backendUrl: ${JSON.stringify(configuration.backendUrl)},\n  configurationUrl: ${JSON.stringify(configuration.configurationUrl)},\n  fixture: fixture\n});\n`;
+export function createBootstrap(configuration) {
+  return `"use strict";\n\nvar createCompanion = require("./companion").createCompanion;\n\ncreateCompanion({\n  Pebble: Pebble,\n  storage: localStorage,\n  XHR: XMLHttpRequest,\n  clock: { now: Date.now },\n  defer: function (callback) { setTimeout(callback, 0); },\n  readyDefer: function (callback) { setTimeout(callback, 250); },\n  backendUrl: ${JSON.stringify(configuration.backendUrl)},\n  configurationUrl: ${JSON.stringify(configuration.configurationUrl)}\n});\n`;
 }
 
 function run(command, args, cwd = root) {
@@ -48,7 +48,6 @@ function run(command, args, cwd = root) {
 
 function build() {
   const configuration = readBuildConfiguration(process.env);
-  const fixture = JSON.parse(readFileSync(join(root, "fixtures/departures/foundation.json"), "utf8"));
 
   run(process.execPath, ["scripts/test.mjs"]);
   run(process.execPath, ["scripts/measure-radio.mjs"]);
@@ -59,7 +58,7 @@ function build() {
     cpSync(join(companionSource, source), join(pkjsTarget, basename(source)));
   }
   cpSync(join(companionSource, "index.js"), join(pkjsTarget, "companion.js"));
-  writeFileSync(join(pkjsTarget, "index.js"), createBootstrap(fixture, configuration));
+  writeFileSync(join(pkjsTarget, "index.js"), createBootstrap(configuration));
 
   const watch = join(root, "packages/watch");
   run("pebble", ["clean"], watch);

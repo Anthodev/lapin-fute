@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   KEY_STATUS,
+  LIMITS,
   MESSAGE_TYPE,
   REQUEST_TRIGGER,
   SCHEMA_VERSION
@@ -21,11 +22,16 @@ function message(type, entries = []) {
   ]);
 }
 
-function configBegin(id = "config-1", count = 1, language = "fr") {
+function configBegin(
+  id = "config-1",
+  count = 1,
+  language = "fr",
+  keyStatus = KEY_STATUS.CONFIGURED
+) {
   return message(MESSAGE_TYPE.CONFIG_BEGIN, [
     ["REQUEST_ID", id],
     ["ITEM_COUNT", count],
-    ["KEY_STATUS", KEY_STATUS.CONFIGURED],
+    ["KEY_STATUS", keyStatus],
     ["DISPLAY_NAME", language]
   ]);
 }
@@ -48,7 +54,7 @@ function configCommit(id = "config-1") {
   return message(MESSAGE_TYPE.CONFIG_COMMIT, [["REQUEST_ID", id]]);
 }
 
-function resultBegin(requestId = "request-1", favoriteId = "home", count = 1) {
+function resultBegin(requestId = "consult-test-1", favoriteId = "home", count = 1) {
   return message(MESSAGE_TYPE.RESULT_BEGIN, [
     ["REQUEST_ID", requestId],
     ["FAVORITE_ID", favoriteId],
@@ -59,7 +65,7 @@ function resultBegin(requestId = "request-1", favoriteId = "home", count = 1) {
   ]);
 }
 
-function departure(requestId = "request-1", favoriteId = "home", index = 0) {
+function departure(requestId = "consult-test-1", favoriteId = "home", index = 0) {
   return message(MESSAGE_TYPE.DEPARTURE, [
     ["REQUEST_ID", requestId],
     ["FAVORITE_ID", favoriteId],
@@ -72,14 +78,14 @@ function departure(requestId = "request-1", favoriteId = "home", index = 0) {
   ]);
 }
 
-function resultCommit(requestId = "request-1", favoriteId = "home") {
+function resultCommit(requestId = "consult-test-1", favoriteId = "home") {
   return message(MESSAGE_TYPE.RESULT_COMMIT, [
     ["REQUEST_ID", requestId],
     ["FAVORITE_ID", favoriteId]
   ]);
 }
 
-function errorMessage(requestId = "request-1", favoriteId = "home") {
+function errorMessage(requestId = "consult-test-1", favoriteId = "home") {
   return message(MESSAGE_TYPE.ERROR, [
     ["REQUEST_ID", requestId],
     ["FAVORITE_ID", favoriteId],
@@ -96,7 +102,7 @@ function commitConfiguration(receiver) {
 }
 
 function commitResult(receiver) {
-  assert.equal(receiver.expectResponse("request-1", "home"), true);
+  assert.equal(receiver.expectResponse("consult-test-1", "home", "consult-test-", 1), true);
   assert.equal(receiver.receive(resultBegin()), RECEIVE_RESULT.STAGED);
   assert.equal(receiver.receive(departure()), RECEIVE_RESULT.STAGED);
   assert.equal(receiver.receive(resultCommit()), RECEIVE_RESULT.RESULT_COMMITTED);
@@ -104,7 +110,7 @@ function commitResult(receiver) {
 
 test("decoder validates all eight message types and request encoder returns aliases", () => {
   const request = encodeRequest({
-    requestId: "request-1",
+    requestId: "consult-test-1",
     favoriteId: "home",
     trigger: REQUEST_TRIGGER.MANUAL_SELECT
   });
@@ -128,7 +134,7 @@ test("decoder validates all eight message types and request encoder returns alia
   ]);
   assert.equal([...request.keys()].some((key) => /^\d+$/u.test(key)), false);
   assert.throws(() => encodeRequest({
-    requestId: "request-1",
+    requestId: "consult-test-1",
     favoriteId: "home",
     trigger: 99
   }), TypeError);
@@ -175,6 +181,18 @@ test("configuration language and favorites stay private until complete commit", 
   });
 });
 
+test("idempotent restart synchronization reuses committed favorite objects", () => {
+  const receiver = new ProtocolReceiver();
+  commitConfiguration(receiver);
+  const previous = receiver.borrowState().configuration.favorites[0];
+
+  assert.equal(receiver.receive(configBegin("restart")), RECEIVE_RESULT.STAGED);
+  assert.equal(receiver.receive(favorite("restart")), RECEIVE_RESULT.STAGED);
+  assert.strictEqual(receiver.configStage.favorites[0], previous);
+  assert.equal(receiver.receive(configCommit("restart")), RECEIVE_RESULT.CONFIG_COMMITTED);
+  assert.strictEqual(receiver.borrowState().configuration.favorites[0], previous);
+});
+
 test("out-of-order, duplicate, and incomplete configuration cannot replace committed state", () => {
   const receiver = new ProtocolReceiver();
   commitConfiguration(receiver);
@@ -195,14 +213,14 @@ test("out-of-order, duplicate, and incomplete configuration cannot replace commi
 test("result stages atomically only for the expected request and favorite", () => {
   const receiver = new ProtocolReceiver();
   assert.equal(receiver.receive(resultBegin()), RECEIVE_RESULT.REJECTED);
-  assert.equal(receiver.expectResponse("request-1", "home"), true);
+  assert.equal(receiver.expectResponse("consult-test-1", "home", "consult-test-", 1), true);
   assert.equal(receiver.receive(resultBegin()), RECEIVE_RESULT.STAGED);
   assert.equal(receiver.snapshot().result, null);
   assert.equal(receiver.receive(departure()), RECEIVE_RESULT.STAGED);
   assert.equal(receiver.snapshot().result, null);
   assert.equal(receiver.receive(resultCommit()), RECEIVE_RESULT.RESULT_COMMITTED);
   assert.deepEqual(receiver.snapshot().result, {
-    requestId: "request-1",
+    requestId: "consult-test-1",
     favoriteId: "home",
     fetchedAt: 1_788_000_000,
     sourceUpdatedAt: 1_787_999_990,
@@ -220,14 +238,14 @@ test("result stages atomically only for the expected request and favorite", () =
 test("matching request handshake permits one cached result replacement", () => {
   const receiver = new ProtocolReceiver();
   const request = encodeRequest({
-    requestId: "request-1",
+    requestId: "consult-test-1",
     favoriteId: "home",
     trigger: REQUEST_TRIGGER.APP_OPEN
   });
   const freshBegin = resultBegin();
   freshBegin.set("FETCHED_AT", 1_788_000_060);
 
-  assert.equal(receiver.expectResponse("request-1", "home"), true);
+  assert.equal(receiver.expectResponse("consult-test-1", "home", "consult-test-", 1), true);
   assert.equal(receiver.receive(resultBegin()), RECEIVE_RESULT.STAGED);
   assert.equal(receiver.receive(departure()), RECEIVE_RESULT.STAGED);
   assert.equal(receiver.receive(resultCommit()), RECEIVE_RESULT.RESULT_COMMITTED);
@@ -241,20 +259,44 @@ test("matching request handshake permits one cached result replacement", () => {
   assert.equal(receiver.receive(request), RECEIVE_RESULT.REJECTED);
 });
 
+test("every generated request above the commit watermark remains acceptable", () => {
+  const receiver = new ProtocolReceiver();
+  assert.equal(receiver.expectResponse("consult-test-1", "home", "consult-test-", 1), true);
+  assert.equal(receiver.expectResponse("consult-test-2", "home", "consult-test-", 2), true);
+  assert.equal(receiver.expectResponse("consult-test-3", "home", "consult-test-", 3), true);
+
+  assert.equal(receiver.receive(resultBegin("consult-test-2")), RECEIVE_RESULT.STAGED);
+  assert.equal(receiver.receive(departure("consult-test-2")), RECEIVE_RESULT.STAGED);
+  assert.equal(
+    receiver.receive(resultCommit("consult-test-2")),
+    RECEIVE_RESULT.RESULT_COMMITTED
+  );
+  assert.equal(receiver.snapshot().result.requestId, "consult-test-2");
+
+  assert.equal(receiver.receive(resultBegin("consult-test-1")), RECEIVE_RESULT.REJECTED);
+  assert.equal(receiver.receive(resultBegin("consult-test-3")), RECEIVE_RESULT.STAGED);
+  assert.equal(receiver.receive(departure("consult-test-3")), RECEIVE_RESULT.STAGED);
+  assert.equal(
+    receiver.receive(resultCommit("consult-test-3")),
+    RECEIVE_RESULT.RESULT_COMMITTED
+  );
+  assert.equal(receiver.snapshot().result.requestId, "consult-test-3");
+});
+
 test("late items, count mismatches, unsupported schema, and mismatched errors preserve state", () => {
   const receiver = new ProtocolReceiver();
   commitConfiguration(receiver);
   commitResult(receiver);
   const committed = receiver.snapshot();
 
-  assert.equal(receiver.expectResponse("request-2", "home"), true);
-  assert.equal(receiver.receive(resultBegin("request-1", "home", 0)), RECEIVE_RESULT.REJECTED);
-  assert.equal(receiver.receive(resultBegin("request-2", "home", 2)), RECEIVE_RESULT.STAGED);
-  assert.equal(receiver.receive(departure("request-2", "home", 0)), RECEIVE_RESULT.STAGED);
-  assert.equal(receiver.receive(resultCommit("request-2", "home")), RECEIVE_RESULT.REJECTED);
+  assert.equal(receiver.expectResponse("consult-test-2", "home", "consult-test-", 2), true);
+  assert.equal(receiver.receive(resultBegin("consult-test-1", "home", 0)), RECEIVE_RESULT.REJECTED);
+  assert.equal(receiver.receive(resultBegin("consult-test-2", "home", 2)), RECEIVE_RESULT.STAGED);
+  assert.equal(receiver.receive(departure("consult-test-2", "home", 0)), RECEIVE_RESULT.STAGED);
+  assert.equal(receiver.receive(resultCommit("consult-test-2", "home")), RECEIVE_RESULT.REJECTED);
   assert.deepEqual(receiver.snapshot(), committed);
 
-  assert.equal(receiver.receive(errorMessage("request-1", "home")), RECEIVE_RESULT.REJECTED);
+  assert.equal(receiver.receive(errorMessage("consult-test-1", "home")), RECEIVE_RESULT.REJECTED);
   const unsupported = configBegin("config-new", 0, "en");
   unsupported.set("SCHEMA_VERSION", 99);
   assert.equal(receiver.receive(unsupported), RECEIVE_RESULT.REJECTED);
@@ -265,16 +307,42 @@ test("matching error commits without destroying the prior complete result", () =
   const receiver = new ProtocolReceiver();
   commitResult(receiver);
   const result = receiver.snapshot().result;
-  assert.equal(receiver.expectResponse("request-2", "home"), true);
-  assert.equal(receiver.receive(errorMessage("request-2", "home")), RECEIVE_RESULT.ERROR_COMMITTED);
+  assert.equal(receiver.expectResponse("consult-test-2", "home", "consult-test-", 2), true);
+  assert.equal(receiver.receive(errorMessage("consult-test-2", "home")), RECEIVE_RESULT.ERROR_COMMITTED);
   assert.deepEqual(receiver.snapshot().result, result);
   assert.deepEqual(receiver.snapshot().error, {
-    requestId: "request-2",
+    requestId: "consult-test-2",
     favoriteId: "home",
     code: "SOURCE_UNAVAILABLE",
     occurredAt: 1_788_000_001,
     retryAfterSeconds: 30
   });
+});
+
+test("state restoration preserves a complete result and error but cancels transport state", () => {
+  const receiver = new ProtocolReceiver();
+  commitConfiguration(receiver);
+  commitResult(receiver);
+  assert.equal(receiver.expectResponse("consult-test-2", "home", "consult-test-", 2), true);
+  assert.equal(
+    receiver.receive(errorMessage("consult-test-2", "home")),
+    RECEIVE_RESULT.ERROR_COMMITTED
+  );
+  const committed = receiver.snapshot();
+
+  assert.equal(receiver.expectResponse("consult-test-3", "home", "consult-test-", 3), true);
+  assert.equal(
+    receiver.receive(resultBegin("consult-test-3", "home")),
+    RECEIVE_RESULT.STAGED
+  );
+  receiver.restoreState(committed);
+
+  assert.deepEqual(receiver.snapshot(), committed);
+  assert.equal(
+    receiver.receive(resultCommit("consult-test-3", "home")),
+    RECEIVE_RESULT.REJECTED
+  );
+  assert.deepEqual(receiver.snapshot(), committed);
 });
 
 test("receiver seeds, restores, and idempotently repeats complete configuration", () => {
@@ -304,4 +372,66 @@ test("receiver seeds, restores, and idempotently repeats complete configuration"
   receiver.restoreConfiguration(committed.configuration);
   assert.equal(receiver.receive(configCommit("interrupted")), RECEIVE_RESULT.REJECTED);
   assert.deepEqual(receiver.snapshot(), committed);
+});
+
+test("configuration commits preserve only compatible results and cancel transport state", () => {
+  const receiver = new ProtocolReceiver();
+  commitConfiguration(receiver);
+  commitResult(receiver);
+  const result = receiver.snapshot().result;
+
+  assert.equal(receiver.expectResponse("consult-test-2", "home", "consult-test-", 2), true);
+  assert.equal(
+    receiver.receive(errorMessage("consult-test-2", "home")),
+    RECEIVE_RESULT.ERROR_COMMITTED
+  );
+  assert.notEqual(receiver.snapshot().error, null);
+
+  assert.equal(receiver.expectResponse("consult-test-3", "home", "consult-test-", 3), true);
+  assert.equal(
+    receiver.receive(resultBegin("consult-test-3", "home", 1)),
+    RECEIVE_RESULT.STAGED
+  );
+  assert.equal(
+    receiver.receive(departure("consult-test-3", "home", 0)),
+    RECEIVE_RESULT.STAGED
+  );
+  assert.equal(
+    receiver.receive(configBegin("config-2", 1, "en", KEY_STATUS.INVALID)),
+    RECEIVE_RESULT.STAGED
+  );
+  assert.equal(
+    receiver.receive(favorite("config-2", 0, "home")),
+    RECEIVE_RESULT.STAGED
+  );
+  assert.equal(
+    receiver.receive(configCommit("config-2")),
+    RECEIVE_RESULT.CONFIG_COMMITTED
+  );
+
+  const compatible = receiver.snapshot();
+  assert.equal(compatible.configuration.keyStatus, KEY_STATUS.INVALID);
+  assert.equal(compatible.configuration.language, "en");
+  assert.deepEqual(compatible.result, result);
+  assert.equal(compatible.error, null);
+  assert.equal(
+    receiver.receive(resultCommit("consult-test-3", "home")),
+    RECEIVE_RESULT.REJECTED
+  );
+  assert.deepEqual(receiver.snapshot(), compatible);
+
+  assert.equal(
+    receiver.receive(configBegin("config-3", 1, "fr")),
+    RECEIVE_RESULT.STAGED
+  );
+  assert.equal(
+    receiver.receive(favorite("config-3", 0, "work")),
+    RECEIVE_RESULT.STAGED
+  );
+  assert.equal(
+    receiver.receive(configCommit("config-3")),
+    RECEIVE_RESULT.CONFIG_COMMITTED
+  );
+  assert.equal(receiver.snapshot().result, null);
+  assert.equal(receiver.snapshot().error, null);
 });

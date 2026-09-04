@@ -38,16 +38,28 @@ function normalizeIncomingPayload(payload) {
   }
   return aliasCount > 0 ? normalized : null;
 }
-
-function isFixture(value) {
-  return contracts.isObject(value)
-    && contracts.hasOnlyKeys(value, ["favorite", "result"])
-    && contracts.isFavorite(value.favorite)
-    && contracts.isDepartureResult(value.result)
-    && value.favorite.id === value.result.favoriteId;
+function visibleResultSignature(result) {
+  return JSON.stringify({
+    favoriteId: result.favoriteId,
+    fetchedAt: result.fetchedAt,
+    freshness: result.freshness,
+    departures: result.departures.slice(0, 3).map(function (departure) {
+      var visible = {
+        expectedAt: departure.expectedAt,
+        status: departure.status
+      };
+      if (hasOwn.call(departure, "nextIntervalMinutes")) {
+        visible.nextIntervalMinutes = departure.nextIntervalMinutes;
+      }
+      return visible;
+    })
+  });
 }
 
+
+
 function Companion(options) {
+  var self = this;
   options = options || {};
   requiredAdapter(options.Pebble && typeof options.Pebble.addEventListener === "function", "Pebble adapter is required");
   requiredAdapter(options.storage
@@ -58,18 +70,15 @@ function Companion(options) {
   requiredAdapter(options.clock
     && typeof options.clock.now === "function", "clock adapter is required");
   requiredAdapter(typeof options.defer === "function", "defer adapter is required");
-  if (typeof options.fixture !== "undefined" && !isFixture(options.fixture)) {
-    throw new TypeError("fixture does not match the frozen contracts");
-  }
+  requiredAdapter(typeof options.readyDefer === "function", "readyDefer adapter is required");
 
   this._Pebble = options.Pebble;
   this._storage = options.storage;
   this._XHR = options.XHR;
   this._clock = options.clock;
+  this._readyDefer = options.readyDefer;
   this._backendUrl = typeof options.backendUrl === "string" ? options.backendUrl : "";
   this._configurationUrl = typeof options.configurationUrl === "string" ? options.configurationUrl : "";
-  this._fixture = options.fixture || null;
-  this._fixtureEnabled = false;
   this._configuration = configuration.loadConfiguration(this._storage);
   this._configurationValid = this._configuration !== null;
   this._credentialBlocked = this._configurationValid
@@ -86,12 +95,18 @@ function Companion(options) {
     totalLatencyMs: 0,
     lastLatencyMs: 0
   };
-  this._requestGenerations = Object.create(null);
-  this._inFlightRequests = Object.create(null);
-  this._requestGeneration = 0;
+  this._lifecycleGeneration = 0;
+  this._inFlightByFavorite = Object.create(null);
+  this._latestWatchFavoriteId = null;
+  this._latestWatchRequestId = null;
+  this._presentationGeneration = 0;
+  this._pendingResultBatches = [];
+  this._visibleResultSignature = null;
   this._sequence = 0;
   this._started = false;
-  this._queue = new MessageQueue(this._Pebble, options.defer);
+  this._queue = new MessageQueue(this._Pebble, options.defer, function () {
+    self._failPendingResultBatches();
+  });
   this._handlers = null;
   this._refreshWatchState();
 }
@@ -114,7 +129,6 @@ Companion.prototype.start = function () {
 
 Companion.prototype.stop = function () {
   var self = this;
-  var inFlightRequests;
   if (!this._started) return;
   if (typeof this._Pebble.removeEventListener === "function") {
     Object.keys(this._handlers).forEach(function (eventName) {
@@ -122,26 +136,80 @@ Companion.prototype.stop = function () {
     });
   }
   this._started = false;
-  this._requestGenerations = Object.create(null);
-  inFlightRequests = this._inFlightRequests;
-  this._inFlightRequests = Object.create(null);
-  this._queue.clear();
-  Object.keys(inFlightRequests).forEach(function (generation) {
-    var xhr = inFlightRequests[generation];
-    if (!xhr || typeof xhr.abort !== "function") return;
-    try {
-      xhr.abort();
-    } catch (ignored) {
-      // Generation invalidation remains authoritative if abort is unsupported or races.
+  this._invalidateLifecycle();
+};
+
+Companion.prototype._refreshWatchState = function () {
+  this._watchFavorites = this._configuration.favorites.map(contracts.copyFavorite);
+};
+Companion.prototype._resetPresentation = function () {
+  this._presentationGeneration += 1;
+  this._pendingResultBatches.forEach(function (batch) {
+    batch.superseded = true;
+  });
+  this._visibleResultSignature = null;
+};
+
+Companion.prototype._setLatestWatchRequest = function (request) {
+  var sameFavorite = this._latestWatchFavoriteId === request.favoriteId;
+  if (sameFavorite && this._latestWatchRequestId === request.requestId) return;
+  this._latestWatchFavoriteId = request.favoriteId;
+  this._latestWatchRequestId = request.requestId;
+  if (!sameFavorite) {
+    this._resetPresentation();
+    return;
+  }
+  this._pendingResultBatches.forEach(function (batch) {
+    if (batch.favoriteId === request.favoriteId
+        && batch.requestId !== request.requestId) {
+      batch.superseded = true;
     }
   });
 };
 
-Companion.prototype._refreshWatchState = function () {
-  var configured = this._configuration.favorites.map(contracts.copyFavorite);
-  this._fixtureEnabled = this._fixture !== null && configured.length === 0;
-  this._watchFavorites = this._fixtureEnabled ? [contracts.copyFavorite(this._fixture.favorite)] : configured;
+Companion.prototype._removePendingResultBatch = function (batch) {
+  var index = this._pendingResultBatches.indexOf(batch);
+  if (index !== -1) this._pendingResultBatches.splice(index, 1);
 };
+
+Companion.prototype._completePendingResultBatch = function (batch) {
+  this._removePendingResultBatch(batch);
+  if (batch.failed
+      || batch.superseded
+      || batch.generation !== this._presentationGeneration
+      || !this._isCurrentWatchRequest(batch.request)) return;
+  this._visibleResultSignature = batch.signature;
+};
+
+Companion.prototype._failPendingResultBatches = function () {
+  var batches = this._pendingResultBatches;
+  this._pendingResultBatches = [];
+  batches.forEach(function (batch) {
+    batch.failed = true;
+    if (batch.mirrored) batch.request.transportEligible = false;
+  });
+};
+
+Companion.prototype._invalidateLifecycle = function () {
+  var inFlight = this._inFlightByFavorite;
+  this._lifecycleGeneration += 1;
+  this._inFlightByFavorite = Object.create(null);
+  this._latestWatchFavoriteId = null;
+  this._latestWatchRequestId = null;
+  this._queue.clear();
+  this._pendingResultBatches = [];
+  this._resetPresentation();
+  Object.keys(inFlight).forEach(function (favoriteId) {
+    var flight = inFlight[favoriteId];
+    if (!flight.xhr || typeof flight.xhr.abort !== "function") return;
+    try {
+      flight.xhr.abort();
+    } catch (ignored) {
+      // Lifecycle invalidation remains authoritative if abort is unsupported or races.
+    }
+  });
+};
+
 
 Companion.prototype._nextSequenceId = function () {
   this._sequence += 1;
@@ -150,17 +218,16 @@ Companion.prototype._nextSequenceId = function () {
 };
 
 Companion.prototype._sendConfiguration = function () {
-  var keyStatus = this._fixtureEnabled
-    ? contracts.KEY_STATUS.CONFIGURED
-    : (this._credentialBlocked
-      ? contracts.KEY_STATUS.INVALID
-      : this._configuration.keyStatus);
+  var keyStatus = this._credentialBlocked
+    ? contracts.KEY_STATUS.INVALID
+    : this._configuration.keyStatus;
   if (!this._configurationValid
       || !configuration.areFavoritesSecretFree(
         this._watchFavorites,
         this._configuration.primApiKey,
         null
       )) return;
+  this._resetPresentation();
   this._queue.enqueue(codec.encodeConfiguration(
     this._nextSequenceId(),
     this._watchFavorites,
@@ -170,6 +237,15 @@ Companion.prototype._sendConfiguration = function () {
 };
 
 Companion.prototype._onReady = function () {
+  var self = this;
+  var generation = this._lifecycleGeneration;
+  this._readyDefer(function () {
+    if (!self._started || self._lifecycleGeneration !== generation) return;
+    self._synchronizeReady();
+  });
+};
+
+Companion.prototype._synchronizeReady = function () {
   var wasBlocked = this._credentialBlocked;
   var loaded = configuration.loadConfiguration(this._storage);
   if (loaded === null) {
@@ -234,9 +310,9 @@ Companion.prototype._onWebviewClosed = function (event) {
   if (JSON.stringify(pruned) !== JSON.stringify(this._results)) {
     configuration.saveResults(this._storage, pruned);
   }
+  this._invalidateLifecycle();
   this._configuration = next;
   this._results = pruned;
-  this._requestGenerations = Object.create(null);
   this._credentialBlocked = next.primApiKey !== null
     && next.keyStatus === contracts.KEY_STATUS.INVALID;
   this._refreshWatchState();
@@ -244,15 +320,25 @@ Companion.prototype._onWebviewClosed = function (event) {
 };
 
 Companion.prototype._onAppMessage = function (event) {
+  var favorite;
+  var decoded;
   var request;
   if (!this._configurationValid) return;
-  request = codec.decodeRequest(normalizeIncomingPayload(event && event.payload));
-  if (request === null) return;
-  if (this._findFavorite(request.favoriteId) === null) {
+  decoded = codec.decodeRequest(normalizeIncomingPayload(event && event.payload));
+  if (decoded === null) return;
+  request = {
+    requestId: decoded.requestId,
+    favoriteId: decoded.favoriteId,
+    trigger: decoded.trigger,
+    transportEligible: true
+  };
+  this._setLatestWatchRequest(request);
+  favorite = this._findFavorite(request.favoriteId);
+  if (favorite === null) {
     this._sendError(request, "INVALID_SERVICE");
     return;
   }
-  this._dispatchRequest(request);
+  this._dispatchRequest(request, favorite);
 };
 
 Companion.prototype._findFavorite = function (favoriteId) {
@@ -280,39 +366,82 @@ Companion.prototype._cachedResult = function (request) {
   return configuration.findResult(this._results, request.favoriteId, request.requestId);
 };
 
-Companion.prototype._beginRequest = function (favoriteId) {
-  this._requestGeneration += 1;
-  this._requestGenerations[favoriteId] = this._requestGeneration;
-  return this._requestGeneration;
+Companion.prototype._isCurrentWatchRequest = function (request) {
+  return this._latestWatchFavoriteId === request.favoriteId
+    && this._latestWatchRequestId === request.requestId;
 };
 
-Companion.prototype._isLatestRequest = function (favoriteId, generation) {
-  return this._requestGenerations[favoriteId] === generation;
+Companion.prototype._enqueueVisibleResult = function (result, mirroredRequest, request) {
+  var self = this;
+  var generation = this._presentationGeneration;
+  var signature = visibleResultSignature(result);
+  var mirrored = mirroredRequest !== null;
+  var visible = this._visibleResultSignature;
+  var messages;
+  var batch;
+  var index;
+  for (index = 0; index < this._pendingResultBatches.length; index += 1) {
+    batch = this._pendingResultBatches[index];
+    if (!batch.failed
+        && !batch.superseded
+        && batch.generation === generation
+        && batch.favoriteId === result.favoriteId
+        && batch.requestId === result.requestId
+        && batch.signature === signature
+        && batch.mirrored === mirrored) {
+      batch.request = request;
+      return null;
+    }
+  }
+  if (visible === signature) return null;
+
+  messages = codec.encodeResult(result);
+  if (mirrored) messages.push(codec.encodeRequest(mirroredRequest));
+  for (index = this._pendingResultBatches.length - 1; index >= 0; index -= 1) {
+    batch = this._pendingResultBatches[index];
+    if (batch.failed
+        || batch.generation !== generation
+        || batch.favoriteId !== result.favoriteId
+        || batch.signature !== signature
+        || !this._queue.replacePending(batch.queueBatchId, messages)) continue;
+    batch.requestId = result.requestId;
+    batch.request = request;
+    batch.mirrored = mirrored;
+    batch.superseded = false;
+    return batch;
+  }
+
+  batch = {
+    generation: generation,
+    signature: signature,
+    requestId: result.requestId,
+    favoriteId: result.favoriteId,
+    request: request,
+    mirrored: mirrored,
+    failed: false,
+    superseded: false,
+    queueBatchId: null
+  };
+  this._pendingResultBatches.push(batch);
+  batch.queueBatchId = this._queue.enqueue(messages, function () {
+    self._completePendingResultBatch(batch);
+  });
+  return batch;
 };
 
-Companion.prototype._dispatchRequest = function (request) {
+Companion.prototype._dispatchRequest = function (request, favorite) {
   var cached = this._cachedResult(request);
-  var cachedMessages;
-  var fixtureResult;
-  var favorite;
-  var generation;
+  var flight;
   var age;
   var refreshRequired;
   if (cached !== null) {
     this._metrics.cacheHits += 1;
     age = this._clock.now() - Math.min(cached.result.fetchedAt * 1000, cached.storedAt);
     refreshRequired = !(age >= 0 && age < contracts.CACHE_FRESH_SECONDS * 1000);
-    cachedMessages = codec.encodeResult(cached.result);
-    if (refreshRequired) cachedMessages.push(codec.encodeRequest(request));
-    this._queue.enqueue(cachedMessages);
+    this._enqueueVisibleResult(cached.result, refreshRequired ? request : null, request);
     if (!refreshRequired) return;
   } else {
     this._metrics.cacheMisses += 1;
-  }
-  if (this._fixtureEnabled && this._fixture.favorite.id === request.favoriteId) {
-    fixtureResult = contracts.copyDepartureResult(this._fixture.result, request.requestId);
-    this._queue.enqueue(codec.encodeResult(fixtureResult));
-    return;
   }
   if (this._configuration.primApiKey === null) {
     this._sendError(request, "API_KEY_REQUIRED");
@@ -323,23 +452,44 @@ Companion.prototype._dispatchRequest = function (request) {
     this._sendError(request, "API_KEY_INVALID");
     return;
   }
-  favorite = this._findFavorite(request.favoriteId);
-  if (favorite === null) {
-    this._sendError(request, "INVALID_SERVICE");
+  flight = this._inFlightByFavorite[request.favoriteId];
+  if (flight && flight.generation === this._lifecycleGeneration) {
+    flight.latestRequest = request;
     return;
   }
-  generation = this._beginRequest(request.favoriteId);
-  this._fetch(request, favorite, generation);
+  if (flight) delete this._inFlightByFavorite[request.favoriteId];
+  this._fetch(request, favorite);
 };
 
-Companion.prototype._fetch = function (request, favorite, generation) {
+Companion.prototype._fetch = function (request, favorite) {
   var self = this;
+  var generation = this._lifecycleGeneration;
+  var launchRequest = Object.freeze({
+    requestId: request.requestId,
+    favoriteId: request.favoriteId,
+    serviceId: favorite.serviceId,
+    trigger: request.trigger
+  });
   var xhr;
+  var flight;
+  var failedRequest;
   var settled = false;
   var key = null;
   var startedAt = this._clock.now();
   if (this._backendUrl.indexOf("https://") !== 0) {
-    this._sendError(request, "SOURCE_UNAVAILABLE");
+    if (request.transportEligible !== false
+        && this._isCurrentWatchRequest(request)) {
+      this._sendError(request, "SOURCE_UNAVAILABLE");
+    }
+    return;
+  }
+  key = this._configuration.primApiKey;
+  if (!contracts.isPersonalApiKey(key)) {
+    key = null;
+    if (request.transportEligible !== false
+        && this._isCurrentWatchRequest(request)) {
+      this._sendError(request, "API_KEY_REQUIRED");
+    }
     return;
   }
 
@@ -348,58 +498,62 @@ Companion.prototype._fetch = function (request, favorite, generation) {
       var latency;
       if (settled) return;
       settled = true;
+      if (generation !== self._lifecycleGeneration
+          || self._inFlightByFavorite[launchRequest.favoriteId] !== flight) return;
+      delete self._inFlightByFavorite[launchRequest.favoriteId];
       latency = Math.max(0, self._clock.now() - startedAt);
       self._metrics.lastLatencyMs = latency;
       self._metrics.totalLatencyMs += latency;
-      if (self._inFlightRequests[generation] === xhr) {
-        delete self._inFlightRequests[generation];
-      }
-      if (!self._isLatestRequest(request.favoriteId, generation)) return;
       callback();
     };
   }
 
   try {
     xhr = new this._XHR();
+    flight = {
+      generation: generation,
+      xhr: xhr,
+      launchRequest: launchRequest,
+      latestRequest: request
+    };
+    this._inFlightByFavorite[launchRequest.favoriteId] = flight;
     xhr.open("POST", this._backendUrl, true);
     xhr.timeout = contracts.LIMITS.httpTimeoutMs;
     xhr.setRequestHeader("Content-Type", "application/json");
     xhr.setRequestHeader("Accept", "application/json");
-    xhr.onload = once(function () { self._handleResponse(request, xhr); });
+    xhr.onload = once(function () { self._handleResponse(flight, xhr); });
     xhr.onerror = once(function () {
       self._metrics.failures += 1;
-      self._sendError(request, "SOURCE_UNAVAILABLE");
+      if (flight.latestRequest.transportEligible !== false
+          && self._isCurrentWatchRequest(flight.latestRequest)) {
+        self._sendError(flight.latestRequest, "SOURCE_UNAVAILABLE");
+      }
     });
     xhr.ontimeout = xhr.onerror;
     xhr.onabort = xhr.onerror;
-    if (!this._isLatestRequest(request.favoriteId, generation)) return;
-    key = this._configuration.primApiKey;
-    if (!contracts.isPersonalApiKey(key)) {
-      key = null;
-      this._sendError(request, "API_KEY_REQUIRED");
-      return;
-    }
     xhr.setRequestHeader("Authorization", "Bearer " + key);
     this._metrics.requests += 1;
-    this._inFlightRequests[generation] = xhr;
     xhr.send(JSON.stringify({
       schemaVersion: contracts.SCHEMA_VERSION,
-      requestId: request.requestId,
-      favoriteId: request.favoriteId,
-      serviceId: favorite.serviceId
+      requestId: launchRequest.requestId,
+      favoriteId: launchRequest.favoriteId,
+      serviceId: launchRequest.serviceId
     }));
     key = null;
   } catch (ignored) {
+    failedRequest = request;
     key = null;
-    if (this._inFlightRequests[generation] === xhr) {
-      delete this._inFlightRequests[generation];
+    if (settled || generation !== this._lifecycleGeneration) return;
+    if (flight) {
+      if (this._inFlightByFavorite[launchRequest.favoriteId] !== flight) return;
+      delete this._inFlightByFavorite[launchRequest.favoriteId];
+      failedRequest = flight.latestRequest;
     }
-    if (!settled) {
-      settled = true;
-      this._metrics.failures += 1;
-      if (this._isLatestRequest(request.favoriteId, generation)) {
-        this._sendError(request, "SOURCE_UNAVAILABLE");
-      }
+    settled = true;
+    this._metrics.failures += 1;
+    if (failedRequest.transportEligible !== false
+        && this._isCurrentWatchRequest(failedRequest)) {
+      this._sendError(failedRequest, "SOURCE_UNAVAILABLE");
     }
   }
 };
@@ -415,48 +569,63 @@ Companion.prototype._responseJson = function (xhr) {
   }
 };
 
-Companion.prototype._handleResponse = function (request, xhr) {
+Companion.prototype._handleResponse = function (flight, xhr) {
+  var launchRequest = flight.launchRequest;
+  var latestRequest = flight.latestRequest;
+  var current = latestRequest.transportEligible !== false
+    && this._isCurrentWatchRequest(latestRequest);
   var body = this._responseJson(xhr);
   var status = Number(xhr.status);
+  var result;
   var error;
   if (status >= 200 && status < 300) {
     if (!contracts.isDepartureResult(body)
-        || body.requestId !== request.requestId
-        || body.favoriteId !== request.favoriteId) {
+        || body.requestId !== launchRequest.requestId
+        || body.favoriteId !== launchRequest.favoriteId) {
       this._metrics.failures += 1;
-      this._sendError(request, "INVALID_RESPONSE");
+      if (current) this._sendError(latestRequest, "INVALID_RESPONSE");
       return;
     }
     this._metrics.successes += 1;
     this._cacheResult(body);
-    this._queue.enqueue(codec.encodeResult(body));
+    if (!current) return;
+    result = contracts.copyDepartureResult(body, latestRequest.requestId);
+    this._enqueueVisibleResult(result, null, latestRequest);
     return;
   }
 
   this._metrics.failures += 1;
+  if (!current) return;
   if (status === 401 || status === 403) {
-    this._sendError(request, "API_KEY_INVALID");
+    this._sendError(latestRequest, "API_KEY_INVALID");
     return;
   }
   if (body !== null && contracts.isErrorResult(body)) {
-    if (body.requestId !== request.requestId
-        || (typeof body.favoriteId !== "undefined" && body.favoriteId !== request.favoriteId)) {
-      this._sendError(request, "INVALID_RESPONSE");
+    if (body.requestId !== launchRequest.requestId
+        || (typeof body.favoriteId !== "undefined"
+          && body.favoriteId !== launchRequest.favoriteId)) {
+      this._sendError(latestRequest, "INVALID_RESPONSE");
       return;
     }
     error = {
       schemaVersion: contracts.SCHEMA_VERSION,
-      requestId: request.requestId,
-      favoriteId: request.favoriteId,
+      requestId: latestRequest.requestId,
+      favoriteId: latestRequest.favoriteId,
       code: body.code,
       occurredAt: body.occurredAt
     };
-    if (typeof body.retryAfterSeconds !== "undefined") error.retryAfterSeconds = body.retryAfterSeconds;
+    if (typeof body.retryAfterSeconds !== "undefined") {
+      error.retryAfterSeconds = body.retryAfterSeconds;
+    }
     this._sendErrorResult(error);
     return;
   }
 
-  this._sendError(request, this._httpErrorCode(status), this._retryAfter(xhr));
+  this._sendError(
+    latestRequest,
+    this._httpErrorCode(status),
+    this._retryAfter(xhr)
+  );
 };
 
 Companion.prototype._httpErrorCode = function (status) {

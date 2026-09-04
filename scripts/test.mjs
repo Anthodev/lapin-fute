@@ -25,5 +25,6 @@ run(process.execPath, [
   "packages/watch/test/model.test.js",
   "packages/watch/test/storage.test.js",
   "packages/watch/test/localization.test.js",
+  "packages/watch/test/presentation.test.js",
   "packages/watch/test/fixture-boot.test.js",
 ]);
