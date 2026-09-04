@@ -3,7 +3,6 @@ import {
   LIMITS,
   SCHEMA_VERSION,
   boundedString,
-  enumHasValue,
   isWireLanguage,
   utf8Bytes
 } from "./contracts.js";
@@ -13,31 +12,8 @@ export const WATCH_CONFIGURATION_MAX_BYTES = 8192;
 
 const STORAGE_FORMAT = "LFW1";
 const STORAGE_SEPARATOR = "\u001f";
-const CONFIGURATION_KEYS = Object.freeze(["keyStatus", "language", "favorites"]);
-const FAVORITE_KEYS = Object.freeze([
-  "id",
-  "serviceId",
-  "stopLabel",
-  "lineLabel",
-  "destinationLabel",
-  "sortOrder"
-]);
-
-function exactKeys(value, required, optional = []) {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
-  const keys = Object.keys(value);
-  if (keys.length < required.length || keys.length > required.length + optional.length) {
-    return false;
-  }
-  for (let index = 0; index < required.length; index += 1) {
-    if (!Object.prototype.hasOwnProperty.call(value, required[index])) return false;
-  }
-  for (let index = 0; index < keys.length; index += 1) {
-    if (required.indexOf(keys[index]) === -1 && optional.indexOf(keys[index]) === -1) {
-      return false;
-    }
-  }
-  return true;
+function owns(value, key) {
+  return Object.prototype.hasOwnProperty.call(value, key);
 }
 
 function validInteger(value) {
@@ -45,8 +21,28 @@ function validInteger(value) {
 }
 
 function validFavorite(favorite) {
-  return exactKeys(favorite, FAVORITE_KEYS, ["displayName"])
-    && boundedString(favorite.id, LIMITS.idUtf8Bytes)
+  if (!favorite || typeof favorite !== "object" || Array.isArray(favorite)) return false;
+  let keyCount = 0;
+  for (const key in favorite) {
+    if (!owns(favorite, key)) continue;
+    keyCount += 1;
+    if (key !== "id"
+        && key !== "serviceId"
+        && key !== "displayName"
+        && key !== "stopLabel"
+        && key !== "lineLabel"
+        && key !== "destinationLabel"
+        && key !== "sortOrder") return false;
+  }
+  if (keyCount < 6
+      || keyCount > 7
+      || !owns(favorite, "id")
+      || !owns(favorite, "serviceId")
+      || !owns(favorite, "stopLabel")
+      || !owns(favorite, "lineLabel")
+      || !owns(favorite, "destinationLabel")
+      || !owns(favorite, "sortOrder")) return false;
+  return boundedString(favorite.id, LIMITS.idUtf8Bytes)
     && boundedString(favorite.serviceId, LIMITS.idUtf8Bytes)
     && boundedString(favorite.stopLabel, LIMITS.labelUtf8Bytes)
     && boundedString(favorite.lineLabel, LIMITS.labelUtf8Bytes)
@@ -60,41 +56,35 @@ function validFavorite(favorite) {
 
 function validFavorites(favorites) {
   if (!Array.isArray(favorites) || favorites.length > LIMITS.favorites) return false;
-  const ids = [];
   for (let index = 0; index < favorites.length; index += 1) {
     const favorite = favorites[index];
-    if (!validFavorite(favorite) || ids.indexOf(favorite.id) !== -1) return false;
-    ids.push(favorite.id);
+    if (!validFavorite(favorite)) return false;
+    for (let previous = 0; previous < index; previous += 1) {
+      if (favorites[previous].id === favorite.id) return false;
+    }
   }
   return true;
 }
 
 function validConfiguration(configuration) {
-  return exactKeys(configuration, CONFIGURATION_KEYS)
-    && enumHasValue(KEY_STATUS, configuration.keyStatus)
+  if (!configuration
+      || typeof configuration !== "object"
+      || Array.isArray(configuration)) return false;
+  let keyCount = 0;
+  for (const key in configuration) {
+    if (!owns(configuration, key)) continue;
+    keyCount += 1;
+    if (key !== "keyStatus" && key !== "language" && key !== "favorites") return false;
+  }
+  return keyCount === 3
+    && owns(configuration, "keyStatus")
+    && owns(configuration, "language")
+    && owns(configuration, "favorites")
+    && (configuration.keyStatus === KEY_STATUS.MISSING
+      || configuration.keyStatus === KEY_STATUS.CONFIGURED
+      || configuration.keyStatus === KEY_STATUS.INVALID)
     && isWireLanguage(configuration.language)
     && validFavorites(configuration.favorites);
-}
-
-function copyFavorite(favorite) {
-  const copy = {
-    id: favorite.id,
-    serviceId: favorite.serviceId,
-    stopLabel: favorite.stopLabel,
-    lineLabel: favorite.lineLabel,
-    destinationLabel: favorite.destinationLabel,
-    sortOrder: favorite.sortOrder
-  };
-  if (favorite.displayName !== undefined) copy.displayName = favorite.displayName;
-  return copy;
-}
-
-function copyConfiguration(configuration) {
-  return {
-    keyStatus: configuration.keyStatus,
-    language: configuration.language,
-    favorites: configuration.favorites.map(copyFavorite)
-  };
 }
 
 function appendToken(parts, value) {
@@ -108,6 +98,48 @@ function appendString(parts, value) {
   }
   appendToken(parts, value.length);
   parts.push(value);
+}
+
+function matchesText(state, value) {
+  if (state.offset + value.length > state.serialized.length) return false;
+  for (let index = 0; index < value.length; index += 1) {
+    if (state.serialized.charCodeAt(state.offset + index) !== value.charCodeAt(index)) {
+      return false;
+    }
+  }
+  state.offset += value.length;
+  return true;
+}
+
+function matchesToken(state, value) {
+  return matchesText(state, String(value))
+    && matchesText(state, STORAGE_SEPARATOR);
+}
+
+function matchesString(state, value) {
+  return value === undefined
+    ? matchesToken(state, "-")
+    : matchesToken(state, value.length) && matchesText(state, value);
+}
+
+function matchesConfiguration(serialized, configuration) {
+  const state = { serialized, offset: 0 };
+  if (!matchesToken(state, STORAGE_FORMAT)
+      || !matchesToken(state, SCHEMA_VERSION)
+      || !matchesToken(state, configuration.keyStatus)
+      || !matchesToken(state, configuration.language)
+      || !matchesToken(state, configuration.favorites.length)) return false;
+  for (let index = 0; index < configuration.favorites.length; index += 1) {
+    const favorite = configuration.favorites[index];
+    if (!matchesToken(state, favorite.sortOrder)
+        || !matchesString(state, favorite.id)
+        || !matchesString(state, favorite.serviceId)
+        || !matchesString(state, favorite.displayName)
+        || !matchesString(state, favorite.stopLabel)
+        || !matchesString(state, favorite.lineLabel)
+        || !matchesString(state, favorite.destinationLabel)) return false;
+  }
+  return state.offset === serialized.length;
 }
 
 export function serializeWatchConfiguration(configuration) {
@@ -201,7 +233,7 @@ export function deserializeWatchConfiguration(serialized) {
   }
   if (!state.valid || state.offset !== serialized.length
       || !validConfiguration(configuration)) return null;
-  return copyConfiguration(configuration);
+  return configuration;
 }
 
 
@@ -228,14 +260,18 @@ export function saveWatchConfiguration(storage, configuration) {
   if (!canWrite(storage)) return false;
 
   let previous = null;
+  let serialized = null;
   let writeAttempted = false;
   try {
-    const serialized = serializeWatchConfiguration(configuration);
+    serialized = serializeWatchConfiguration(configuration);
     if (serialized === null) return false;
     previous = storage.getItem(WATCH_CONFIGURATION_KEY);
     writeAttempted = true;
     storage.setItem(WATCH_CONFIGURATION_KEY, serialized);
-    if (storage.getItem(WATCH_CONFIGURATION_KEY) === serialized) return true;
+    serialized = null;
+    const written = storage.getItem(WATCH_CONFIGURATION_KEY);
+    if (typeof written === "string"
+        && matchesConfiguration(written, configuration)) return true;
   } catch (_) {
     // Restore the prior bytes below when the adapter is still writable.
   }

@@ -124,31 +124,38 @@ test("configuration encoder requires a normalized contextual language", function
   );
 });
 
-test("callback queue yields after each ACK and drains whole batches in FIFO order", function () {
+test("callback queue completes batches only after their final ACK and preserves FIFO deferral", function () {
   var Pebble = new fakes.FakePebble(false);
   var defer = fakes.createDefer(false);
   var failures = [];
+  var completions = [];
   var queue = new companion.MessageQueue(Pebble, defer, function (code) { failures.push(code); });
 
-  queue.enqueue([{ id: "batch-a-1" }, { id: "batch-a-2" }]);
-  queue.enqueue([{ id: "batch-b-1" }]);
+  queue.enqueue(
+    [{ id: "batch-a-1" }, { id: "batch-a-2" }],
+    function () { completions.push("a"); }
+  );
+  queue.enqueue([{ id: "batch-b-1" }], function () { completions.push("b"); });
   assert.deepEqual(Pebble.sent.map(function (message) { return message.id; }), ["batch-a-1"]);
   assert.equal(Pebble.maxInFlight, 1);
 
   Pebble.ack();
+  assert.deepEqual(completions, []);
   assert.deepEqual(Pebble.sent.map(function (message) { return message.id; }), ["batch-a-1"]);
   assert.equal(defer.pending.length, 1);
-  queue.enqueue([{ id: "batch-c-1" }]);
+  queue.enqueue([{ id: "batch-c-1" }], function () { completions.push("c"); });
   assert.equal(defer.pending.length, 1);
 
   defer.runNext();
   Pebble.ack();
+  assert.deepEqual(completions, ["a"]);
   assert.deepEqual(Pebble.sent.map(function (message) { return message.id; }), [
     "batch-a-1",
     "batch-a-2"
   ]);
   defer.runNext();
   Pebble.ack();
+  assert.deepEqual(completions, ["a", "b"]);
   defer.runNext();
   Pebble.ack();
 
@@ -158,6 +165,7 @@ test("callback queue yields after each ACK and drains whole batches in FIFO orde
     "batch-b-1",
     "batch-c-1"
   ]);
+  assert.deepEqual(completions, ["a", "b", "c"]);
   assert.equal(defer.pending.length, 0);
   assert.equal(queue.isSending(), false);
   assert.deepEqual(failures, []);
@@ -205,16 +213,43 @@ test("a stale failure cannot clear or fail a newer queue generation", function (
   assert.deepEqual(failures, []);
 });
 
-test("failed AppMessage is dropped without retry or sequence advancement", function () {
+test("failed AppMessage drops the batch without retry or completion", function () {
   var Pebble = new fakes.FakePebble(false);
   var defer = fakes.createDefer(false);
   var failures = [];
+  var completions = [];
   var queue = new companion.MessageQueue(Pebble, defer, function (code) { failures.push(code); });
 
-  queue.enqueue([{ SCHEMA_VERSION: 1 }, { MESSAGE_TYPE: 2 }]);
+  queue.enqueue(
+    [{ SCHEMA_VERSION: 1 }, { MESSAGE_TYPE: 2 }],
+    function () { completions.push("complete"); }
+  );
   Pebble.fail();
   assert.equal(Pebble.sent.length, 1);
   assert.equal(defer.pending.length, 0);
   assert.deepEqual(failures, ["APP_MESSAGE_FAILED"]);
+  assert.deepEqual(completions, []);
   assert.equal(queue.isSending(), false);
+});
+
+test("synchronous AppMessage failure drops the batch and reports one failure", function () {
+  var Pebble = new fakes.FakePebble(false);
+  var defer = fakes.createDefer(false);
+  var failures = [];
+  var completions = [];
+  var queue;
+  Pebble.sendAppMessage = function (message) {
+    this.sent.push(message);
+    throw new Error("synchronous send failure");
+  };
+  queue = new companion.MessageQueue(Pebble, defer, function (code) {
+    failures.push(code);
+  });
+
+  queue.enqueue([{ id: "throws" }], function () { completions.push("complete"); });
+  assert.deepEqual(Pebble.sent, [{ id: "throws" }]);
+  assert.deepEqual(failures, ["APP_MESSAGE_FAILED"]);
+  assert.deepEqual(completions, []);
+  assert.equal(queue.isSending(), false);
+  assert.equal(defer.pending.length, 0);
 });

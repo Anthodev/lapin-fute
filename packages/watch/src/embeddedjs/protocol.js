@@ -22,11 +22,62 @@ export const RECEIVE_RESULT = Object.freeze({
   ERROR_COMMITTED: 4
 });
 
-const COMMON_KEYS = Object.freeze(["SCHEMA_VERSION", "MESSAGE_TYPE"]);
-
-function onlyKeys(message, allowed) {
+function onlyKeys(message, type) {
   for (const key of message.keys()) {
-    if (typeof key !== "string" || allowed.indexOf(key) === -1) return false;
+    if (typeof key !== "string") return false;
+    let allowed = key === "SCHEMA_VERSION"
+      || key === "MESSAGE_TYPE"
+      || key === "REQUEST_ID";
+    if (!allowed) {
+      switch (type) {
+        case MESSAGE_TYPE.REQUEST:
+          allowed = key === "FAVORITE_ID" || key === "REQUEST_TRIGGER";
+          break;
+        case MESSAGE_TYPE.CONFIG_BEGIN:
+          allowed = key === "ITEM_COUNT"
+            || key === "KEY_STATUS"
+            || key === "DISPLAY_NAME";
+          break;
+        case MESSAGE_TYPE.FAVORITE:
+          allowed = key === "ITEM_INDEX"
+            || key === "FAVORITE_ID"
+            || key === "SERVICE_ID"
+            || key === "DISPLAY_NAME"
+            || key === "STOP_LABEL"
+            || key === "LINE_LABEL"
+            || key === "DESTINATION_LABEL"
+            || key === "SORT_ORDER";
+          break;
+        case MESSAGE_TYPE.RESULT_BEGIN:
+          allowed = key === "FAVORITE_ID"
+            || key === "ITEM_COUNT"
+            || key === "FETCHED_AT"
+            || key === "SOURCE_UPDATED_AT"
+            || key === "FRESHNESS";
+          break;
+        case MESSAGE_TYPE.DEPARTURE:
+          allowed = key === "FAVORITE_ID"
+            || key === "ITEM_INDEX"
+            || key === "EXPECTED_AT"
+            || key === "AIMED_AT"
+            || key === "MINUTES"
+            || key === "DEPARTURE_STATUS"
+            || key === "NEXT_INTERVAL_MINUTES";
+          break;
+        case MESSAGE_TYPE.RESULT_COMMIT:
+          allowed = key === "FAVORITE_ID";
+          break;
+        case MESSAGE_TYPE.ERROR:
+          allowed = key === "FAVORITE_ID"
+            || key === "ERROR_CODE"
+            || key === "OCCURRED_AT"
+            || key === "RETRY_AFTER_SECONDS";
+          break;
+        default:
+          break;
+      }
+    }
+    if (!allowed) return false;
   }
   return true;
 }
@@ -44,11 +95,6 @@ function optionalUint32(message, key) {
   return !message.has(key) || uint32(message.get(key));
 }
 
-function aliases(message) {
-  const decoded = Object.create(null);
-  for (const entry of message) decoded[entry[0]] = entry[1];
-  return decoded;
-}
 
 export function decodeMessage(message) {
   if (!(message instanceof Map)
@@ -59,18 +105,13 @@ export function decodeMessage(message) {
   let valid = false;
   switch (type) {
     case MESSAGE_TYPE.REQUEST:
-      valid = onlyKeys(message, COMMON_KEYS.concat(["REQUEST_ID", "FAVORITE_ID", "REQUEST_TRIGGER"]))
+      valid = onlyKeys(message, type)
         && string(message, "REQUEST_ID")
         && string(message, "FAVORITE_ID")
         && enumHasValue(REQUEST_TRIGGER, message.get("REQUEST_TRIGGER"));
       break;
     case MESSAGE_TYPE.CONFIG_BEGIN:
-      valid = onlyKeys(message, COMMON_KEYS.concat([
-        "REQUEST_ID",
-        "ITEM_COUNT",
-        "KEY_STATUS",
-        "DISPLAY_NAME"
-      ]))
+      valid = onlyKeys(message, type)
         && string(message, "REQUEST_ID")
         && integer(message, "ITEM_COUNT")
         && message.get("ITEM_COUNT") >= 0
@@ -79,17 +120,7 @@ export function decodeMessage(message) {
         && (!message.has("DISPLAY_NAME") || isWireLanguage(message.get("DISPLAY_NAME")));
       break;
     case MESSAGE_TYPE.FAVORITE:
-      valid = onlyKeys(message, COMMON_KEYS.concat([
-        "REQUEST_ID",
-        "ITEM_INDEX",
-        "FAVORITE_ID",
-        "SERVICE_ID",
-        "DISPLAY_NAME",
-        "STOP_LABEL",
-        "LINE_LABEL",
-        "DESTINATION_LABEL",
-        "SORT_ORDER"
-      ]))
+      valid = onlyKeys(message, type)
         && string(message, "REQUEST_ID")
         && integer(message, "ITEM_INDEX")
         && message.get("ITEM_INDEX") >= 0
@@ -105,18 +136,11 @@ export function decodeMessage(message) {
         && message.get("SORT_ORDER") < LIMITS.favorites;
       break;
     case MESSAGE_TYPE.CONFIG_COMMIT:
-      valid = onlyKeys(message, COMMON_KEYS.concat(["REQUEST_ID"]))
+      valid = onlyKeys(message, type)
         && string(message, "REQUEST_ID");
       break;
     case MESSAGE_TYPE.RESULT_BEGIN:
-      valid = onlyKeys(message, COMMON_KEYS.concat([
-        "REQUEST_ID",
-        "FAVORITE_ID",
-        "ITEM_COUNT",
-        "FETCHED_AT",
-        "SOURCE_UPDATED_AT",
-        "FRESHNESS"
-      ]))
+      valid = onlyKeys(message, type)
         && string(message, "REQUEST_ID")
         && string(message, "FAVORITE_ID")
         && integer(message, "ITEM_COUNT")
@@ -129,16 +153,7 @@ export function decodeMessage(message) {
         && message.get("FRESHNESS") < FRESHNESS.length;
       break;
     case MESSAGE_TYPE.DEPARTURE:
-      valid = onlyKeys(message, COMMON_KEYS.concat([
-        "REQUEST_ID",
-        "FAVORITE_ID",
-        "ITEM_INDEX",
-        "EXPECTED_AT",
-        "AIMED_AT",
-        "MINUTES",
-        "DEPARTURE_STATUS",
-        "NEXT_INTERVAL_MINUTES"
-      ]))
+      valid = onlyKeys(message, type)
         && string(message, "REQUEST_ID")
         && string(message, "FAVORITE_ID")
         && integer(message, "ITEM_INDEX")
@@ -158,18 +173,12 @@ export function decodeMessage(message) {
             && message.get("NEXT_INTERVAL_MINUTES") <= 1440));
       break;
     case MESSAGE_TYPE.RESULT_COMMIT:
-      valid = onlyKeys(message, COMMON_KEYS.concat(["REQUEST_ID", "FAVORITE_ID"]))
+      valid = onlyKeys(message, type)
         && string(message, "REQUEST_ID")
         && string(message, "FAVORITE_ID");
       break;
     case MESSAGE_TYPE.ERROR:
-      valid = onlyKeys(message, COMMON_KEYS.concat([
-        "REQUEST_ID",
-        "FAVORITE_ID",
-        "ERROR_CODE",
-        "OCCURRED_AT",
-        "RETRY_AFTER_SECONDS"
-      ]))
+      valid = onlyKeys(message, type)
         && string(message, "REQUEST_ID")
         && (!message.has("FAVORITE_ID") || string(message, "FAVORITE_ID"))
         && integer(message, "ERROR_CODE")
@@ -182,7 +191,7 @@ export function decodeMessage(message) {
       return null;
   }
   if (!valid) return null;
-  return aliases(message);
+  return message;
 }
 
 export function encodeRequest(request) {
@@ -261,6 +270,38 @@ function copyError(error) {
   return copy;
 }
 
+function sharedFavoriteString(stage, committed, key, value) {
+  for (let index = 0; index < stage.favorites.length; index += 1) {
+    const candidate = stage.favorites[index][key];
+    if (candidate === value) return candidate;
+  }
+  if (committed) {
+    for (let index = 0; index < committed.favorites.length; index += 1) {
+      const candidate = committed.favorites[index][key];
+      if (candidate === value) return candidate;
+    }
+  }
+  return value;
+}
+
+function requestSequence(prefix, requestId) {
+  if (!prefix || requestId.length <= prefix.length) return 0;
+  let sequence = 0;
+  for (let index = 0; index < requestId.length; index += 1) {
+    const code = requestId.charCodeAt(index);
+    if (index < prefix.length) {
+      if (code !== prefix.charCodeAt(index)) return 0;
+    } else {
+      if (code < 48
+          || code > 57
+          || (index === prefix.length && code === 48)) return 0;
+      sequence = sequence * 10 + code - 48;
+    }
+  }
+  return sequence;
+}
+
+
 export class ProtocolReceiver {
   constructor(initialConfiguration = null) {
     this.configuration = null;
@@ -268,31 +309,56 @@ export class ProtocolReceiver {
     this.error = null;
     this.configStage = null;
     this.resultStage = null;
-    this.expected = null;
-    this.refreshCandidate = null;
+    this.prefix = null;
+    this.favoriteId = null;
+    this.latestSeq = 0;
+    this.committedSeq = 0;
+    this.refreshSeq = 0;
     if (initialConfiguration) this.restoreConfiguration(initialConfiguration);
   }
 
-  restoreConfiguration(configuration) {
-    this.configuration = copyConfiguration(configuration);
+  restoreState(state, copy = true) {
+    const source = state || {};
+    this.configuration = copy ? copyConfiguration(source.configuration) : source.configuration || null;
+    this.result = copy ? copyResult(source.result) : source.result || null;
+    this.error = copy ? copyError(source.error) : source.error || null;
+    this.discardStaging();
+    this.cancelExpectedResponse();
+  }
+
+  restoreConfiguration(configuration, copy = true) {
+    this.configuration = copy ? copyConfiguration(configuration) : configuration || null;
     this.result = null;
     this.error = null;
     this.discardStaging();
     this.cancelExpectedResponse();
   }
 
-  expectResponse(requestId, favoriteId) {
+  expectResponse(requestId, favoriteId, prefix, sequence) {
     if (!boundedString(requestId, LIMITS.idUtf8Bytes)
-        || !boundedString(favoriteId, LIMITS.idUtf8Bytes)) return false;
-    this.expected = { requestId, favoriteId, refresh: false };
-    this.refreshCandidate = null;
-    this.resultStage = null;
+        || !boundedString(favoriteId, LIMITS.idUtf8Bytes)
+        || typeof prefix !== "string"
+        || sequence === 0
+        || requestSequence(prefix, requestId) !== sequence) return false;
+    if (this.latestSeq === 0) {
+      this.prefix = prefix;
+      this.favoriteId = favoriteId;
+      this.committedSeq = sequence - 1;
+    } else if (prefix !== this.prefix
+        || favoriteId !== this.favoriteId
+        || sequence <= this.latestSeq) {
+      return false;
+    }
+    this.latestSeq = sequence;
     return true;
   }
 
   cancelExpectedResponse() {
-    this.expected = null;
-    this.refreshCandidate = null;
+    this.prefix = null;
+    this.favoriteId = null;
+    this.latestSeq = 0;
+    this.committedSeq = 0;
+    this.refreshSeq = 0;
     this.resultStage = null;
   }
 
@@ -309,6 +375,14 @@ export class ProtocolReceiver {
     };
   }
 
+  borrowState() {
+    return {
+      configuration: this.configuration,
+      result: this.result,
+      error: this.error
+    };
+  }
+
   receive(message) {
     const decoded = decodeMessage(message);
     if (!decoded) {
@@ -316,14 +390,14 @@ export class ProtocolReceiver {
       return RECEIVE_RESULT.REJECTED;
     }
 
-    const type = decoded.MESSAGE_TYPE;
-    const requestId = decoded.REQUEST_ID || "";
+    const type = decoded.get("MESSAGE_TYPE");
+    const requestId = decoded.get("REQUEST_ID") || "";
     if (type === MESSAGE_TYPE.CONFIG_BEGIN) {
       this.configStage = {
         requestId,
-        count: decoded.ITEM_COUNT,
-        keyStatus: decoded.KEY_STATUS,
-        language: isWireLanguage(decoded.DISPLAY_NAME) ? decoded.DISPLAY_NAME : LANGUAGE.EN,
+        count: decoded.get("ITEM_COUNT"),
+        keyStatus: decoded.get("KEY_STATUS"),
+        language: decoded.get("DISPLAY_NAME") === LANGUAGE.FR ? LANGUAGE.FR : LANGUAGE.EN,
         favorites: []
       };
       return RECEIVE_RESULT.STAGED;
@@ -334,26 +408,71 @@ export class ProtocolReceiver {
       let duplicate = false;
       if (stage) {
         for (let index = 0; index < stage.favorites.length; index += 1) {
-          if (stage.favorites[index].id === decoded.FAVORITE_ID) duplicate = true;
+          if (stage.favorites[index].id === decoded.get("FAVORITE_ID")) duplicate = true;
         }
       }
       if (!stage
           || stage.requestId !== requestId
-          || decoded.ITEM_INDEX !== stage.favorites.length
+          || decoded.get("ITEM_INDEX") !== stage.favorites.length
           || stage.favorites.length >= stage.count
           || duplicate) {
         this.configStage = null;
         return RECEIVE_RESULT.REJECTED;
       }
+      const committed = this.configuration;
+      const previous = committed && committed.favorites[stage.favorites.length];
+      if (previous
+          && previous.id === decoded.get("FAVORITE_ID")
+          && previous.serviceId === decoded.get("SERVICE_ID")
+          && previous.displayName === decoded.get("DISPLAY_NAME")
+          && previous.stopLabel === decoded.get("STOP_LABEL")
+          && previous.lineLabel === decoded.get("LINE_LABEL")
+          && previous.destinationLabel === decoded.get("DESTINATION_LABEL")
+          && previous.sortOrder === decoded.get("SORT_ORDER")) {
+        stage.favorites.push(previous);
+        return RECEIVE_RESULT.STAGED;
+      }
       const favorite = {
-        id: decoded.FAVORITE_ID,
-        serviceId: decoded.SERVICE_ID,
-        stopLabel: decoded.STOP_LABEL,
-        lineLabel: decoded.LINE_LABEL,
-        destinationLabel: decoded.DESTINATION_LABEL,
-        sortOrder: decoded.SORT_ORDER
+        id: sharedFavoriteString(
+          stage,
+          committed,
+          "id",
+          decoded.get("FAVORITE_ID")
+        ),
+        serviceId: sharedFavoriteString(
+          stage,
+          committed,
+          "serviceId",
+          decoded.get("SERVICE_ID")
+        ),
+        stopLabel: sharedFavoriteString(
+          stage,
+          committed,
+          "stopLabel",
+          decoded.get("STOP_LABEL")
+        ),
+        lineLabel: sharedFavoriteString(
+          stage,
+          committed,
+          "lineLabel",
+          decoded.get("LINE_LABEL")
+        ),
+        destinationLabel: sharedFavoriteString(
+          stage,
+          committed,
+          "destinationLabel",
+          decoded.get("DESTINATION_LABEL")
+        ),
+        sortOrder: decoded.get("SORT_ORDER")
       };
-      if (decoded.DISPLAY_NAME !== undefined) favorite.displayName = decoded.DISPLAY_NAME;
+      if (decoded.get("DISPLAY_NAME") !== undefined) {
+        favorite.displayName = sharedFavoriteString(
+          stage,
+          committed,
+          "displayName",
+          decoded.get("DISPLAY_NAME")
+        );
+      }
       stage.favorites.push(favorite);
       return RECEIVE_RESULT.STAGED;
     }
@@ -366,12 +485,21 @@ export class ProtocolReceiver {
         this.configStage = null;
         return RECEIVE_RESULT.REJECTED;
       }
+      let resultStillConfigured = false;
+      if (this.result) {
+        for (let index = 0; index < stage.favorites.length; index += 1) {
+          if (stage.favorites[index].id === this.result.favoriteId) {
+            resultStillConfigured = true;
+            break;
+          }
+        }
+      }
       this.configuration = {
         keyStatus: stage.keyStatus,
         language: stage.language,
-        favorites: stage.favorites.map(copyFavorite)
+        favorites: stage.favorites
       };
-      this.result = null;
+      if (!resultStillConfigured) this.result = null;
       this.error = null;
       this.configStage = null;
       this.cancelExpectedResponse();
@@ -379,37 +507,43 @@ export class ProtocolReceiver {
     }
 
     if (type === MESSAGE_TYPE.REQUEST) {
-      const candidate = this.refreshCandidate;
-      if (this.expected
-          || !candidate
-          || candidate.requestId !== requestId
-          || candidate.favoriteId !== decoded.FAVORITE_ID) {
+      const favoriteId = decoded.get("FAVORITE_ID");
+      const sequence = favoriteId === this.favoriteId
+        ? requestSequence(this.prefix, requestId)
+        : 0;
+      if (sequence === 0
+          || sequence < this.committedSeq
+          || this.refreshSeq !== -sequence
+          || !this.result
+          || this.result.requestId !== requestId
+          || this.result.favoriteId !== favoriteId) {
         return RECEIVE_RESULT.REJECTED;
       }
-      this.expected = {
-        requestId,
-        favoriteId: decoded.FAVORITE_ID,
-        refresh: true
-      };
-      this.refreshCandidate = null;
+      this.refreshSeq = sequence;
       this.resultStage = null;
       return RECEIVE_RESULT.STAGED;
     }
 
     if (type === MESSAGE_TYPE.RESULT_BEGIN) {
-      if (!this.expected
-          || this.expected.requestId !== requestId
-          || this.expected.favoriteId !== decoded.FAVORITE_ID) {
+      const favoriteId = decoded.get("FAVORITE_ID");
+      const sequence = favoriteId === this.favoriteId
+        ? requestSequence(this.prefix, requestId)
+        : 0;
+      const refreshing = sequence !== 0
+        && sequence === this.refreshSeq
+        && sequence >= this.committedSeq;
+      if (!refreshing
+          && !(sequence > this.committedSeq && sequence <= this.latestSeq)) {
         this.resultStage = null;
         return RECEIVE_RESULT.REJECTED;
       }
       this.resultStage = {
         requestId,
-        favoriteId: decoded.FAVORITE_ID,
-        count: decoded.ITEM_COUNT,
-        fetchedAt: decoded.FETCHED_AT,
-        sourceUpdatedAt: decoded.SOURCE_UPDATED_AT,
-        freshness: FRESHNESS[decoded.FRESHNESS],
+        favoriteId,
+        count: decoded.get("ITEM_COUNT"),
+        fetchedAt: decoded.get("FETCHED_AT"),
+        sourceUpdatedAt: decoded.get("SOURCE_UPDATED_AT"),
+        freshness: FRESHNESS[decoded.get("FRESHNESS")],
         departures: []
       };
       return RECEIVE_RESULT.STAGED;
@@ -418,24 +552,21 @@ export class ProtocolReceiver {
     if (type === MESSAGE_TYPE.DEPARTURE) {
       const stage = this.resultStage;
       if (!stage
-          || !this.expected
           || stage.requestId !== requestId
-          || stage.favoriteId !== decoded.FAVORITE_ID
-          || this.expected.requestId !== requestId
-          || this.expected.favoriteId !== decoded.FAVORITE_ID
-          || decoded.ITEM_INDEX !== stage.departures.length
+          || stage.favoriteId !== decoded.get("FAVORITE_ID")
+          || decoded.get("ITEM_INDEX") !== stage.departures.length
           || stage.departures.length >= stage.count) {
         this.resultStage = null;
         return RECEIVE_RESULT.REJECTED;
       }
       const departure = {
-        expectedAt: decoded.EXPECTED_AT,
-        minutes: decoded.MINUTES,
-        status: DEPARTURE_STATUS[decoded.DEPARTURE_STATUS]
+        expectedAt: decoded.get("EXPECTED_AT"),
+        minutes: decoded.get("MINUTES"),
+        status: DEPARTURE_STATUS[decoded.get("DEPARTURE_STATUS")]
       };
-      if (decoded.AIMED_AT !== undefined) departure.aimedAt = decoded.AIMED_AT;
-      if (decoded.NEXT_INTERVAL_MINUTES !== undefined) {
-        departure.nextIntervalMinutes = decoded.NEXT_INTERVAL_MINUTES;
+      if (decoded.get("AIMED_AT") !== undefined) departure.aimedAt = decoded.get("AIMED_AT");
+      if (decoded.get("NEXT_INTERVAL_MINUTES") !== undefined) {
+        departure.nextIntervalMinutes = decoded.get("NEXT_INTERVAL_MINUTES");
       }
       stage.departures.push(departure);
       return RECEIVE_RESULT.STAGED;
@@ -443,45 +574,55 @@ export class ProtocolReceiver {
 
     if (type === MESSAGE_TYPE.RESULT_COMMIT) {
       const stage = this.resultStage;
+      const favoriteId = decoded.get("FAVORITE_ID");
+      const sequence = favoriteId === this.favoriteId
+        ? requestSequence(this.prefix, requestId)
+        : 0;
+      const refreshing = sequence !== 0
+        && sequence === this.refreshSeq
+        && sequence >= this.committedSeq;
       if (!stage
-          || !this.expected
+          || (!refreshing
+            && !(sequence > this.committedSeq && sequence <= this.latestSeq))
           || stage.requestId !== requestId
-          || stage.favoriteId !== decoded.FAVORITE_ID
-          || this.expected.requestId !== requestId
-          || this.expected.favoriteId !== decoded.FAVORITE_ID
+          || stage.favoriteId !== favoriteId
           || stage.departures.length !== stage.count) {
         this.resultStage = null;
         return RECEIVE_RESULT.REJECTED;
       }
-      const refresh = this.expected.refresh;
-      this.result = copyResult(stage);
+      this.result = stage;
       this.error = null;
-      this.expected = null;
+      if (sequence > this.committedSeq) this.committedSeq = sequence;
       this.resultStage = null;
-      this.refreshCandidate = refresh
-        ? null
-        : { requestId, favoriteId: decoded.FAVORITE_ID };
+      this.refreshSeq = refreshing ? 0 : -sequence;
       return RECEIVE_RESULT.RESULT_COMMITTED;
     }
 
     if (type === MESSAGE_TYPE.ERROR) {
-      if (!this.expected
-          || this.expected.requestId !== requestId
-          || (decoded.FAVORITE_ID !== undefined
-            && this.expected.favoriteId !== decoded.FAVORITE_ID)) {
+      const favoriteId = decoded.get("FAVORITE_ID");
+      const sequence = (favoriteId === undefined || favoriteId === this.favoriteId)
+        ? requestSequence(this.prefix, requestId)
+        : 0;
+      const refreshing = sequence !== 0
+        && sequence === this.refreshSeq
+        && sequence >= this.committedSeq;
+      if (!refreshing
+          && !(sequence > this.committedSeq && sequence <= this.latestSeq)) {
         this.resultStage = null;
         return RECEIVE_RESULT.REJECTED;
       }
       this.error = {
         requestId,
-        code: ERROR_CODE[decoded.ERROR_CODE],
-        occurredAt: decoded.OCCURRED_AT
+        code: ERROR_CODE[decoded.get("ERROR_CODE")],
+        occurredAt: decoded.get("OCCURRED_AT")
       };
-      if (decoded.FAVORITE_ID !== undefined) this.error.favoriteId = decoded.FAVORITE_ID;
-      if (decoded.RETRY_AFTER_SECONDS !== undefined) {
-        this.error.retryAfterSeconds = decoded.RETRY_AFTER_SECONDS;
+      if (favoriteId !== undefined) this.error.favoriteId = favoriteId;
+      if (decoded.get("RETRY_AFTER_SECONDS") !== undefined) {
+        this.error.retryAfterSeconds = decoded.get("RETRY_AFTER_SECONDS");
       }
-      this.cancelExpectedResponse();
+      if (sequence > this.committedSeq) this.committedSeq = sequence;
+      this.refreshSeq = 0;
+      this.resultStage = null;
       return RECEIVE_RESULT.ERROR_COMMITTED;
     }
 

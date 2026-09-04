@@ -11,6 +11,7 @@
       "./protocol",
       "./message-queue",
       "./localization",
+      "./presentation",
       "./storage",
       "./ui",
       "./contracts"

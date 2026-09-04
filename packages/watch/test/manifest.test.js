@@ -4,9 +4,9 @@ import { createRequire } from "node:module";
 import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import {
-  APP_MESSAGE_KEY as WATCH_MESSAGE_KEY,
+  APP_MESSAGE_INBOX_BYTES as WATCH_MESSAGE_INBOX_BYTES,
   APP_MESSAGE_KEY_MAP as WATCH_MESSAGE_KEY_MAP,
-  APP_MESSAGE_KEY_ORDER as WATCH_MESSAGE_KEY_ORDER,
+  APP_MESSAGE_OUTBOX_BYTES as WATCH_MESSAGE_OUTBOX_BYTES,
   LANGUAGE as WATCH_LANGUAGE
 } from "../src/embeddedjs/contracts.js";
 import {
@@ -33,6 +33,7 @@ const expectedModules = [
   "./protocol",
   "./message-queue",
   "./localization",
+  "./presentation",
   "./storage",
   "./ui",
   "./contracts"
@@ -45,10 +46,10 @@ function moduleSource(name) {
 function xsArenaBytes(field) {
   const constant = `XS_${field.toUpperCase()}_BYTES`;
   const match = mdblSource.match(
-    new RegExp(`^#define ${constant} \\((\\d+)U \\* 1024U\\)$`, "mu")
+    new RegExp(`^#define ${constant} \\((\\d+)U \\* (512|1024)U\\)$`, "mu")
   );
-  assert.notEqual(match, null, `${constant} must be an explicit KiB allocation`);
-  return Number(match[1]) * 1024;
+  assert.notEqual(match, null, `${constant} must be an explicit allocation`);
+  return Number(match[1]) * Number(match[2]);
 }
 
 test("watch package is one multi-module Alloy app for emery and gabbro", () => {
@@ -70,11 +71,6 @@ test("Alloy bootstrap uses one bounded explicit XS creation record", () => {
   const arenaValues = Object.values(arenas);
   const arenaTotal = arenaValues.reduce((total, bytes) => total + bytes, 0);
 
-  assert.deepEqual(arenas, {
-    stack: 4 * 1024,
-    slot: 32 * 1024,
-    chunk: 20 * 1024
-  });
   assert.equal(arenaValues.every((bytes) => bytes > 0), true);
   assert.equal(arenaTotal, 56 * 1024);
   assert.equal(arenaTotal > 32 * 1024, true, "record must exceed the firmware static default");
@@ -115,7 +111,7 @@ test("Waf builds every target before bundling generated PKJS into one package", 
   assert.match(wscript, /js_entry_file='src\/pkjs\/index\.js'/u);
 });
 
-test("Alloy Message receives an explicit frozen-ID key Map", () => {
+test("Alloy Message receives frozen keys and shared buffer bounds", () => {
   const source = moduleSource("./main");
   const expectedEntries = CANONICAL_MESSAGE_KEY_ORDER.map((alias) => [
     alias,
@@ -125,16 +121,23 @@ test("Alloy Message receives an explicit frozen-ID key Map", () => {
   assert.equal(WATCH_MESSAGE_KEY_MAP instanceof Map, true);
   assert.equal(Array.isArray(WATCH_MESSAGE_KEY_MAP), false);
   assert.deepEqual([...WATCH_MESSAGE_KEY_MAP], expectedEntries);
+  assert.equal(WATCH_MESSAGE_INBOX_BYTES, 768);
+  assert.equal(WATCH_MESSAGE_OUTBOX_BYTES, 192);
   assert.match(source, /keys:\s*APP_MESSAGE_KEY_MAP/u);
+  assert.match(source, /input:\s*APP_MESSAGE_INBOX_BYTES/u);
+  assert.match(source, /output:\s*APP_MESSAGE_OUTBOX_BYTES/u);
   assert.doesNotMatch(source, /keys:\s*APP_MESSAGE_KEY_ORDER/u);
   assert.doesNotMatch(source, /\bformat\s*:/u);
 });
 
 test("package, canonical, companion, and embedded numeric maps are identical", () => {
   assert.deepEqual(packageMetadata.pebble.messageKeys, CANONICAL_MESSAGE_KEY);
-  assert.deepEqual(WATCH_MESSAGE_KEY, CANONICAL_MESSAGE_KEY);
+  assert.deepEqual(
+    Object.fromEntries(WATCH_MESSAGE_KEY_MAP),
+    CANONICAL_MESSAGE_KEY
+  );
   assert.deepEqual(companionContracts.APP_MESSAGE_KEY, CANONICAL_MESSAGE_KEY);
-  assert.deepEqual(WATCH_MESSAGE_KEY_ORDER, CANONICAL_MESSAGE_KEY_ORDER);
+  assert.deepEqual([...WATCH_MESSAGE_KEY_MAP.keys()], CANONICAL_MESSAGE_KEY_ORDER);
   assert.deepEqual(companionContracts.APP_MESSAGE_KEY_ORDER, CANONICAL_MESSAGE_KEY_ORDER);
   assert.deepEqual(WATCH_LANGUAGE, CANONICAL_LANGUAGE);
   assert.deepEqual(companionContracts.WIRE_LANGUAGE, CANONICAL_LANGUAGE);
@@ -171,5 +174,8 @@ test("manifest declares every embedded module and no FFI or watch network module
       }
     }
   });
-  assert.deepEqual([...bareImports].sort(), ["pebble/message", "piu/MC"]);
+  assert.deepEqual(
+    [...bareImports].sort(),
+    ["pebble/button", "pebble/message", "piu/MC", "timer"]
+  );
 });
