@@ -1,8 +1,8 @@
 #include <pebble.h>
 
 #define XS_STACK_BYTES (7U * 512U)
-#define XS_SLOT_BYTES (77U * 512U)
-#define XS_CHUNK_BYTES (14U * 1024U)
+#define XS_SLOT_BYTES (81U * 512U)
+#define XS_CHUNK_BYTES (12U * 1024U)
 #define XS_ARENA_TOTAL_BYTES \
   (XS_STACK_BYTES + XS_SLOT_BYTES + XS_CHUNK_BYTES)
 #define XS_ARENA_BUDGET_BYTES (56U * 1024U)
@@ -11,7 +11,7 @@
 #define XS_CREATION_FLAGS \
   (kModdableCreationFlagDebug | kModdableCreationFlagLogInstrumentation)
 #else
-#define XS_CREATION_FLAGS 0U
+#define XS_CREATION_FLAGS kModdableCreationFlagLogInstrumentation
 #endif
 
 #if (XS_STACK_BYTES == 0U) || (XS_SLOT_BYTES == 0U) || \

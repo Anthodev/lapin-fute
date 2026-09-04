@@ -2,19 +2,28 @@
 
 var contracts = require("./contracts");
 var CONFIG_STORAGE_KEY = "lapinFuteConfig";
-var LEGACY_CONFIG_STORAGE_KEY = "lapin-fute.configuration.v1";
 var RESULTS_STORAGE_KEY = "lapinFuteResults";
+// Phone-local cache version. Version 1 used the obsolete direction-based matcher.
+var CACHE_SCHEMA_VERSION = 2;
 var INVALID_KEY_STATUS_STORAGE_KEY = "lapinFuteInvalidKeyStatus";
 var CONFIG_RECORD_KEYS = ["schemaVersion", "favorites", "primApiKey", "keyStatus"];
-var LEGACY_CONFIG_RECORD_KEYS = ["schemaVersion", "favorites", "apiKey"];
-var RESULTS_RECORD_KEYS = ["schemaVersion", "results"];
-var RESULT_ENTRY_KEYS = ["favoriteId", "storedAt", "result"];
+var CACHE_RECORD_KEYS = ["schemaVersion", "overview", "trafficDetails"];
+var OVERVIEW_ENTRY_KEYS = [
+  "favoriteId",
+  "serviceId",
+  "resultStoredAt",
+  "result",
+  "trafficStoredAt",
+  "traffic",
+  "refreshError"
+];
+var TRAFFIC_DETAIL_ENTRY_KEYS = ["serviceId", "language", "storedAt", "result"];
 var INVALID_KEY_STATUS_RECORD_KEYS = [
   "schemaVersion",
   "keyStatus",
   "configurationFingerprint"
 ];
-var UPDATE_KEYS = ["schemaVersion", "favorites", "apiKeyUpdate"];
+var UPDATE_KEYS = ["schemaVersion", "favorites", "apiKeyUpdate", "forceFullSync"];
 var MAX_CLOSE_RESPONSE_LENGTH = 32768;
 var MAX_SAFE_INTEGER = 9007199254740991;
 var FAVORITE_STRING_KEYS = [
@@ -28,6 +37,11 @@ var FAVORITE_STRING_KEYS = [
   "lineColor",
   "lineTextColor"
 ];
+var ROUTING_STRING_KEYS = [
+  "monitoringRef",
+  "lineRef",
+  "destinationRef"
+];
 
 function emptyConfiguration() {
   return {
@@ -38,8 +52,21 @@ function emptyConfiguration() {
   };
 }
 
-function emptyResults() {
-  return { schemaVersion: contracts.SCHEMA_VERSION, results: [] };
+function copyConfiguration(value) {
+  return {
+    schemaVersion: contracts.SCHEMA_VERSION,
+    favorites: value.favorites.map(contracts.copyPhoneFavorite),
+    primApiKey: value.primApiKey,
+    keyStatus: value.keyStatus
+  };
+}
+
+function emptyCache() {
+  return {
+    schemaVersion: CACHE_SCHEMA_VERSION,
+    overview: [],
+    trafficDetails: []
+  };
 }
 
 function isFavoriteSecretFree(favorite, firstSecret, secondSecret) {
@@ -47,6 +74,13 @@ function isFavoriteSecretFree(favorite, firstSecret, secondSecret) {
   var value;
   for (field = 0; field < FAVORITE_STRING_KEYS.length; field += 1) {
     value = favorite[FAVORITE_STRING_KEYS[field]];
+    if (typeof value !== "string") continue;
+    if (typeof firstSecret === "string" && firstSecret.length > 0 && value.indexOf(firstSecret) !== -1) return false;
+    if (typeof secondSecret === "string" && secondSecret.length > 0 && value.indexOf(secondSecret) !== -1) return false;
+  }
+  if (!contracts.isObject(favorite.routing)) return true;
+  for (field = 0; field < ROUTING_STRING_KEYS.length; field += 1) {
+    value = favorite.routing[ROUTING_STRING_KEYS[field]];
     if (typeof value !== "string") continue;
     if (typeof firstSecret === "string" && firstSecret.length > 0 && value.indexOf(firstSecret) !== -1) return false;
     if (typeof secondSecret === "string" && secondSecret.length > 0 && value.indexOf(secondSecret) !== -1) return false;
@@ -81,7 +115,11 @@ function configurationFingerprint(value) {
   if (!isStoredConfiguration(value) || value.primApiKey === null) return null;
   source = JSON.stringify({
     schemaVersion: value.schemaVersion,
-    favorites: value.favorites.map(contracts.copyFavorite),
+    favorites: value.favorites.map(function (favorite) {
+      var projection = contracts.copyFavorite(favorite);
+      delete projection.sortOrder;
+      return projection;
+    }),
     primApiKey: value.primApiKey
   });
   for (index = 0; index < source.length; index += 1) {
@@ -126,7 +164,7 @@ function isStoredConfiguration(value) {
   if (!contracts.isObject(value)
       || !contracts.hasOnlyKeys(value, CONFIG_RECORD_KEYS)
       || value.schemaVersion !== contracts.SCHEMA_VERSION
-      || !contracts.isFavoriteList(value.favorites)) return false;
+      || !contracts.isPhoneFavoriteList(value.favorites)) return false;
   if (value.primApiKey === null) {
     return value.keyStatus === contracts.KEY_STATUS.MISSING;
   }
@@ -136,21 +174,26 @@ function isStoredConfiguration(value) {
     && areFavoritesSecretFree(value.favorites, value.primApiKey, null);
 }
 
-function isLegacyConfiguration(value) {
-  return contracts.isObject(value)
-    && contracts.hasOnlyKeys(value, LEGACY_CONFIG_RECORD_KEYS)
-    && value.schemaVersion === contracts.SCHEMA_VERSION
-    && contracts.isFavoriteList(value.favorites)
-    && (value.apiKey === null || contracts.isPersonalApiKey(value.apiKey))
-    && areFavoritesSecretFree(value.favorites, value.apiKey, null);
+function recoverStoredConfiguration(value) {
+  if (!contracts.isObject(value) || !Array.isArray(value.favorites)) return null;
+  // This freshly parsed record is private to restoration. Routing is replaceable
+  // catalog enrichment; preserve every other field for ordinary validation.
+  value.favorites.forEach(function (favorite) {
+    if (contracts.isObject(favorite)
+        && Object.prototype.hasOwnProperty.call(favorite, "routing")
+        && !contracts.isServiceRouting(favorite.routing)) delete favorite.routing;
+  });
+  return isStoredConfiguration(value) ? value : null;
 }
 
 function isConfigurationUpdate(value) {
   return contracts.isObject(value)
     && contracts.hasOnlyKeys(value, UPDATE_KEYS)
     && value.schemaVersion === contracts.SCHEMA_VERSION
-    && contracts.isFavoriteList(value.favorites)
-    && contracts.isApiKeyUpdate(value.apiKeyUpdate);
+    && contracts.isPhoneFavoriteList(value.favorites)
+    && contracts.isApiKeyUpdate(value.apiKeyUpdate)
+    && (!Object.prototype.hasOwnProperty.call(value, "forceFullSync")
+      || typeof value.forceFullSync === "boolean");
 }
 
 function isStoredAt(value) {
@@ -161,51 +204,177 @@ function isStoredAt(value) {
     && value <= MAX_SAFE_INTEGER;
 }
 
-function isResultEntry(value) {
-  return contracts.isObject(value)
-    && contracts.hasOnlyKeys(value, RESULT_ENTRY_KEYS)
-    && contracts.boundedString(value.favoriteId, contracts.LIMITS.idUtf8Bytes)
-    && isStoredAt(value.storedAt)
-    && contracts.isDepartureResult(value.result)
-    && value.favoriteId === value.result.favoriteId;
+function copyOverviewError(error) {
+  var copy = { code: error.code, occurredAt: error.occurredAt };
+  if (typeof error.retryAfterSeconds !== "undefined") {
+    copy.retryAfterSeconds = error.retryAfterSeconds;
+  }
+  return copy;
 }
 
-function isStoredResults(value) {
-  var seen = Object.create(null);
+function copyTrafficSummary(traffic) {
+  var copy = { state: traffic.state, checkedAt: traffic.checkedAt };
+  if (typeof traffic.sourceUpdatedAt !== "undefined") {
+    copy.sourceUpdatedAt = traffic.sourceUpdatedAt;
+  }
+  return copy;
+}
+
+function copyTrafficDetail(result, requestId, favoriteId) {
+  var copy = {
+    schemaVersion: contracts.SCHEMA_VERSION,
+    requestId: typeof requestId === "string" ? requestId : result.requestId,
+    favoriteId: typeof favoriteId === "string" ? favoriteId : result.favoriteId,
+    state: result.state,
+    checkedAt: result.checkedAt
+  };
+  if (typeof result.sourceUpdatedAt !== "undefined") copy.sourceUpdatedAt = result.sourceUpdatedAt;
+  if (typeof result.title !== "undefined") copy.title = result.title;
+  if (typeof result.text !== "undefined") copy.text = result.text;
+  if (typeof result.validFrom !== "undefined") copy.validFrom = result.validFrom;
+  if (typeof result.validUntil !== "undefined") copy.validUntil = result.validUntil;
+  return copy;
+}
+
+function departureSnapshot(result) {
+  var copy = contracts.copyDepartureResult(result);
+  delete copy.schemaVersion;
+  delete copy.requestId;
+  delete copy.favoriteId;
+  return copy;
+}
+
+function departureResult(snapshot, requestId, favoriteId) {
+  var result = {
+    schemaVersion: contracts.SCHEMA_VERSION,
+    requestId: requestId,
+    favoriteId: favoriteId,
+    fetchedAt: snapshot.fetchedAt,
+    freshness: snapshot.freshness,
+    departures: snapshot.departures
+  };
+  if (typeof snapshot.sourceUpdatedAt !== "undefined") {
+    result.sourceUpdatedAt = snapshot.sourceUpdatedAt;
+  }
+  return contracts.copyDepartureResult(result);
+}
+
+function isOverviewEntry(value) {
+  var hasResult;
+  var hasResultStoredAt;
+  var transferItem;
   if (!contracts.isObject(value)
-      || !contracts.hasOnlyKeys(value, RESULTS_RECORD_KEYS)
-      || value.schemaVersion !== contracts.SCHEMA_VERSION
-      || !Array.isArray(value.results)
-      || value.results.length > contracts.LIMITS.favorites) return false;
-  return value.results.every(function (entry) {
-    if (!isResultEntry(entry) || seen[entry.favoriteId]) return false;
-    seen[entry.favoriteId] = true;
+      || !contracts.hasOnlyKeys(value, OVERVIEW_ENTRY_KEYS)
+      || !Object.prototype.hasOwnProperty.call(value, "favoriteId")
+      || !Object.prototype.hasOwnProperty.call(value, "trafficStoredAt")
+      || !Object.prototype.hasOwnProperty.call(value, "traffic")
+      || !contracts.boundedString(value.favoriteId, contracts.LIMITS.idUtf8Bytes)
+      || (Object.prototype.hasOwnProperty.call(value, "serviceId")
+        && !contracts.boundedString(value.serviceId, contracts.LIMITS.idUtf8Bytes))
+      || !isStoredAt(value.trafficStoredAt)) return false;
+  hasResult = Object.prototype.hasOwnProperty.call(value, "result");
+  hasResultStoredAt = Object.prototype.hasOwnProperty.call(value, "resultStoredAt");
+  if (hasResult !== hasResultStoredAt
+      || (hasResult && (!isStoredAt(value.resultStoredAt)
+        || !contracts.isDepartureResult(value.result)
+        || value.result.favoriteId !== value.favoriteId))) return false;
+  transferItem = {
+    favoriteId: value.favoriteId,
+    traffic: value.traffic
+  };
+  if (hasResult) transferItem.snapshot = departureSnapshot(value.result);
+  if (Object.prototype.hasOwnProperty.call(value, "refreshError")) {
+    transferItem.refreshError = value.refreshError;
+  }
+  return contracts.isOverviewTransfer({
+    schemaVersion: contracts.SCHEMA_VERSION,
+    requestId: "cache-validation",
+    items: [transferItem]
+  });
+}
+
+function isTrafficDetailEntry(value) {
+  return contracts.isObject(value)
+    && contracts.hasOnlyKeys(value, TRAFFIC_DETAIL_ENTRY_KEYS)
+    && Object.keys(value).length === TRAFFIC_DETAIL_ENTRY_KEYS.length
+    && contracts.boundedString(value.serviceId, contracts.LIMITS.idUtf8Bytes)
+    && (value.language === contracts.WIRE_LANGUAGE.EN
+      || value.language === contracts.WIRE_LANGUAGE.FR)
+    && isStoredAt(value.storedAt)
+    && contracts.isTrafficDetailResult(value.result);
+}
+
+function isStoredCache(value) {
+  var overviewSeen = Object.create(null);
+  var trafficSeen = Object.create(null);
+  if (!contracts.isObject(value)
+      || !contracts.hasOnlyKeys(value, CACHE_RECORD_KEYS)
+      || Object.keys(value).length !== CACHE_RECORD_KEYS.length
+      || value.schemaVersion !== CACHE_SCHEMA_VERSION
+      || !Array.isArray(value.overview)
+      || value.overview.length > contracts.LIMITS.favorites
+      || !Array.isArray(value.trafficDetails)
+      || value.trafficDetails.length > contracts.LIMITS.favorites) return false;
+  if (!value.overview.every(function (entry) {
+    if (!isOverviewEntry(entry) || overviewSeen[entry.favoriteId]) return false;
+    overviewSeen[entry.favoriteId] = true;
+    return true;
+  })) return false;
+  return value.trafficDetails.every(function (entry) {
+    var key;
+    if (!isTrafficDetailEntry(entry)) return false;
+    key = entry.serviceId + "\n" + entry.language;
+    if (trafficSeen[key]) return false;
+    trafficSeen[key] = true;
     return true;
   });
 }
 
-function copyConfiguration(value) {
-  return {
-    schemaVersion: contracts.SCHEMA_VERSION,
-    favorites: value.favorites.map(contracts.copyFavorite),
-    primApiKey: value.primApiKey,
-    keyStatus: value.keyStatus
-  };
-}
-
-function copyResultEntry(entry, requestId) {
-  return {
+function copyOverviewEntry(entry, requestId) {
+  var copy = {
     favoriteId: entry.favoriteId,
+    trafficStoredAt: entry.trafficStoredAt,
+    traffic: copyTrafficSummary(entry.traffic)
+  };
+  if (Object.prototype.hasOwnProperty.call(entry, "serviceId")) {
+    copy.serviceId = entry.serviceId;
+  }
+  if (Object.prototype.hasOwnProperty.call(entry, "result")) {
+    copy.resultStoredAt = entry.resultStoredAt;
+    copy.result = contracts.copyDepartureResult(entry.result, requestId);
+  }
+  if (Object.prototype.hasOwnProperty.call(entry, "refreshError")) {
+    copy.refreshError = copyOverviewError(entry.refreshError);
+  }
+  return copy;
+}
+
+function copyTrafficDetailEntry(entry, requestId, favoriteId) {
+  return {
+    serviceId: entry.serviceId,
+    language: entry.language,
     storedAt: entry.storedAt,
-    result: contracts.copyDepartureResult(entry.result, requestId)
+    result: copyTrafficDetail(entry.result, requestId, favoriteId)
   };
 }
 
-function copyResults(value) {
+function copyCache(value) {
   return {
-    schemaVersion: contracts.SCHEMA_VERSION,
-    results: value.results.map(function (entry) { return copyResultEntry(entry); })
+    schemaVersion: CACHE_SCHEMA_VERSION,
+    overview: value.overview.map(function (entry) { return copyOverviewEntry(entry); }),
+    trafficDetails: value.trafficDetails.map(function (entry) {
+      return copyTrafficDetailEntry(entry);
+    })
   };
+}
+
+function cacheIsSecretFree(value, secret) {
+  if (typeof secret !== "string" || secret.length === 0) return true;
+  if (typeof value === "string") return value.indexOf(secret) === -1;
+  if (value === null || typeof value !== "object") return true;
+  return Object.keys(value).every(function (key) {
+    return key.indexOf(secret) === -1 && cacheIsSecretFree(value[key], secret);
+  });
 }
 
 function verifiedWrite(storage, key, value) {
@@ -272,44 +441,14 @@ function parseStored(storage, key) {
   }
 }
 
-function removeStored(storage, key) {
-  try {
-    if (typeof storage.removeItem === "function") storage.removeItem(key);
-  } catch (ignored) {
-    // A later successful load retries legacy cleanup.
-  }
-}
-
 function loadConfiguration(storage) {
   var current = parseStored(storage, CONFIG_STORAGE_KEY);
   var invalidMarker = parseStored(storage, INVALID_KEY_STATUS_STORAGE_KEY).value;
-  var legacy;
   var loaded;
-  var migrated;
-  if (current.present) {
-    if (!isStoredConfiguration(current.value)) return null;
-    removeStored(storage, LEGACY_CONFIG_STORAGE_KEY);
-    loaded = copyConfiguration(current.value);
-    if (invalidKeyStatusMatches(loaded, invalidMarker)) {
-      loaded.keyStatus = contracts.KEY_STATUS.INVALID;
-    }
-    return loaded;
-  }
-  legacy = parseStored(storage, LEGACY_CONFIG_STORAGE_KEY);
-  if (!legacy.present) return emptyConfiguration();
-  if (!isLegacyConfiguration(legacy.value)) return null;
-  migrated = {
-    schemaVersion: contracts.SCHEMA_VERSION,
-    favorites: legacy.value.favorites.map(contracts.copyFavorite),
-    primApiKey: legacy.value.apiKey,
-    keyStatus: legacy.value.apiKey === null
-      ? contracts.KEY_STATUS.MISSING
-      : contracts.KEY_STATUS.CONFIGURED
-  };
-  if (verifiedWrite(storage, CONFIG_STORAGE_KEY, migrated)) {
-    removeStored(storage, LEGACY_CONFIG_STORAGE_KEY);
-  }
-  loaded = copyConfiguration(migrated);
+  if (!current.present) return emptyConfiguration();
+  loaded = recoverStoredConfiguration(current.value);
+  if (loaded === null) return null;
+  loaded = copyConfiguration(loaded);
   if (invalidKeyStatusMatches(loaded, invalidMarker)) {
     loaded.keyStatus = contracts.KEY_STATUS.INVALID;
   }
@@ -344,74 +483,166 @@ function clearInvalidKeyStatus(storage) {
   return verifiedRemove(storage, INVALID_KEY_STATUS_STORAGE_KEY);
 }
 
-function pruneResults(value, favorites) {
-  var byFavorite = Object.create(null);
-  var normalized = emptyResults();
-  if (!isStoredResults(value) || !contracts.isFavoriteList(favorites)) return normalized;
-  value.results.forEach(function (entry) {
-    byFavorite[entry.favoriteId] = entry;
+function pruneCache(value, favorites) {
+  var overviewByFavorite = Object.create(null);
+  var services = Object.create(null);
+  var normalized = emptyCache();
+  if (!isStoredCache(value) || !contracts.isPhoneFavoriteList(favorites)) return normalized;
+  value.overview.forEach(function (entry) {
+    overviewByFavorite[entry.favoriteId] = entry;
   });
   favorites.forEach(function (favorite) {
-    if (byFavorite[favorite.id]) normalized.results.push(copyResultEntry(byFavorite[favorite.id]));
+    var entry = overviewByFavorite[favorite.id];
+    services[favorite.serviceId] = true;
+    if (!entry) return;
+    // A rebinding (routing change to another service) invalidates the cached
+    // overview of the old binding; unstamped entries are preserved.
+    if (Object.prototype.hasOwnProperty.call(entry, "serviceId")
+        && entry.serviceId !== favorite.serviceId) return;
+    normalized.overview.push(copyOverviewEntry(entry));
+  });
+  value.trafficDetails.forEach(function (entry) {
+    if (services[entry.serviceId]
+        && normalized.trafficDetails.length < contracts.LIMITS.favorites) {
+      normalized.trafficDetails.push(copyTrafficDetailEntry(entry));
+    }
   });
   return normalized;
 }
 
-function loadResults(storage, favorites) {
+function loadCache(storage, favorites) {
   var stored = parseStored(storage, RESULTS_STORAGE_KEY);
   var normalized;
-  if (!stored.present || !isStoredResults(stored.value)) return emptyResults();
-  normalized = pruneResults(stored.value, favorites);
+  if (!stored.present || !isStoredCache(stored.value)) return emptyCache();
+  normalized = pruneCache(stored.value, favorites);
   if (JSON.stringify(normalized) !== JSON.stringify(stored.value)) {
     verifiedWrite(storage, RESULTS_STORAGE_KEY, normalized);
   }
   return normalized;
 }
 
-function saveResults(storage, value) {
-  return isStoredResults(value)
-    && verifiedWrite(storage, RESULTS_STORAGE_KEY, copyResults(value));
+function saveCache(storage, value, secret) {
+  return isStoredCache(value)
+    && cacheIsSecretFree(value, secret)
+    && verifiedWrite(storage, RESULTS_STORAGE_KEY, copyCache(value));
 }
 
-function putResult(value, favorites, result, storedAt) {
+function mergeOverview(value, favorites, result, storedAt) {
+  var request;
+  var favoriteById = Object.create(null);
+  var existing = Object.create(null);
   var next;
-  var found = false;
-  var favoriteExists = false;
-  if (!isStoredResults(value)
-      || !contracts.isFavoriteList(favorites)
-      || !contracts.isDepartureResult(result)
+  if (!isStoredCache(value)
+      || !contracts.isPhoneFavoriteList(favorites)
+      || !isStoredAt(storedAt)
+      || !contracts.isObject(result)
+      || !Array.isArray(result.items)) return null;
+  request = {
+    schemaVersion: contracts.SCHEMA_VERSION,
+    requestId: result.requestId,
+    language: contracts.WIRE_LANGUAGE.EN,
+    favorites: favorites.filter(function (favorite) {
+      return result.items.some(function (item) {
+        return contracts.isObject(item) && item.favoriteId === favorite.id;
+      });
+    }).map(function (favorite) {
+      return { favoriteId: favorite.id, serviceId: favorite.serviceId };
+    })
+  };
+  if (!contracts.isOverviewResult(result, request)) return null;
+  favorites.forEach(function (favorite) { favoriteById[favorite.id] = favorite; });
+  next = pruneCache(value, favorites);
+  next.overview.forEach(function (entry) {
+    existing[entry.favoriteId] = entry;
+  });
+  result.items.forEach(function (item) {
+    var previous = existing[item.favoriteId];
+    var favorite = favoriteById[item.favoriteId];
+    var entry = {
+      favoriteId: item.favoriteId,
+      trafficStoredAt: storedAt,
+      traffic: copyTrafficSummary(item.traffic)
+    };
+    if (favorite) entry.serviceId = favorite.serviceId;
+    if (item.departures.status === "AVAILABLE") {
+      entry.resultStoredAt = storedAt;
+      entry.result = departureResult(
+        item.departures.data,
+        result.requestId,
+        item.favoriteId
+      );
+    } else {
+      if (previous && Object.prototype.hasOwnProperty.call(previous, "result")) {
+        entry.resultStoredAt = previous.resultStoredAt;
+        entry.result = contracts.copyDepartureResult(previous.result);
+      }
+      entry.refreshError = copyOverviewError(item.departures.error);
+    }
+    existing[item.favoriteId] = entry;
+  });
+  next.overview = favorites.filter(function (favorite) {
+    return Object.prototype.hasOwnProperty.call(existing, favorite.id);
+  }).map(function (favorite) {
+    return existing[favorite.id];
+  });
+  return isStoredCache(next) ? next : null;
+}
+
+function findOverview(value, favoriteId, requestId) {
+  var index;
+  if (!isStoredCache(value)) return null;
+  for (index = 0; index < value.overview.length; index += 1) {
+    if (value.overview[index].favoriteId === favoriteId) {
+      return copyOverviewEntry(value.overview[index], requestId);
+    }
+  }
+  return null;
+}
+
+function putTrafficDetail(value, favorites, request, result, storedAt) {
+  var next;
+  var favoriteMatches = false;
+  if (!isStoredCache(value)
+      || !contracts.isPhoneFavoriteList(favorites)
+      || !contracts.isTrafficDetailRequest(request)
+      || !contracts.isTrafficDetailResult(result)
+      || result.requestId !== request.requestId
+      || result.favoriteId !== request.favoriteId
       || !isStoredAt(storedAt)) return null;
   favorites.forEach(function (favorite) {
-    if (favorite.id === result.favoriteId) favoriteExists = true;
+    if (favorite.id === request.favoriteId
+        && favorite.serviceId === request.serviceId) favoriteMatches = true;
   });
-  if (!favoriteExists) return null;
-  next = pruneResults(value, favorites);
-  next.results = next.results.map(function (entry) {
-    if (entry.favoriteId !== result.favoriteId) return entry;
-    found = true;
-    return {
-      favoriteId: result.favoriteId,
-      storedAt: storedAt,
-      result: contracts.copyDepartureResult(result)
-    };
+  if (!favoriteMatches) return null;
+  next = pruneCache(value, favorites);
+  next.trafficDetails = next.trafficDetails.filter(function (entry) {
+    return entry.serviceId !== request.serviceId || entry.language !== request.language;
   });
-  if (!found) {
-    next.results.push({
-      favoriteId: result.favoriteId,
-      storedAt: storedAt,
-      result: contracts.copyDepartureResult(result)
-    });
-    next = pruneResults(next, favorites);
+  next.trafficDetails.push({
+    serviceId: request.serviceId,
+    language: request.language,
+    storedAt: storedAt,
+    result: copyTrafficDetail(result)
+  });
+  if (next.trafficDetails.length > contracts.LIMITS.favorites) {
+    next.trafficDetails = next.trafficDetails.slice(
+      next.trafficDetails.length - contracts.LIMITS.favorites
+    );
   }
-  return next;
+  return isStoredCache(next) ? next : null;
 }
 
-function findResult(value, favoriteId, requestId) {
+function findTrafficDetail(value, serviceId, language, requestId, favoriteId) {
   var index;
-  if (!isStoredResults(value)) return null;
-  for (index = 0; index < value.results.length; index += 1) {
-    if (value.results[index].favoriteId === favoriteId) {
-      return copyResultEntry(value.results[index], requestId);
+  if (!isStoredCache(value)) return null;
+  for (index = 0; index < value.trafficDetails.length; index += 1) {
+    if (value.trafficDetails[index].serviceId === serviceId
+        && value.trafficDetails[index].language === language) {
+      return copyTrafficDetailEntry(
+        value.trafficDetails[index],
+        requestId,
+        favoriteId
+      );
     }
   }
   return null;
@@ -436,7 +667,7 @@ function applyConfigurationUpdate(current, update) {
   }
   return {
     schemaVersion: contracts.SCHEMA_VERSION,
-    favorites: update.favorites.map(contracts.copyFavorite),
+    favorites: update.favorites.map(contracts.copyPhoneFavorite),
     primApiKey: primApiKey,
     keyStatus: keyStatus
   };
@@ -463,40 +694,50 @@ function parseCloseFragment(response) {
   if (!isConfigurationUpdate(parsed)) return null;
   return {
     schemaVersion: contracts.SCHEMA_VERSION,
-    favorites: parsed.favorites.map(contracts.copyFavorite),
+    favorites: parsed.favorites.map(contracts.copyPhoneFavorite),
     apiKeyUpdate: parsed.apiKeyUpdate.action === "REPLACE"
       ? { schemaVersion: contracts.SCHEMA_VERSION, action: "REPLACE", value: parsed.apiKeyUpdate.value }
-      : { schemaVersion: contracts.SCHEMA_VERSION, action: parsed.apiKeyUpdate.action }
+      : { schemaVersion: contracts.SCHEMA_VERSION, action: parsed.apiKeyUpdate.action },
+    forceFullSync: parsed.forceFullSync === true
   };
 }
 
 function configurationPageState(value, language) {
   return {
     hasKey: value.primApiKey !== null,
-    favorites: value.favorites.map(contracts.copyFavorite),
+    favorites: value.favorites.map(contracts.copyPhoneFavorite),
     language: typeof language === "string" && language.length > 0 ? language : "en"
   };
 }
 
 function configurationUrl(baseUrl, value, language) {
   var withoutFragment;
+  var encodedFragment;
   if (typeof baseUrl !== "string" || baseUrl.length === 0 || !isStoredConfiguration(value)) return null;
+  // The page bounds the encoded opening fragment at the same 32768 characters
+  // as this close channel; never emit an opening it would have to discard.
+  // Unpaired surrogates make encodeURIComponent throw (URIError) on some
+  // engines: such a configuration can never round-trip, so fail closed.
+  try {
+    encodedFragment = encodeURIComponent(JSON.stringify(configurationPageState(value, language)));
+  } catch (ignored) {
+    return null;
+  }
+  if (encodedFragment.length > MAX_CLOSE_RESPONSE_LENGTH) return null;
   withoutFragment = baseUrl.split("#")[0];
-  return withoutFragment + "#" + encodeURIComponent(JSON.stringify(configurationPageState(value, language)));
+  return withoutFragment + "#" + encodedFragment;
 }
 
 module.exports = {
   CONFIG_STORAGE_KEY: CONFIG_STORAGE_KEY,
-  LEGACY_CONFIG_STORAGE_KEY: LEGACY_CONFIG_STORAGE_KEY,
   RESULTS_STORAGE_KEY: RESULTS_STORAGE_KEY,
   INVALID_KEY_STATUS_STORAGE_KEY: INVALID_KEY_STATUS_STORAGE_KEY,
   MAX_CLOSE_RESPONSE_LENGTH: MAX_CLOSE_RESPONSE_LENGTH,
   emptyConfiguration: emptyConfiguration,
-  emptyResults: emptyResults,
+  emptyCache: emptyCache,
   isStoredConfiguration: isStoredConfiguration,
-  isLegacyConfiguration: isLegacyConfiguration,
   isConfigurationUpdate: isConfigurationUpdate,
-  isStoredResults: isStoredResults,
+  isStoredCache: isStoredCache,
   isFavoriteSecretFree: isFavoriteSecretFree,
   areFavoritesSecretFree: areFavoritesSecretFree,
   normalizeLanguage: normalizeLanguage,
@@ -505,11 +746,14 @@ module.exports = {
   saveConfiguration: saveConfiguration,
   saveInvalidConfiguration: saveInvalidConfiguration,
   clearInvalidKeyStatus: clearInvalidKeyStatus,
-  loadResults: loadResults,
-  saveResults: saveResults,
-  pruneResults: pruneResults,
-  putResult: putResult,
-  findResult: findResult,
+  loadCache: loadCache,
+  saveCache: saveCache,
+  cacheIsSecretFree: cacheIsSecretFree,
+  pruneCache: pruneCache,
+  mergeOverview: mergeOverview,
+  findOverview: findOverview,
+  putTrafficDetail: putTrafficDetail,
+  findTrafficDetail: findTrafficDetail,
   applyConfigurationUpdate: applyConfigurationUpdate,
   parseCloseFragment: parseCloseFragment,
   configurationPageState: configurationPageState,

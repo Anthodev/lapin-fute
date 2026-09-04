@@ -1,287 +1,111 @@
-import {
-  KEY_STATUS,
-  LIMITS,
-  SCHEMA_VERSION,
-  boundedString,
-  isWireLanguage,
-  utf8Bytes
-} from "./contracts.js";
+import { appearanceValid, field, fixed, hex, epochValid, nextEpoch, unsigned } from "./packed.js";
 
-export const WATCH_CONFIGURATION_KEY = "lapinFuteWatchConfig";
-export const WATCH_CONFIGURATION_MAX_BYTES = 8192;
-
-const STORAGE_FORMAT = "LFW1";
-const STORAGE_SEPARATOR = "\u001f";
-function owns(value, key) {
-  return Object.prototype.hasOwnProperty.call(value, key);
+const MANIFEST = "D2m", PENDING = "D2p", WATERMARK = "D2e";
+function recordKey(slot) { return "D2r" + fixed(slot, 1); }
+function put(storage, key, value) {
+  storage.setItem(key, value);
+  if (storage.getItem(key) !== value) throw Error("durability");
 }
-
-function validInteger(value) {
-  return typeof value === "number" && isFinite(value) && Math.floor(value) === value;
-}
-
-function validFavorite(favorite) {
-  if (!favorite || typeof favorite !== "object" || Array.isArray(favorite)) return false;
-  let keyCount = 0;
-  for (const key in favorite) {
-    if (!owns(favorite, key)) continue;
-    keyCount += 1;
-    if (key !== "id"
-        && key !== "serviceId"
-        && key !== "displayName"
-        && key !== "stopLabel"
-        && key !== "lineLabel"
-        && key !== "destinationLabel"
-        && key !== "sortOrder") return false;
+export function markPending(storage, epoch, generation) {
+  if (!epochValid(epoch) || !unsigned(generation) || !generation) return false;
+  const value = "E" + epoch + fixed(generation, 8);
+  let previous;
+  try { previous = storage.getItem(PENDING); } catch (_) { return false; }
+  try { put(storage, PENDING, value); return true; } catch (_) {
+    // A failed marker readback is still before the destructive seam.
+    try {
+      if (previous === null) storage.removeItem(PENDING);
+      else put(storage, PENDING, previous);
+    } catch (_) {}
+    return false;
   }
-  if (keyCount < 6
-      || keyCount > 7
-      || !owns(favorite, "id")
-      || !owns(favorite, "serviceId")
-      || !owns(favorite, "stopLabel")
-      || !owns(favorite, "lineLabel")
-      || !owns(favorite, "destinationLabel")
-      || !owns(favorite, "sortOrder")) return false;
-  return boundedString(favorite.id, LIMITS.idUtf8Bytes)
-    && boundedString(favorite.serviceId, LIMITS.idUtf8Bytes)
-    && boundedString(favorite.stopLabel, LIMITS.labelUtf8Bytes)
-    && boundedString(favorite.lineLabel, LIMITS.labelUtf8Bytes)
-    && boundedString(favorite.destinationLabel, LIMITS.labelUtf8Bytes)
-    && (favorite.displayName === undefined
-      || boundedString(favorite.displayName, LIMITS.labelUtf8Bytes))
-    && validInteger(favorite.sortOrder)
-    && favorite.sortOrder >= 0
-    && favorite.sortOrder < LIMITS.favorites;
 }
-
-function validFavorites(favorites) {
-  if (!Array.isArray(favorites) || favorites.length > LIMITS.favorites) return false;
-  for (let index = 0; index < favorites.length; index += 1) {
-    const favorite = favorites[index];
-    if (!validFavorite(favorite)) return false;
-    for (let previous = 0; previous < index; previous += 1) {
-      if (favorites[previous].id === favorite.id) return false;
+export function createEpochAllocator(storage, knownEpoch = "") {
+  let attempted = "";
+  return function allocate() {
+    try {
+      let value = storage.getItem(WATERMARK);
+      const manifest = storage.getItem(MANIFEST), pending = storage.getItem(PENDING);
+      const hasCommitted = typeof manifest === "string" && manifest.slice(0, 3) === "D2E";
+      const hasAdmitted = typeof pending === "string" && pending.charAt(0) === "E";
+      const committed = hasCommitted ? manifest.slice(3, 18) : "", admitted = hasAdmitted ? pending.slice(1, 16) : "";
+      if (value === null) {
+        if (knownEpoch || hasCommitted || hasAdmitted) return null;
+        value = "000000000000000";
+      }
+      if (!epochValid(value, true) || knownEpoch && value < knownEpoch
+          || hasCommitted && (!epochValid(committed) || value < committed)
+          || hasAdmitted && (!epochValid(admitted) || value < admitted)) return null;
+      if (attempted && value < attempted) value = attempted;
+      const next = nextEpoch(value);
+      if (!next) return null;
+      // A failed readback may still have written. Never reuse that attempt.
+      attempted = next;
+      put(storage, WATERMARK, next);
+      return next;
+    } catch (_) { return null; }
+  };
+}
+export function load(storage, profile) {
+  try {
+    if (storage.getItem(PENDING) !== null) return null;
+    const manifest = storage.getItem(MANIFEST);
+    if (typeof manifest !== "string" || manifest.slice(0, 3) !== "D2E") return null;
+    const epoch = manifest.slice(3, 18), start = 18;
+    if (!epochValid(epoch) || hex(manifest, start, 1) !== profile) return null;
+    const language = manifest.slice(start + 1, start + 3), key = hex(manifest, start + 3, 1);
+    const generation = hex(manifest, start + 4, 8), count = hex(manifest, start + 12, 1);
+    if ((language !== "en" && language !== "fr") || key < 0 || key > 2 || generation < 1 || count < 0 || count > 6 || manifest.length !== start + 13 + count) return null;
+    const records = [], slots = [];
+    for (let i = 0; i < count; i++) {
+      const slot = hex(manifest, start + 13 + i, 1);
+      if (slot < 0 || slot > 11 || slots.indexOf(slot) >= 0) return null;
+      const record = storage.getItem(recordKey(slot));
+      if (!appearanceValid(record, profile, language)) return null;
+      for (let j = 0; j < i; j++) if (field(records[j], 0) === field(record, 0)) return null;
+      records.push(record); slots.push(slot);
     }
-  }
-  return true;
+    return { records, slots, language, key, generation, epoch };
+  } catch (_) { return null; }
 }
-
-function validConfiguration(configuration) {
-  if (!configuration
-      || typeof configuration !== "object"
-      || Array.isArray(configuration)) return false;
-  let keyCount = 0;
-  for (const key in configuration) {
-    if (!owns(configuration, key)) continue;
-    keyCount += 1;
-    if (key !== "keyStatus" && key !== "language" && key !== "favorites") return false;
-  }
-  return keyCount === 3
-    && owns(configuration, "keyStatus")
-    && owns(configuration, "language")
-    && owns(configuration, "favorites")
-    && (configuration.keyStatus === KEY_STATUS.MISSING
-      || configuration.keyStatus === KEY_STATUS.CONFIGURED
-      || configuration.keyStatus === KEY_STATUS.INVALID)
-    && isWireLanguage(configuration.language)
-    && validFavorites(configuration.favorites);
-}
-
-function appendToken(parts, value) {
-  parts.push(String(value), STORAGE_SEPARATOR);
-}
-
-function appendString(parts, value) {
-  if (value === undefined) {
-    appendToken(parts, "-");
-    return;
-  }
-  appendToken(parts, value.length);
-  parts.push(value);
-}
-
-function matchesText(state, value) {
-  if (state.offset + value.length > state.serialized.length) return false;
-  for (let index = 0; index < value.length; index += 1) {
-    if (state.serialized.charCodeAt(state.offset + index) !== value.charCodeAt(index)) {
-      return false;
+export function persist(storage, candidate, oldSlots, oldRecords, profile) {
+  let oldManifest;
+  try { oldManifest = storage.getItem(MANIFEST); } catch (_) { return null; }
+  if (!epochValid(candidate.epoch)) return null;
+  const slots = [];
+  try {
+    for (let i = 0; i < candidate.records.length; i++) {
+      const existing = oldRecords.indexOf(candidate.records[i]);
+      let slot = existing < 0 ? -1 : oldSlots[existing];
+      if (slot === undefined) slot = -1;
+      if (slot < 0) {
+        for (let free = 0; free < 12; free++) {
+          if (oldSlots.indexOf(free) < 0 && slots.indexOf(free) < 0) { slot = free; break; }
+        }
+        if (slot < 0) throw Error("record slots");
+        put(storage, recordKey(slot), candidate.records[i]);
+      }
+      slots.push(slot);
     }
-  }
-  state.offset += value.length;
-  return true;
-}
-
-function matchesToken(state, value) {
-  return matchesText(state, String(value))
-    && matchesText(state, STORAGE_SEPARATOR);
-}
-
-function matchesString(state, value) {
-  return value === undefined
-    ? matchesToken(state, "-")
-    : matchesToken(state, value.length) && matchesText(state, value);
-}
-
-function matchesConfiguration(serialized, configuration) {
-  const state = { serialized, offset: 0 };
-  if (!matchesToken(state, STORAGE_FORMAT)
-      || !matchesToken(state, SCHEMA_VERSION)
-      || !matchesToken(state, configuration.keyStatus)
-      || !matchesToken(state, configuration.language)
-      || !matchesToken(state, configuration.favorites.length)) return false;
-  for (let index = 0; index < configuration.favorites.length; index += 1) {
-    const favorite = configuration.favorites[index];
-    if (!matchesToken(state, favorite.sortOrder)
-        || !matchesString(state, favorite.id)
-        || !matchesString(state, favorite.serviceId)
-        || !matchesString(state, favorite.displayName)
-        || !matchesString(state, favorite.stopLabel)
-        || !matchesString(state, favorite.lineLabel)
-        || !matchesString(state, favorite.destinationLabel)) return false;
-  }
-  return state.offset === serialized.length;
-}
-
-export function serializeWatchConfiguration(configuration) {
-  if (!validConfiguration(configuration)) return null;
-  const parts = [];
-  appendToken(parts, STORAGE_FORMAT);
-  appendToken(parts, SCHEMA_VERSION);
-  appendToken(parts, configuration.keyStatus);
-  appendToken(parts, configuration.language);
-  appendToken(parts, configuration.favorites.length);
-  for (let index = 0; index < configuration.favorites.length; index += 1) {
-    const favorite = configuration.favorites[index];
-    appendToken(parts, favorite.sortOrder);
-    appendString(parts, favorite.id);
-    appendString(parts, favorite.serviceId);
-    appendString(parts, favorite.displayName);
-    appendString(parts, favorite.stopLabel);
-    appendString(parts, favorite.lineLabel);
-    appendString(parts, favorite.destinationLabel);
-  }
-  const serialized = parts.join("");
-  return utf8Bytes(serialized) <= WATCH_CONFIGURATION_MAX_BYTES ? serialized : null;
-}
-
-function readToken(state) {
-  if (!state.valid) return null;
-  const end = state.serialized.indexOf(STORAGE_SEPARATOR, state.offset);
-  if (end === -1) {
-    state.valid = false;
-    return null;
-  }
-  const token = state.serialized.slice(state.offset, end);
-  state.offset = end + 1;
-  return token;
-}
-
-function readUnsigned(state) {
-  const token = readToken(state);
-  if (token === null || !/^(0|[1-9][0-9]*)$/u.test(token)) {
-    state.valid = false;
-    return null;
-  }
-  const value = Number(token);
-  if (!validInteger(value) || value < 0) {
-    state.valid = false;
-    return null;
-  }
-  return value;
-}
-
-function readString(state, optional = false) {
-  const token = readToken(state);
-  if (optional && token === "-") return undefined;
-  if (token === null || !/^(0|[1-9][0-9]*)$/u.test(token)) {
-    state.valid = false;
-    return null;
-  }
-  const length = Number(token);
-  const end = state.offset + length;
-  if (!validInteger(length) || length < 0 || end > state.serialized.length) {
-    state.valid = false;
-    return null;
-  }
-  const value = state.serialized.slice(state.offset, end);
-  state.offset = end;
-  return value;
-}
-
-export function deserializeWatchConfiguration(serialized) {
-  if (typeof serialized !== "string"
-      || utf8Bytes(serialized) > WATCH_CONFIGURATION_MAX_BYTES) return null;
-  const state = { serialized, offset: 0, valid: true };
-  if (readToken(state) !== STORAGE_FORMAT || readUnsigned(state) !== SCHEMA_VERSION) return null;
-  const keyStatus = readUnsigned(state);
-  const language = readToken(state);
-  const count = readUnsigned(state);
-  if (!state.valid || count === null || count > LIMITS.favorites) return null;
-  const configuration = { keyStatus, language, favorites: [] };
-  for (let index = 0; index < count; index += 1) {
-    const favorite = {
-      sortOrder: readUnsigned(state),
-      id: readString(state),
-      serviceId: readString(state)
-    };
-    const displayName = readString(state, true);
-    if (displayName !== undefined) favorite.displayName = displayName;
-    favorite.stopLabel = readString(state);
-    favorite.lineLabel = readString(state);
-    favorite.destinationLabel = readString(state);
-    configuration.favorites.push(favorite);
-  }
-  if (!state.valid || state.offset !== serialized.length
-      || !validConfiguration(configuration)) return null;
-  return configuration;
-}
-
-
-function canRead(storage) {
-  return storage && typeof storage.getItem === "function";
-}
-
-function canWrite(storage) {
-  return canRead(storage)
-    && typeof storage.setItem === "function"
-    && typeof storage.removeItem === "function";
-}
-
-export function loadWatchConfiguration(storage) {
-  if (!canRead(storage)) return null;
-  try {
-    return deserializeWatchConfiguration(storage.getItem(WATCH_CONFIGURATION_KEY));
+    let manifest = "D2E" + candidate.epoch + profile + candidate.language + candidate.key + fixed(candidate.generation, 8) + candidate.records.length;
+    for (let i = 0; i < slots.length; i++) manifest += fixed(slots[i], 1);
+    if (manifest !== oldManifest) put(storage, MANIFEST, manifest);
+    storage.removeItem(PENDING);
+    if (storage.getItem(PENDING) !== null) throw Error("pending removal");
   } catch (_) {
+    if (candidate.mode === 1) markPending(storage, candidate.epoch, candidate.generation);
+    else {
+      // Only the small manifest is rollback metadata, never a serialized dataset.
+      try {
+        if (oldManifest === null) storage.removeItem(MANIFEST);
+        else put(storage, MANIFEST, oldManifest);
+      } catch (_) { markPending(storage, candidate.epoch, candidate.generation); }
+    }
     return null;
   }
-}
-
-export function saveWatchConfiguration(storage, configuration) {
-  if (!canWrite(storage)) return false;
-
-  let previous = null;
-  let serialized = null;
-  let writeAttempted = false;
-  try {
-    serialized = serializeWatchConfiguration(configuration);
-    if (serialized === null) return false;
-    previous = storage.getItem(WATCH_CONFIGURATION_KEY);
-    writeAttempted = true;
-    storage.setItem(WATCH_CONFIGURATION_KEY, serialized);
-    serialized = null;
-    const written = storage.getItem(WATCH_CONFIGURATION_KEY);
-    if (typeof written === "string"
-        && matchesConfiguration(written, configuration)) return true;
-  } catch (_) {
-    // Restore the prior bytes below when the adapter is still writable.
+  // Unreachable per-record cleanup cannot invalidate the published manifest.
+  for (let i = 0; i < 12; i++) {
+    if (slots.indexOf(i) < 0) { try { storage.removeItem(recordKey(i)); } catch (_) {} }
   }
-
-  if (!writeAttempted) return false;
-  try {
-    if (previous === null) storage.removeItem(WATCH_CONFIGURATION_KEY);
-    else storage.setItem(WATCH_CONFIGURATION_KEY, previous);
-  } catch (_) {
-    // The caller still rolls back its in-memory configuration.
-  }
-  return false;
+  return slots;
 }

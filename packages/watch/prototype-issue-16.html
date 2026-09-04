@@ -1,0 +1,681 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Lapin Futé · Prototype trois écrans · Issue 16</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --paper: #f4f2e9;
+      --panel: #fffdf5;
+      --ink: #111512;
+      --muted: #59615b;
+      --rule: #b9b9ad;
+      --green: #217346;
+      --green-soft: #d9ebde;
+      --amber: #a95c00;
+      --amber-soft: #ffd990;
+      --red: #a62f37;
+      --red-soft: #f2b8bc;
+      --blue: #1769aa;
+      --blue-soft: #d9eafa;
+      --unknown: #59616a;
+      --unknown-soft: #e0e3e5;
+    }
+
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      background: var(--paper);
+      color: var(--ink);
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+    button { font: inherit; }
+    .page {
+      display: grid;
+      grid-template-columns: minmax(270px, 350px) minmax(620px, 1fr);
+      min-height: 100vh;
+    }
+    .brief {
+      padding: 38px 34px;
+      border-right: 1px solid var(--rule);
+      background: #fbfaf4;
+    }
+    .prototype-label {
+      display: inline-block;
+      border: 1px solid var(--red);
+      color: var(--red);
+      padding: 4px 7px;
+      font-size: 11px;
+      font-weight: 800;
+      letter-spacing: .08em;
+      text-transform: uppercase;
+    }
+    h1 {
+      max-width: 290px;
+      margin: 22px 0 14px;
+      font-size: clamp(36px, 4vw, 58px);
+      line-height: .94;
+      letter-spacing: -.055em;
+    }
+    .lede {
+      color: var(--muted);
+      font-size: 14px;
+      line-height: 1.55;
+    }
+    .flow-map {
+      margin: 28px 0;
+      padding: 0;
+      list-style: none;
+      counter-reset: flow;
+    }
+    .flow-map li {
+      display: grid;
+      grid-template-columns: 32px 1fr;
+      gap: 10px;
+      align-items: start;
+      padding: 13px 0;
+      border-top: 1px solid var(--rule);
+    }
+    .flow-map li::before {
+      counter-increment: flow;
+      content: "0" counter(flow);
+      color: var(--muted);
+      font: 800 11px/1.4 ui-monospace, monospace;
+    }
+    .flow-map strong { display: block; font-size: 14px; }
+    .flow-map span { display: block; margin-top: 3px; color: var(--muted); font-size: 12px; line-height: 1.35; }
+    .decision {
+      border-left: 4px solid var(--green);
+      padding: 4px 0 4px 12px;
+    }
+    .decision strong { display: block; font-size: 13px; }
+    .decision p { margin: 5px 0 0; color: var(--muted); font-size: 12px; line-height: 1.45; }
+
+    .workspace { padding: 32px 40px 44px; }
+    .controls {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 16px 24px;
+      padding-bottom: 20px;
+      border-bottom: 1px solid var(--rule);
+    }
+    fieldset { min-width: 0; margin: 0; padding: 0; border: 0; }
+    legend {
+      margin-bottom: 7px;
+      color: var(--muted);
+      font: 800 10px/1 ui-monospace, monospace;
+      letter-spacing: .1em;
+      text-transform: uppercase;
+    }
+    .button-group { display: flex; flex-wrap: wrap; gap: 5px; }
+    .control {
+      border: 1px solid var(--rule);
+      background: var(--panel);
+      color: var(--ink);
+      padding: 7px 9px;
+      font-size: 11px;
+      font-weight: 750;
+      cursor: pointer;
+    }
+    .control[aria-pressed="true"] { border-color: var(--ink); background: var(--ink); color: white; }
+    .control:focus-visible, .watch-key:focus-visible { outline: 3px solid var(--blue); outline-offset: 2px; }
+
+    .stage {
+      display: grid;
+      grid-template-columns: minmax(410px, 1fr) minmax(260px, 360px);
+      gap: 42px;
+      align-items: start;
+      padding-top: 34px;
+    }
+    .simulator {
+      display: grid;
+      grid-template-columns: auto 84px;
+      justify-content: center;
+      gap: 18px;
+      align-items: center;
+      min-height: 450px;
+    }
+    .device {
+      position: relative;
+      overflow: hidden;
+      border: 10px solid #151915;
+      background: #f7f6ef;
+      box-shadow: 0 0 0 2px #63675f;
+      color: #0e110f;
+      font-family: Arial, Helvetica, sans-serif;
+    }
+    .device.emery { width: 300px; height: 342px; border-radius: 14px; }
+    .device.gabbro { width: 350px; height: 350px; border-radius: 50%; }
+    .watch-screen { width: 100%; height: 100%; overflow: hidden; background: #f7f6ef; }
+
+    .statusbar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      min-height: 34px;
+      padding: 0 10px;
+      border-bottom: 1px solid #9ea298;
+      font-size: 12px;
+      font-weight: 750;
+    }
+    .statusbar .fresh { color: var(--green); }
+    .statusbar .fresh.stale { color: var(--amber); }
+    .device.gabbro .statusbar {
+      width: 158px;
+      min-height: 57px;
+      margin: 0 auto;
+      padding: 12px 0 5px;
+      flex-direction: column-reverse;
+      justify-content: center;
+      gap: 2px;
+      text-align: center;
+      font-size: 12px;
+    }
+    .device.gabbro .statusbar time { font-weight: 850; }
+
+    .overview {
+      display: flex;
+      flex-direction: column;
+      height: calc(100% - 34px);
+      padding: 4px 8px 7px;
+    }
+    .device.gabbro .overview {
+      height: calc(100% - 57px);
+      padding: 4px 47px 18px;
+    }
+    .favorite-row {
+      display: grid;
+      grid-template-columns: 44px minmax(0, 1fr) 46px 16px;
+      gap: 7px;
+      align-items: center;
+      min-height: 66px;
+      padding: 5px 6px;
+      border-bottom: 1px solid #b7bab2;
+    }
+    .device.gabbro .favorite-row { min-height: 65px; padding-inline: 4px; }
+    .favorite-row.focused { background: #111512; color: white; border-color: #111512; }
+    .favorite-copy { min-width: 0; }
+    .favorite-name { overflow: hidden; font-size: 14px; font-weight: 850; line-height: 1.15; text-overflow: ellipsis; white-space: nowrap; }
+    .favorite-direction { overflow: hidden; margin-top: 3px; color: #59615b; font-size: 10px; line-height: 1.15; text-overflow: ellipsis; white-space: nowrap; }
+    .focused .favorite-direction { color: #d7dbd5; }
+    .favorite-countdown { text-align: right; font-size: 25px; font-weight: 900; line-height: 1; letter-spacing: -.05em; }
+    .favorite-countdown small { margin-left: 1px; font-size: 9px; letter-spacing: 0; }
+    .line-chip {
+      display: inline-grid;
+      place-items: center;
+      min-width: 39px;
+      min-height: 27px;
+      border: 2px solid currentColor;
+      padding: 2px 4px;
+      background: #fffdf5;
+      color: #3154a4;
+      font-size: 12px;
+      font-weight: 900;
+      line-height: 1;
+      letter-spacing: .03em;
+    }
+    .line-chip.rer { color: #d13e4d; }
+    .line-chip.tram { color: #168c83; }
+    .focused .line-chip { border-color: white; background: transparent; color: white; }
+    .state-icon { width: 16px; height: 16px; display: inline-grid; place-items: center; }
+    .state-icon svg { width: 16px; height: 16px; display: block; }
+    .refresh-row {
+      display: flex;
+      flex: 1 0 42px;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      min-height: 42px;
+      margin-top: 3px;
+      font-size: 13px;
+      font-weight: 850;
+    }
+    .refresh-row.focused { background: #111512; color: white; }
+    .refresh-row svg { width: 19px; height: 19px; }
+    .device.gabbro .refresh-row { flex: 0 0 52px; min-height: 52px; }
+    .overview-progress { display: block; margin-left: 4px; color: var(--amber); font-size: 9px; font-weight: 800; }
+
+    .detail-screen, .traffic-screen { display: flex; flex-direction: column; height: calc(100% - 34px); }
+    .device.gabbro .detail-screen, .device.gabbro .traffic-screen { height: calc(100% - 57px); padding: 0 45px 18px; }
+    .detail-route {
+      display: grid;
+      grid-template-columns: auto minmax(0, 1fr);
+      gap: 8px;
+      align-items: center;
+      margin: 7px 10px 0;
+      padding-bottom: 6px;
+      border-bottom: 1px solid #b7bab2;
+    }
+    .device.gabbro .detail-route { margin-inline: 0; }
+    .route-stop { overflow: hidden; font-size: 15px; font-weight: 900; line-height: 1.1; text-overflow: ellipsis; white-space: nowrap; }
+    .route-direction { overflow: hidden; margin-top: 3px; color: var(--muted); font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
+    .next-departure {
+      display: flex;
+      flex: 1 1 auto;
+      min-height: 82px;
+      align-items: center;
+      justify-content: center;
+      padding-top: 2px;
+    }
+    .next-value { font-size: 76px; font-weight: 950; line-height: .85; letter-spacing: -.08em; }
+    .next-unit { align-self: flex-end; margin: 0 0 17px 5px; font-size: 12px; font-weight: 900; }
+    .following-list { margin: 0 10px 7px; border-top: 1px solid #b7bab2; }
+    .device.gabbro .following-list { margin-inline: 0; }
+    .following-row { display: flex; justify-content: space-between; gap: 8px; padding: 5px 2px; font-size: 12px; }
+    .following-row + .following-row { border-top: 1px solid #d3d4ce; }
+    .following-row strong { font-size: 17px; line-height: 1; }
+    .departure-delay { color: var(--amber); font-size: 9px; font-weight: 850; }
+    .traffic-band {
+      display: grid;
+      grid-template-columns: 18px minmax(0, 1fr) 9px;
+      gap: 7px;
+      align-items: center;
+      min-height: 43px;
+      margin-top: auto;
+      padding: 5px 10px;
+      border-top: 2px solid currentColor;
+      font-size: 12px;
+      font-weight: 900;
+    }
+    .device.gabbro .traffic-band { min-height: 40px; margin-inline: 4px; border: 2px solid currentColor; border-radius: 20px; padding-inline: 11px; }
+    .traffic-band.normal { background: var(--green-soft); color: #174d31; }
+    .traffic-band.delayed { background: var(--amber-soft); color: #683900; }
+    .traffic-band.stopped { background: var(--red-soft); color: #681d23; }
+    .traffic-band.unknown { background: var(--unknown-soft); color: #343b40; }
+    .traffic-band svg { width: 18px; height: 18px; }
+    .chevron { width: 8px; height: 8px; border-top: 2px solid currentColor; border-right: 2px solid currentColor; transform: rotate(45deg); }
+
+    .traffic-screen { padding: 8px 12px 10px; text-align: center; }
+    .traffic-hero { display: grid; place-items: center; gap: 4px; }
+    .traffic-hero .large-icon { width: 46px; height: 46px; }
+    .traffic-title { margin: 0; font-size: 19px; line-height: 1.05; }
+    .traffic-validity { color: var(--muted); font-size: 9px; font-weight: 750; }
+    .traffic-message {
+      display: grid;
+      place-items: center;
+      flex: 1 1 auto;
+      min-height: 0;
+      margin-top: 7px;
+      padding: 8px 6px;
+      border-top: 1px solid #b7bab2;
+      border-bottom: 1px solid #b7bab2;
+      font-size: 12px;
+      font-weight: 700;
+      line-height: 1.25;
+    }
+    .traffic-page { min-height: 14px; margin-top: 4px; color: var(--muted); font: 800 9px/1 ui-monospace, monospace; }
+    .traffic-screen.normal .traffic-title { color: var(--green); }
+    .traffic-screen.delayed .traffic-title { color: var(--amber); }
+    .traffic-screen.stopped .traffic-title { color: var(--red); }
+    .traffic-screen.unknown .traffic-title { color: var(--unknown); }
+
+    .exceptional {
+      display: grid;
+      grid-template-rows: auto 1fr auto;
+      height: 100%;
+      padding: 13px 16px 16px;
+      text-align: center;
+    }
+    .device.gabbro .exceptional { padding: 30px 48px 35px; }
+    .exceptional-brand { font-size: 14px; font-weight: 900; }
+    .exceptional-body { display: grid; place-items: center; align-content: center; gap: 12px; }
+    .exceptional-icon { width: 52px; height: 52px; color: var(--blue); }
+    .exceptional h2 { margin: 0; font-size: 19px; line-height: 1.05; }
+    .exceptional p { margin: 0; max-width: 230px; font-size: 13px; line-height: 1.35; }
+    .exceptional-hint { color: var(--muted); font-size: 10px; font-weight: 750; }
+
+    .watch-keys { display: grid; gap: 9px; }
+    .watch-key {
+      width: 84px;
+      border: 1px solid #9ea298;
+      border-left: 5px solid #111512;
+      background: var(--panel);
+      padding: 8px 7px;
+      color: var(--ink);
+      text-align: left;
+      cursor: pointer;
+    }
+    .watch-key strong { display: block; font-size: 10px; }
+    .watch-key span { display: block; margin-top: 2px; color: var(--muted); font-size: 9px; }
+
+    .notes { display: grid; gap: 18px; }
+    .note { padding-top: 12px; border-top: 3px solid var(--ink); }
+    .note.contract { border-color: var(--amber); }
+    .note.legal { border-color: var(--red); }
+    .note h2 { margin: 0 0 7px; font-size: 14px; }
+    .note p, .note li { color: var(--muted); font-size: 12px; line-height: 1.45; }
+    .note p { margin: 0; }
+    .note ul { margin: 7px 0 0; padding-left: 18px; }
+    .note a { color: var(--blue); }
+    .readout { overflow-wrap: anywhere; color: var(--muted); font: 10px/1.5 ui-monospace, monospace; }
+
+    @media (max-width: 980px) {
+      .page { grid-template-columns: 1fr; }
+      .brief { border-right: 0; border-bottom: 1px solid var(--rule); }
+      .stage { grid-template-columns: 1fr; }
+    }
+    @media (max-width: 620px) {
+      .workspace { padding-inline: 14px; }
+      .simulator { transform: scale(.86); transform-origin: top center; margin-bottom: -55px; }
+    }
+  </style>
+</head>
+<body>
+  <main class="page">
+    <section class="brief" aria-labelledby="page-title">
+      <span class="prototype-label">Prototype · non production</span>
+      <h1 id="page-title">Aperçu → Départs → État de la ligne</h1>
+      <p class="lede">Une lecture progressive : l'essentiel pour tous les favoris, le détail d'un trajet, puis le message trafic complet.</p>
+      <ol class="flow-map">
+        <li><div><strong>Aperçu semi-riche</strong><span>Un prochain départ par favori, avec un signal uniquement si l'état de la ligne mérite l'attention.</span></div></li>
+        <li><div><strong>Détail des départs</strong><span>Le prochain passage domine. La bande basse résume l'état de la ligne et ouvre le niveau suivant.</span></div></li>
+        <li><div><strong>État de la ligne</strong><span>Confirmation normale ou message IDFM paginé, sans réduire le texte jusqu'à l'illisibilité.</span></div></li>
+      </ol>
+      <aside class="decision">
+        <strong>Direction cohérente, avec extension fonctionnelle</strong>
+        <p>Le parcours est solide pour Pebble. Il nécessite toutefois des résumés par favori, une actualisation globale et un nouveau contrat d'information trafic.</p>
+      </aside>
+    </section>
+
+    <section class="workspace" aria-label="Prototype interactif de la montre">
+      <div class="controls">
+        <fieldset><legend>Plateforme</legend><div class="button-group">
+          <button class="control" data-group="platform" data-value="emery" aria-pressed="true">Emery · 200×228</button>
+          <button class="control" data-group="platform" data-value="gabbro" aria-pressed="false">Gabbro · 260×260</button>
+        </div></fieldset>
+        <fieldset><legend>Langue</legend><div class="button-group">
+          <button class="control" data-group="language" data-value="fr" aria-pressed="true">FR</button>
+          <button class="control" data-group="language" data-value="en" aria-pressed="false">EN</button>
+        </div></fieldset>
+        <fieldset><legend>Écran</legend><div class="button-group">
+          <button class="control" data-group="screen" data-value="overview" aria-pressed="true">APERÇU</button>
+          <button class="control" data-group="screen" data-value="detail" aria-pressed="false">DÉPARTS</button>
+          <button class="control" data-group="screen" data-value="traffic" aria-pressed="false">TRAFIC</button>
+        </div></fieldset>
+        <fieldset><legend>Données</legend><div class="button-group">
+          <button class="control" data-group="content" data-value="READY" aria-pressed="true">READY</button>
+          <button class="control" data-group="content" data-value="REFRESHING" aria-pressed="false">REFRESHING</button>
+          <button class="control" data-group="content" data-value="STALE" aria-pressed="false">STALE</button>
+          <button class="control" data-group="content" data-value="LOADING" aria-pressed="false">LOADING</button>
+          <button class="control" data-group="content" data-value="UNCONFIGURED" aria-pressed="false">UNCONFIGURED</button>
+          <button class="control" data-group="content" data-value="UNAVAILABLE" aria-pressed="false">UNAVAILABLE</button>
+        </div></fieldset>
+        <fieldset><legend>État de ligne</legend><div class="button-group">
+          <button class="control" data-group="traffic" data-value="NORMAL" aria-pressed="true">NORMAL</button>
+          <button class="control" data-group="traffic" data-value="DELAYED" aria-pressed="false">DELAYED</button>
+          <button class="control" data-group="traffic" data-value="STOPPED" aria-pressed="false">STOPPED</button>
+          <button class="control" data-group="traffic" data-value="UNKNOWN" aria-pressed="false">UNKNOWN</button>
+        </div></fieldset>
+        <fieldset><legend>Résistance</legend><div class="button-group">
+          <button id="long-labels" class="control" aria-pressed="false">Libellés longs</button>
+        </div></fieldset>
+      </div>
+
+      <div class="stage">
+        <div>
+          <div class="simulator">
+            <div id="device" class="device emery"><div id="watch-screen" class="watch-screen" aria-live="polite"></div></div>
+            <div class="watch-keys" aria-label="Boutons de la montre">
+              <button class="watch-key" data-action="up"><strong>HAUT</strong><span>Flèche ↑</span></button>
+              <button class="watch-key" data-action="select"><strong>SELECT</strong><span>Entrée</span></button>
+              <button class="watch-key" data-action="down"><strong>BAS</strong><span>Flèche ↓</span></button>
+              <button class="watch-key" data-action="back"><strong>RETOUR</strong><span>Échap.</span></button>
+            </div>
+          </div>
+          <p id="readout" class="readout"></p>
+        </div>
+
+        <div class="notes">
+          <section class="note"><h2>Interaction proposée</h2><p id="interaction-note"></p></section>
+          <section class="note contract"><h2>Contrats à faire évoluer</h2><ul>
+            <li>résumé et état indépendants pour chaque favori ;</li>
+            <li>opération bornée « actualiser tout » ;</li>
+            <li>état de ligne autoritatif, fraîcheur et message borné ;</li>
+            <li>Select et Retour deviennent de la navigation contextuelle.</li>
+          </ul></section>
+          <section class="note"><h2>Source trafic envisagée</h2><p>L'API PRIM <a href="https://prim.iledefrance-mobilites.fr/fr/apis/idfm-disruptions_bulk">Messages Info Trafic — Requête globale</a> publie lignes impactées, sévérité, titre, message et périodes. « Normal » n'est valide qu'après une réponse complète et récente ; une erreur donne « inconnu ». Un départ retardé ne suffit jamais à déclarer toute la ligne retardée.</p></section>
+          <section class="note legal"><h2>Pastilles de ligne</h2><p>Les pastilles affichées sont propres au prototype. Les droits de redistribution et de modification des pictogrammes officiels ne sont pas suffisamment explicites. Le protocole montre actuel ne transporte par ailleurs ni mode ni couleurs de ligne.</p></section>
+          <section class="note"><h2>Chargement</h2><p>Le plein écran avec sablier est réservé au démarrage sans aucun résumé utilisable. Avec du cache, l'aperçu reste affiché pendant l'actualisation et les succès partiels restent disponibles.</p></section>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <script>
+    (() => {
+      const copy = {
+        fr: {
+          time: "09:42", ready: "à jour", refreshing: "actualisation", stale: "ancien",
+          minute: "min", following: "Puis", refreshAll: "Tout actualiser", updating: "Actualisation…",
+          normal: "Trafic normal", delayed: "Retards sur la ligne", stopped: "Trafic interrompu", unknown: "État du trafic indisponible",
+          normalTitle: "Aucune perturbation signalée", normalMessage: "Dernière vérification à 09:42.",
+          delayedTitle: "Retards sur la ligne", delayedValidity: "En cours · reprise estimée 10:30",
+          delayedPages: ["Des retards sont constatés sur l'ensemble de la ligne en raison d'un incident d'exploitation.", "Prévoyez un temps de parcours supplémentaire. Vérifiez votre correspondance avant le départ."],
+          stoppedTitle: "Trafic interrompu", stoppedValidity: "Entre République et Balard · jusqu'à 11:15",
+          stoppedPages: ["Le trafic est interrompu entre République et Balard à la suite d'un incident voyageur.", "Une reprise progressive est estimée à 11:15. Empruntez les itinéraires alternatifs indiqués en station."],
+          unknownTitle: "Information trafic indisponible", unknownMessage: "Impossible de confirmer l'état actuel de la ligne. Les horaires restent affichés séparément.",
+          loadingTitle: "Rafraîchissement des informations en cours", loadingBody: "Premier chargement des favoris et de leurs prochains départs.",
+          unconfiguredTitle: "Configuration requise", unconfiguredBody: "Ajoutez votre clé PRIM et au moins un favori dans les options du téléphone.",
+          unavailableTitle: "Départs indisponibles", unavailableBody: "La connexion n'a pas permis de récupérer les informations.",
+          backExit: "Retour quitte l'application.", retry: "Select · Réessayer", automatic: "La configuration sera détectée automatiquement.",
+          departedDelayed: "Départ retardé", positions: "favoris"
+        },
+        en: {
+          time: "09:42", ready: "up to date", refreshing: "updating", stale: "old data",
+          minute: "min", following: "Then", refreshAll: "Refresh all", updating: "Updating…",
+          normal: "Normal traffic", delayed: "Delays on line", stopped: "Service interrupted", unknown: "Traffic status unavailable",
+          normalTitle: "No disruption reported", normalMessage: "Last checked at 09:42.",
+          delayedTitle: "Delays on line", delayedValidity: "Ongoing · estimated recovery 10:30",
+          delayedPages: ["Delays are affecting the whole line because of an operating incident.", "Allow extra journey time. Check your connection before leaving."],
+          stoppedTitle: "Service interrupted", stoppedValidity: "Between République and Balard · until 11:15",
+          stoppedPages: ["Service is interrupted between République and Balard following a passenger incident.", "Progressive recovery is estimated at 11:15. Use the alternatives shown in stations."],
+          unknownTitle: "Traffic information unavailable", unknownMessage: "The current line status cannot be confirmed. Departure times remain separate.",
+          loadingTitle: "Refreshing information", loadingBody: "First load of favorites and their next departures.",
+          unconfiguredTitle: "Configuration required", unconfiguredBody: "Add your PRIM key and at least one favorite in phone options.",
+          unavailableTitle: "Departures unavailable", unavailableBody: "The connection could not retrieve the information.",
+          backExit: "Back exits the app.", retry: "Select · Retry", automatic: "Configuration will be detected automatically.",
+          departedDelayed: "Departure delayed", positions: "favorites"
+        }
+      };
+
+      const data = {
+        fr: [
+          ["M 8", "République", "Balard", "2", ["6", "11", "18"]],
+          ["RER A", "Nation", "Saint-Germain-en-Laye", "4", ["11", "19", "27"]],
+          ["T 3a", "Porte de Vincennes", "Pont du Garigliano", "7", ["14", "22", "31"]]
+        ],
+        en: [
+          ["M 8", "République", "Balard", "2", ["6", "11", "18"]],
+          ["RER A", "Nation", "Saint-Germain-en-Laye", "4", ["11", "19", "27"]],
+          ["T 3a", "Porte de Vincennes", "Pont du Garigliano", "7", ["14", "22", "31"]]
+        ]
+      };
+
+      const state = {
+        platform: "emery", language: "fr", screen: "overview", content: "READY", traffic: "NORMAL",
+        focus: 0, trafficPage: 0, longLabels: false, lastAction: "—"
+      };
+
+      const device = document.querySelector("#device");
+      const screen = document.querySelector("#watch-screen");
+      const readout = document.querySelector("#readout");
+      const interactionNote = document.querySelector("#interaction-note");
+
+      function icon(kind, klass = "") {
+        const common = `class="${klass}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"`;
+        if (kind === "check") return `<svg ${common}><circle cx="12" cy="12" r="9"/><path d="m7.5 12.5 3 3 6-7"/></svg>`;
+        if (kind === "delay") return `<svg ${common}><circle cx="12" cy="12" r="9"/><path d="M12 7v6l4 2"/></svg>`;
+        if (kind === "stop") return `<svg ${common}><circle cx="12" cy="12" r="9"/><path d="M7 17 17 7"/></svg>`;
+        if (kind === "unknown") return `<svg ${common}><circle cx="12" cy="12" r="9"/><path d="M9.5 9a2.7 2.7 0 0 1 5.2 1c0 2-2.7 2.2-2.7 4"/><path d="M12 18h.01"/></svg>`;
+        if (kind === "refresh") return `<svg ${common}><path d="M20 11a8 8 0 1 0 1 5"/><path d="M20 4v7h-7"/></svg>`;
+        if (kind === "hourglass") return `<svg ${common}><path d="M7 3h10M7 21h10M8 3c0 5 2 6 4 8-2 2-4 3-4 8M16 3c0 5-2 6-4 8 2 2 4 3 4 8"/></svg>`;
+        if (kind === "key") return `<svg ${common}><circle cx="8" cy="9" r="4"/><path d="m11 12 8 8m-3-3 2-2m-5-1 2-2"/></svg>`;
+        return `<svg ${common}><path d="M12 3 2.5 20h19L12 3Z"/><path d="M12 9v5m0 3h.01"/></svg>`;
+      }
+
+      function trafficKind() { return state.traffic.toLowerCase(); }
+      function trafficIcon() {
+        if (state.traffic === "NORMAL") return icon("check");
+        if (state.traffic === "DELAYED") return icon("delay");
+        if (state.traffic === "STOPPED") return icon("stop");
+        return icon("unknown");
+      }
+      function chip(line) {
+        const klass = line.startsWith("RER") ? "rer" : line.startsWith("T") ? "tram" : "metro";
+        return `<span class="line-chip ${klass}">${line}</span>`;
+      }
+      function contentLabel(c) {
+        if (state.content === "REFRESHING") return c.refreshing;
+        if (state.content === "STALE") return c.stale;
+        return c.ready;
+      }
+      function statusbar(c, context) {
+        const stale = state.content === "STALE" ? " stale" : "";
+        return `<header class="statusbar"><span>${context} · <span class="fresh${stale}">${contentLabel(c)}</span></span><time>${c.time}</time></header>`;
+      }
+      function favorites() {
+        const base = data[state.language].map(item => [item[0], item[1], item[2], item[3], [...item[4]]]);
+        if (!state.longLabels) return base;
+        base[0][1] = state.language === "fr" ? "Créteil – Pointe du Lac, quai direction Paris" : "Créteil – Pointe du Lac, platform towards Paris";
+        base[0][2] = state.language === "fr" ? "Balard via République et Opéra" : "Balard via République and Opéra";
+        base[2][1] = state.language === "fr" ? "Porte de Vincennes – terminus provisoire" : "Porte de Vincennes – temporary terminus";
+        return base;
+      }
+
+      function exceptional(c) {
+        let kind = "warning";
+        let title = c.unavailableTitle;
+        let body = c.unavailableBody;
+        let hint = c.retry;
+        if (state.content === "LOADING") { kind = "hourglass"; title = c.loadingTitle; body = c.loadingBody; hint = c.backExit; }
+        if (state.content === "UNCONFIGURED") { kind = "key"; title = c.unconfiguredTitle; body = c.unconfiguredBody; hint = c.automatic; }
+        return `<section class="exceptional"><div class="exceptional-brand">Lapin Futé</div><div class="exceptional-body">${icon(kind, "exceptional-icon")}<h2>${title}</h2><p>${body}</p></div><div class="exceptional-hint">${hint}</div></section>`;
+      }
+
+      function overview(c, items) {
+        const entries = items.map((item, index) => {
+          const abnormal = index === 0 && state.traffic !== "NORMAL" ? `<span class="state-icon ${trafficKind()}">${trafficIcon()}</span>` : `<span></span>`;
+          const value = state.content === "LOADING" ? "—" : item[3];
+          return `<div class="favorite-row ${state.focus === index ? "focused" : ""}">${chip(item[0])}<div class="favorite-copy"><div class="favorite-name">${item[1]}</div><div class="favorite-direction">→ ${item[2]}</div></div><div class="favorite-countdown">${value}<small>${value === "—" ? "" : c.minute}</small></div>${abnormal}</div>`;
+        });
+        const refreshing = state.content === "REFRESHING" ? `<span class="overview-progress">${c.updating}</span>` : "";
+        entries.push(`<div class="refresh-row ${state.focus === 3 ? "focused" : ""}">${icon("refresh")}<span>${c.refreshAll}${refreshing}</span></div>`);
+        const start = state.platform === "gabbro" && state.focus >= 2 ? 1 : 0;
+        const visible = state.platform === "gabbro" ? entries.slice(start, start + 3) : entries;
+        const context = state.focus === 3 ? c.refreshAll : `${state.focus + 1} / 3`;
+        return `${statusbar(c, context)}<section class="overview">${visible.join("")}</section>`;
+      }
+
+      function trafficBand(c) {
+        const label = state.traffic === "NORMAL" ? c.normal : state.traffic === "DELAYED" ? c.delayed : state.traffic === "STOPPED" ? c.stopped : c.unknown;
+        return `<div class="traffic-band ${trafficKind()}">${trafficIcon()}<span>${label}</span><span class="chevron" aria-hidden="true"></span></div>`;
+      }
+
+      function detail(c, items) {
+        const item = items[Math.min(state.focus, 2)];
+        const followingCount = state.platform === "emery" ? 3 : 2;
+        const following = item[4].slice(0, followingCount).map((value, index) => `<div class="following-row"><span>${index === 0 ? c.following : ""}${index === 1 && state.traffic === "NORMAL" ? `<small class="departure-delay">${c.departedDelayed}</small>` : ""}</span><strong>${value} ${c.minute}</strong></div>`).join("");
+        return `${statusbar(c, `${Math.min(state.focus + 1, 3)} / 3`)}<section class="detail-screen"><div class="detail-route">${chip(item[0])}<div><div class="route-stop">${item[1]}</div><div class="route-direction">→ ${item[2]}</div></div></div><div class="next-departure"><span class="next-value">${state.traffic === "STOPPED" ? "—" : item[3]}</span><span class="next-unit">${state.traffic === "STOPPED" ? "" : c.minute}</span></div><div class="following-list">${following}</div>${trafficBand(c)}</section>`;
+      }
+
+      function traffic(c, items) {
+        const item = items[Math.min(state.focus, 2)];
+        let title;
+        let validity = "";
+        let pages;
+        if (state.traffic === "NORMAL") { title = c.normalTitle; pages = [c.normalMessage]; }
+        else if (state.traffic === "DELAYED") { title = c.delayedTitle; validity = c.delayedValidity; pages = c.delayedPages; }
+        else if (state.traffic === "STOPPED") { title = c.stoppedTitle; validity = c.stoppedValidity; pages = c.stoppedPages; }
+        else { title = c.unknownTitle; pages = [c.unknownMessage]; }
+        state.trafficPage = Math.min(state.trafficPage, pages.length - 1);
+        const page = pages[state.trafficPage];
+        return `${statusbar(c, item[0])}<section class="traffic-screen ${trafficKind()}"><div class="traffic-hero">${trafficIcon().replace("<svg ", "<svg class=\"large-icon\" ")}<h2 class="traffic-title">${title}</h2>${validity ? `<div class="traffic-validity">${validity}</div>` : ""}</div><div class="traffic-message">${page}</div><div class="traffic-page">${pages.length > 1 ? `${state.trafficPage + 1} / ${pages.length}` : ""}</div></section>`;
+      }
+
+      function updateControls() {
+        document.querySelectorAll(".control[data-group]").forEach(button => button.setAttribute("aria-pressed", String(state[button.dataset.group] === button.dataset.value)));
+        document.querySelector("#long-labels").setAttribute("aria-pressed", String(state.longLabels));
+        const keys = document.querySelectorAll(".watch-key span");
+        if (state.screen === "overview") {
+          keys[0].textContent = state.language === "fr" ? "Favori précédent" : "Previous favorite";
+          keys[1].textContent = state.focus === 3 ? (state.language === "fr" ? "Actualiser tout" : "Refresh all") : (state.language === "fr" ? "Ouvrir" : "Open");
+          keys[2].textContent = state.language === "fr" ? "Favori suivant" : "Next favorite";
+          keys[3].textContent = state.language === "fr" ? "Quitter" : "Exit";
+          interactionNote.textContent = state.language === "fr" ? "Haut/Bas parcourt les favoris et la ligne d'actualisation. Select ouvre ou actualise tout. Retour quitte." : "Up/Down browses favorites and the refresh row. Select opens or refreshes all. Back exits.";
+        } else if (state.screen === "detail") {
+          keys[0].textContent = state.language === "fr" ? "Favori précédent" : "Previous favorite";
+          keys[1].textContent = state.language === "fr" ? "État de la ligne" : "Line status";
+          keys[2].textContent = state.language === "fr" ? "Favori suivant" : "Next favorite";
+          keys[3].textContent = state.language === "fr" ? "Aperçu" : "Overview";
+          interactionNote.textContent = state.language === "fr" ? "Haut/Bas change de favori sans quitter le détail. Select ouvre l'état de la ligne. Retour revient à l'aperçu." : "Up/Down changes favorite in place. Select opens line status. Back returns to overview.";
+        } else {
+          keys[0].textContent = state.language === "fr" ? "Page précédente" : "Previous page";
+          keys[1].textContent = state.language === "fr" ? "Aucune action" : "No action";
+          keys[2].textContent = state.language === "fr" ? "Page suivante" : "Next page";
+          keys[3].textContent = state.language === "fr" ? "Départs" : "Departures";
+          interactionNote.textContent = state.language === "fr" ? "Haut/Bas pagine un message long. Select reste sans action. Retour revient aux départs." : "Up/Down pages long messages. Select has no action. Back returns to departures.";
+        }
+      }
+
+      function render() {
+        const c = copy[state.language];
+        const items = favorites();
+        document.documentElement.lang = state.language;
+        device.className = `device ${state.platform}`;
+        if (["LOADING", "UNCONFIGURED", "UNAVAILABLE"].includes(state.content)) screen.innerHTML = exceptional(c);
+        else if (state.screen === "overview") screen.innerHTML = overview(c, items);
+        else if (state.screen === "detail") screen.innerHTML = detail(c, items);
+        else screen.innerHTML = traffic(c, items);
+        updateControls();
+        readout.textContent = `screen=${state.content === "LOADING" ? "cold-loading" : state.screen} · platform=${state.platform} · focus=${state.focus + 1} · data=${state.content} · line=${state.traffic} · page=${state.trafficPage + 1} · last=${state.lastAction}`;
+      }
+
+      function clamp(value, minimum, maximum) { return Math.max(minimum, Math.min(maximum, value)); }
+      function act(action) {
+        state.lastAction = action;
+        if (["LOADING", "UNCONFIGURED"].includes(state.content)) { render(); return; }
+        if (state.content === "UNAVAILABLE" && action === "select") { state.content = "LOADING"; render(); return; }
+        if (state.screen === "overview") {
+          if (action === "up") state.focus = clamp(state.focus - 1, 0, 3);
+          if (action === "down") state.focus = clamp(state.focus + 1, 0, 3);
+          if (action === "select" && state.focus < 3) state.screen = "detail";
+          else if (action === "select") state.content = "REFRESHING";
+        } else if (state.screen === "detail") {
+          if (action === "up") state.focus = clamp(state.focus - 1, 0, 2);
+          if (action === "down") state.focus = clamp(state.focus + 1, 0, 2);
+          if (action === "select") { state.screen = "traffic"; state.trafficPage = 0; }
+          if (action === "back") state.screen = "overview";
+        } else {
+          const pages = ["DELAYED", "STOPPED"].includes(state.traffic) ? 2 : 1;
+          if (action === "up") state.trafficPage = clamp(state.trafficPage - 1, 0, pages - 1);
+          if (action === "down") state.trafficPage = clamp(state.trafficPage + 1, 0, pages - 1);
+          if (action === "back") state.screen = "detail";
+        }
+        render();
+      }
+
+      document.querySelectorAll(".control[data-group]").forEach(button => button.addEventListener("click", () => {
+        const key = button.dataset.group;
+        state[key] = button.dataset.value;
+        if (key === "screen") state.trafficPage = 0;
+        if (key === "traffic") state.trafficPage = 0;
+        if (key === "content" && ["LOADING", "UNCONFIGURED", "UNAVAILABLE"].includes(state.content)) state.lastAction = "state";
+        render();
+      }));
+      document.querySelector("#long-labels").addEventListener("click", () => { state.longLabels = !state.longLabels; render(); });
+      document.querySelectorAll(".watch-key").forEach(button => button.addEventListener("click", () => act(button.dataset.action)));
+      window.addEventListener("keydown", event => {
+        const map = { ArrowUp: "up", ArrowDown: "down", Enter: "select", Escape: "back", Backspace: "back" };
+        const action = map[event.key];
+        if (!action) return;
+        event.preventDefault();
+        act(action);
+      });
+      render();
+    })();
+  </script>
+</body>
+</html>

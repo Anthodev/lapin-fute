@@ -9,8 +9,9 @@ import { dirname, join, resolve } from "node:path";
 import { performance } from "node:perf_hooks";
 import { DatabaseSync } from "node:sqlite";
 import { fileURLToPath } from "node:url";
-import { redactSecrets, SqliteCatalogReader } from "../packages/backend/src/index.ts";
-import { normalizeCatalogSearchText } from "../packages/backend/src/catalog-import.ts";
+import { redactSecrets } from "../packages/catalog/src/prim-probe.ts";
+import { SqliteCatalogReader } from "../packages/catalog/src/catalog.ts";
+import { normalizeCatalogSearchText } from "../packages/config-page/src/search-text.js";
 import {
   LIMITS,
   TRANSPORT_MODE,

@@ -1,10 +1,13 @@
 import {
   LIMITS,
   apiKeyError,
+  closePayloadFits,
   copyFor,
+  copyPhoneFavorite,
   createCloseSession,
   favoriteFromService,
   initialConfigState,
+  isServiceRouting,
   parseConfigFragment,
   planConfigResult,
   reduceConfigState,
@@ -25,6 +28,7 @@ const elements = Object.fromEntries([
   "catalog-status", "place-results", "service-step", "services-label", "service-select", "preview",
   "preview-title", "preview-line", "preview-stop", "preview-destination", "preview-departures",
   "favorite-name-label", "favorite-name", "favorite-add", "add-section", "save", "config-view",
+  "sync-title", "sync-hint", "force-sync-label", "force-sync",
   "config-footer", "about-open", "about-view", "about-back", "about-title", "about-en", "about-fr",
 ].map((id) => [id.replaceAll("-", "_"), byId(id)]));
 
@@ -118,6 +122,8 @@ function applyCopy() {
     ["favoriteNameLabel", elements.favorite_name_label], ["favoriteAdd", elements.favorite_add],
     ["save", elements.save], ["aboutOpen", elements.about_open], ["aboutBack", elements.about_back],
     ["aboutTitle", elements.about_title],
+    ["syncTitle", elements.sync_title], ["syncHint", elements.sync_hint],
+    ["forceSyncLabel", elements.force_sync_label],
   ]) setText(element, copy[key]);
   elements.key_input.placeholder = copy.keyPlaceholder;
   elements.place_search.placeholder = copy.searchPlaceholder;
@@ -167,6 +173,12 @@ function renderFavorites() {
     const destination = document.createElement("span");
     destination.textContent = favorite.destinationLabel;
     labels.append(stop, destination);
+    if (!Object.hasOwn(favorite, "routing")) {
+      const unresolved = document.createElement("span");
+      unresolved.className = "unresolved";
+      unresolved.textContent = copy.favoriteUnresolved;
+      labels.append(unresolved);
+    }
 
     const renameLabel = document.createElement("label");
     renameLabel.className = "visually-hidden";
@@ -282,6 +294,34 @@ function nextFavoriteId() {
   return candidate;
 }
 
+// Routing recovery: favorites stored without routing keep their place
+// and labels; a known serviceId gains routing via an exact catalog lookup. An
+// absent ID keeps the favorite untouched — the visible marker asks for an
+// explicit re-selection, never an automatic delete.
+const hydrationController = new AbortController();
+
+async function hydrateUnresolvedFavorites() {
+  const unresolved = state.favorites.filter((favorite) => !Object.hasOwn(favorite, "routing"));
+  await Promise.all(unresolved.map(async (unresolvedFavorite) => {
+    let service;
+    try {
+      service = await catalog.lookupService(unresolvedFavorite.serviceId, hydrationController.signal);
+    } catch {
+      return;
+    }
+    if (service === null) return;
+    const current = state.favorites.find((favorite) => favorite.id === unresolvedFavorite.id);
+    if (current === undefined || Object.hasOwn(current, "routing")) return;
+    // Routing-only recovery: the stored favorite is kept verbatim — labels,
+    // colors, service binding and the watch metadata hash — and only the
+    // validated routing from the exact lookup is attached.
+    if (!isServiceRouting(service.routing)) return;
+    const hydrated = copyPhoneFavorite(current);
+    hydrated.routing = { ...service.routing };
+    dispatch({ type: "favorite-hydrate", id: current.id, favorite: hydrated });
+  }));
+}
+
 elements.key_input.addEventListener("input", () => {
   elements.key_error.hidden = true;
   dispatch({ type: "key-draft", value: elements.key_input.value });
@@ -376,6 +416,10 @@ elements.about_back.addEventListener("click", () => {
   aboutReturnFocus.focus();
 });
 
+elements.force_sync.addEventListener("change", () => {
+  dispatch({ type: "force-full-sync", value: elements.force_sync.checked });
+});
+
 elements.save.addEventListener("click", () => {
   const keyError = apiKeyError(state.keyDraft.value);
   if (keyError !== null) {
@@ -385,7 +429,14 @@ elements.save.addEventListener("click", () => {
     return;
   }
   const outcome = planConfigResult(state);
-  if (!outcome.ok) return;
+  if (!outcome.ok) {
+    setText(elements.catalog_status, copy[outcome.error]);
+    return;
+  }
+  if (!closePayloadFits(outcome.payload)) {
+    setText(elements.catalog_status, copy.saveTooLarge);
+    return;
+  }
   const closeUrl = closeSession.close(outcome.payload);
   if (closeUrl === null) return;
   elements.save.disabled = true;
@@ -397,3 +448,4 @@ renderKey();
 renderFavorites();
 setText(elements.catalog_status, "");
 document.documentElement.classList.add("ready");
+hydrateUnresolvedFavorites();

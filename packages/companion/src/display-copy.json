@@ -1,0 +1,237 @@
+[
+  {
+    "token": "appTitle",
+    "en": "Lapin Futé",
+    "fr": "Lapin Futé"
+  },
+  {
+    "token": "freshReady",
+    "en": "Up to date",
+    "fr": "À jour"
+  },
+  {
+    "token": "freshKeyInvalid",
+    "en": "Key invalid",
+    "fr": "Clé refusée"
+  },
+  {
+    "token": "freshUpdating",
+    "en": "Updating",
+    "fr": "Actualisation"
+  },
+  {
+    "token": "freshStale",
+    "en": "Old data",
+    "fr": "Données anciennes"
+  },
+  {
+    "token": "freshRealtime",
+    "en": "Live",
+    "fr": "Temps réel"
+  },
+  {
+    "token": "freshScheduled",
+    "en": "Scheduled",
+    "fr": "Horaires"
+  },
+  {
+    "token": "freshMixed",
+    "en": "Live + schedule",
+    "fr": "Temps réel + horaires"
+  },
+  {
+    "token": "refreshAll",
+    "en": "Refresh all",
+    "fr": "Tout actualiser"
+  },
+  {
+    "token": "updating",
+    "en": "Updating…",
+    "fr": "Actualisation…"
+  },
+  {
+    "token": "following",
+    "en": "Then",
+    "fr": "Puis"
+  },
+  {
+    "token": "noDepartures",
+    "en": "No departures announced",
+    "fr": "Aucun départ annoncé"
+  },
+  {
+    "token": "departed",
+    "en": "Departed",
+    "fr": "Parti"
+  },
+  {
+    "token": "now",
+    "en": "Now",
+    "fr": "À quai"
+  },
+  {
+    "token": "departureDelayed",
+    "en": "Departure delayed",
+    "fr": "Départ retardé"
+  },
+  {
+    "token": "departureCancelled",
+    "en": "Departure cancelled",
+    "fr": "Départ annulé"
+  },
+  {
+    "token": "departureUnknown",
+    "en": "Time uncertain",
+    "fr": "Horaire incertain"
+  },
+  {
+    "token": "trafficNormal",
+    "en": "Normal traffic",
+    "fr": "Trafic normal"
+  },
+  {
+    "token": "trafficDelayed",
+    "en": "Delays on line",
+    "fr": "Retards sur la ligne"
+  },
+  {
+    "token": "trafficStopped",
+    "en": "Service interrupted",
+    "fr": "Trafic interrompu"
+  },
+  {
+    "token": "trafficUnknown",
+    "en": "Traffic status unknown",
+    "fr": "État trafic inconnu"
+  },
+  {
+    "token": "trafficNormalTitle",
+    "en": "No disruption reported",
+    "fr": "Aucune perturbation signalée"
+  },
+  {
+    "token": "trafficNormalCheckedPrefix",
+    "en": "Last checked at",
+    "fr": "Dernière vérification à"
+  },
+  {
+    "token": "trafficUnknownTitle",
+    "en": "Traffic information unavailable",
+    "fr": "Information trafic indisponible"
+  },
+  {
+    "token": "trafficUnknownMessage",
+    "en": "The current line status cannot be confirmed. Departure times remain separate.",
+    "fr": "Impossible de confirmer l'état actuel de la ligne. Les horaires restent affichés séparément."
+  },
+  {
+    "token": "validFrom",
+    "en": "From",
+    "fr": "À partir de"
+  },
+  {
+    "token": "validUntil",
+    "en": "Until",
+    "fr": "Jusqu'à"
+  },
+  {
+    "token": "validRangeTo",
+    "en": "to",
+    "fr": "à"
+  },
+  {
+    "token": "loadingTitle",
+    "en": "Refreshing information",
+    "fr": "Rafraîchissement des informations en cours"
+  },
+  {
+    "token": "loadingBody",
+    "en": "First load of favorites and their next departures.",
+    "fr": "Premier chargement des favoris et de leurs prochains départs."
+  },
+  {
+    "token": "backExit",
+    "en": "Back exits the app.",
+    "fr": "Retour quitte l'application."
+  },
+  {
+    "token": "unconfiguredTitle",
+    "en": "Configuration required",
+    "fr": "Configuration requise"
+  },
+  {
+    "token": "unconfiguredBody",
+    "en": "Add your PRIM key and at least one favorite in phone options.",
+    "fr": "Ajoutez votre clé PRIM et au moins un favori dans les options du téléphone."
+  },
+  {
+    "token": "automatic",
+    "en": "Configuration will be detected automatically.",
+    "fr": "La configuration sera détectée automatiquement."
+  },
+  {
+    "token": "apiKeyInvalidTitle",
+    "en": "PRIM key rejected",
+    "fr": "Clé PRIM refusée"
+  },
+  {
+    "token": "apiKeyInvalidBody",
+    "en": "Replace the key in phone options.",
+    "fr": "Remplacez la clé dans les options du téléphone."
+  },
+  {
+    "token": "favoriteUnavailableTitle",
+    "en": "Favorite unavailable",
+    "fr": "Favori indisponible"
+  },
+  {
+    "token": "favoriteUnavailableBody",
+    "en": "Edit or remove this favorite in phone options.",
+    "fr": "Modifiez ou supprimez ce favori dans les options du téléphone."
+  },
+  {
+    "token": "rateLimitedTitle",
+    "en": "Too many requests",
+    "fr": "Trop de demandes"
+  },
+  {
+    "token": "rateLimitedBody",
+    "en": "Try again in a few moments.",
+    "fr": "Réessayez dans quelques instants."
+  },
+  {
+    "token": "departuresUnavailableTitle",
+    "en": "Departures unavailable",
+    "fr": "Départs indisponibles"
+  },
+  {
+    "token": "departuresUnavailableBody",
+    "en": "The connection could not retrieve the information.",
+    "fr": "La connexion n'a pas permis de récupérer les informations."
+  },
+  {
+    "token": "noCachedDataTitle",
+    "en": "No cached departures",
+    "fr": "Aucune donnée en mémoire"
+  },
+  {
+    "token": "noCachedDataBody",
+    "en": "This favorite has not been loaded on the phone.",
+    "fr": "Ce favori n'a pas encore été chargé sur le téléphone."
+  },
+  {
+    "token": "holdSelectRefresh",
+    "en": "Hold Select to refresh.",
+    "fr": "Maintenez Select pour actualiser."
+  },
+  {
+    "token": "backDepartures",
+    "en": "Back: departures.",
+    "fr": "Retour : prochains départs."
+  },
+  {
+    "token": "retry",
+    "en": "Select: retry.",
+    "fr": "Select : réessayer."
+  }
+]

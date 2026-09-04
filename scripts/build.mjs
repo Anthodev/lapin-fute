@@ -1,6 +1,6 @@
 import { spawnSync } from "node:child_process";
-import { cpSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
-import { basename, join } from "node:path";
+import { cpSync, mkdirSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const root = fileURLToPath(new URL("..", import.meta.url));
@@ -27,19 +27,20 @@ function optionalHttpsUrl(environment, name) {
 
 export function readBuildConfiguration(environment) {
   return {
-    backendUrl: optionalHttpsUrl(environment, "LAPIN_FUTE_BACKEND_URL"),
     configurationUrl: optionalHttpsUrl(environment, "LAPIN_FUTE_CONFIG_URL"),
   };
 }
 
 export function createBootstrap(configuration) {
-  return `"use strict";\n\nvar createCompanion = require("./companion").createCompanion;\n\ncreateCompanion({\n  Pebble: Pebble,\n  storage: localStorage,\n  XHR: XMLHttpRequest,\n  clock: { now: Date.now },\n  defer: function (callback) { setTimeout(callback, 0); },\n  readyDefer: function (callback) { setTimeout(callback, 250); },\n  backendUrl: ${JSON.stringify(configuration.backendUrl)},\n  configurationUrl: ${JSON.stringify(configuration.configurationUrl)}\n});\n`;
+  return `"use strict";\n\nvar createCompanion = require("./companion").createCompanion;\n\ncreateCompanion({\n  Pebble: Pebble,\n  storage: localStorage,\n  XHR: XMLHttpRequest,\n  clock: { now: Date.now },\n  defer: function (callback) { setTimeout(callback, 0); },\n  configurationUrl: ${JSON.stringify(configuration.configurationUrl)}\n});\n`;
 }
 
 function run(command, args, cwd = root) {
   const result = spawnSync(command, args, { cwd, stdio: "inherit" });
   if (result.error?.code === "ENOENT") {
-    console.error(`${command} is required but not installed. See docs/toolchain.md; installation is intentionally user-managed.`);
+    console.error(command === "bun"
+      ? "Bun is required to bundle the watch application. Make bun available on PATH, then rerun npm run build. Installation is intentionally user-managed."
+      : `${command} is required but not installed. See docs/toolchain.md; installation is intentionally user-managed.`);
     process.exit(127);
   }
   if (result.error) throw result.error;
@@ -49,15 +50,17 @@ function run(command, args, cwd = root) {
 function build() {
   const configuration = readBuildConfiguration(process.env);
 
+  // test.mjs prepares canonical display copy before loading any watch modules.
   run(process.execPath, ["scripts/test.mjs"]);
   run(process.execPath, ["scripts/measure-radio.mjs"]);
+  run("bun", ["scripts/bundle-watch.mjs"]);
 
   rmSync(pkjsTarget, { recursive: true, force: true });
   mkdirSync(pkjsTarget, { recursive: true });
-  for (const source of ["contracts.js", "codec.js", "configuration.js", "message-queue.js"]) {
-    cpSync(join(companionSource, source), join(pkjsTarget, basename(source)));
+  for (const source of readdirSync(companionSource)) {
+    if (!source.endsWith(".js") && !source.endsWith(".json")) continue;
+    cpSync(join(companionSource, source), join(pkjsTarget, source === "index.js" ? "companion.js" : source));
   }
-  cpSync(join(companionSource, "index.js"), join(pkjsTarget, "companion.js"));
   writeFileSync(join(pkjsTarget, "index.js"), createBootstrap(configuration));
 
   const watch = join(root, "packages/watch");

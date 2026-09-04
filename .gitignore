@@ -5,6 +5,7 @@ node_modules/
 var/
 packages/watch/build/
 packages/watch/src/pkjs/
+packages/watch/src/generated/
 docs/
 *.pbw
 .DS_Store
