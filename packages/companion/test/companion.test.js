@@ -199,6 +199,21 @@ function closeWith(target, action, favorites, value, forceFull) {
   if (forceFull) update.forceFullSync = true;
   target.Pebble.emit("webviewclosed", { response: "pebblejs://close#" + encodeURIComponent(JSON.stringify(update)) });
 }
+
+test("Core Android decoded close responses preserve favorites with line colors", function () {
+  var target = harness({ storage: configuredStorage([]) });
+  var update = {
+    schemaVersion: 1,
+    favorites: [Object.assign({}, FIRST, { sortOrder: 0 })],
+    apiKeyUpdate: { schemaVersion: 1, action: "KEEP" }
+  };
+
+  target.Pebble.emit("webviewclosed", { response: JSON.stringify(update) });
+
+  assert.deepEqual(configuration.loadConfiguration(target.storage).favorites, update.favorites);
+  target.companion.stop();
+});
+
 function serviceRow(favorite) {
   return { serviceId: favorite.serviceId, stopLabel: favorite.stopLabel, lineLabel: favorite.lineLabel,
     destinationLabel: favorite.destinationLabel, lineMode: favorite.lineMode,

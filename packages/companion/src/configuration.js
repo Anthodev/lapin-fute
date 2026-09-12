@@ -675,21 +675,25 @@ function applyConfigurationUpdate(current, update) {
 
 function parseCloseFragment(response) {
   var fragment;
-  var hashIndex;
   var parsed;
+  var closePrefix = "pebblejs://close#";
   if (typeof response !== "string"
       || response.length === 0
       || response.length > MAX_CLOSE_RESPONSE_LENGTH
       || response === "CANCELLED") return null;
-  hashIndex = response.indexOf("#");
-  fragment = hashIndex === -1 ? response : response.slice(hashIndex + 1);
+  fragment = response.indexOf(closePrefix) === 0
+    ? response.slice(closePrefix.length)
+    : response;
   if (fragment.charAt(0) === "#") fragment = fragment.slice(1);
   if (fragment.length === 0 || fragment === "CANCELLED") return null;
   try {
-    fragment = decodeURIComponent(fragment);
     parsed = JSON.parse(fragment);
   } catch (ignored) {
-    return null;
+    try {
+      parsed = JSON.parse(decodeURIComponent(fragment));
+    } catch (alsoIgnored) {
+      return null;
+    }
   }
   if (!isConfigurationUpdate(parsed)) return null;
   return {
