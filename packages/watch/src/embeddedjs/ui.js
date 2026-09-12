@@ -153,7 +153,7 @@ function departures(port,r,now) {
     lines(port,text,1,INK,x,y+Math.max(0,Math.floor((height-lineCount(text)*16)/2)),width,16);
   } else {
     const status=hex(data,31,1), value=countdown(r,data,0,now,true), unit=status!==2 && Math.ceil((hex(data,23,8)*1000-now)/60000)>0;
-    const style=unit?4:value==="-"?2:3, unitWidth=unit?Math.ceil(port.measureString("min",fonts[2]).width):0;
+    const style=value==="-"?2:3, unitWidth=unit?Math.ceil(port.measureString("min",fonts[2]).width):0;
     const gap=unit?4:0, valueWidth=Math.min(width-unitWidth-gap,Math.ceil(port.measureString(value,fonts[style]).width));
     const left=x+Math.floor((width-valueWidth-unitWidth-gap)/2), bottom=y+height-20;
     drawBottom(port,value,style,INK,left,bottom,valueWidth);
@@ -229,7 +229,7 @@ class ApplicationBehavior extends Behavior {
   }
 }
 export function createView(back) {
-  fonts=[new Style({font:"14px Gothic"}),new Style({font:"bold 14px Gothic"}),new Style({font:"bold 18px Gothic"}),new Style({font:"bold 36px Gothic"}),new Style({font:"bold 40px Gothic"})];
+  fonts=[new Style({font:"14px Gothic"}),new Style({font:"bold 14px Gothic"}),new Style({font:"bold 18px Gothic"}),new Style({font:"bold 36px Gothic"})];
   const port=new Port(null,{left:0,right:0,top:0,bottom:0,Behavior:DisplayBehavior});
   const application=new Application(null,{clip:true,touchCount:0,contents:[port],Behavior:ApplicationBehavior});
   application.behavior.back=back;

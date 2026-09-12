@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { nativeHost } from "./native-host.js";
 import { watchModule } from "./xs-host.js";
 import {
@@ -8,6 +9,9 @@ import {
 } from "./d2-records.js";
 
 const { field } = await watchModule("packed");
+const supportedFonts = new Set(JSON.parse(readFileSync(
+  new URL("../../companion/src/display-font-metrics.json", import.meta.url)
+)).roles);
 
 async function renderHarness(t, profile = 0) {
   nativeHost(t, profile);
@@ -116,8 +120,9 @@ for (const profile of [0, 1]) {
     const destination = rows.find((row) => row.text === "Vers 0");
     const value = rows.find((row) => row.text === "5");
     const unit = rows.find((row) => row.text === "min");
+    assert(rows.every((row) => supportedFonts.has(row.font)));
     assert.equal(destination.font, "bold 14px Gothic");
-    assert.equal(value.font, "bold 40px Gothic");
+    assert.equal(value.font, "bold 36px Gothic");
     assert.equal(unit.font, "bold 18px Gothic");
     assert.equal(value.y, unit.y);
   });
