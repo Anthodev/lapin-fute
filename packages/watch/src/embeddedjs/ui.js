@@ -110,7 +110,9 @@ function header(port,r,now,isStale,updating) {
   }
 }
 function overview(port,r,now) {
-  const start = Math.max(0,r.focus-1), end = Math.min(r.records.length,r.focus+1), round = r.profile === 1;
+  const round = r.profile === 1, last = r.records.length;
+  const start = round ? Math.max(0,r.focus-1) : Math.max(0,Math.min(r.focus-1,last-2));
+  const end = round ? Math.min(last,r.focus+1) : Math.min(last,start+2);
   for (let i = start; i <= end; i++) {
     const relative = i-r.focus, compact = round && relative !== 0, focused = relative === 0;
     const x = round ? compact ? 54 : 30 : 6, y = round ? relative<0 ? 54 : relative>0 ? 176 : 92 : 34+(i-start)*62;

@@ -128,6 +128,18 @@ for (const profile of [0, 1]) {
   });
 }
 
+test("rectangular overview fills the first three rows", async (t) => {
+  const h = await renderHarness(t);
+  configure(h, appearances(2));
+  data(h, 0, [departure(), departure()]);
+  const firstRows = h.show();
+  assert(firstRows.some((row) => row.text === "Tout actualiser"), JSON.stringify(firstRows));
+
+  configure(h, appearances(3, "next"));
+  data(h, 0, [departure(), departure(), departure()]);
+  assert(h.show().some((row) => row.text === "Arrêt 2"));
+});
+
 test("retained credential failures outrank traffic loading until matching success", async (t) => {
   const h = await renderHarness(t);
   readyDetail(h);
