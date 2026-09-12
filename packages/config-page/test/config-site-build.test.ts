@@ -53,11 +53,15 @@ test("full configuration build still requires and copies a published catalog", (
   }
 });
 
-test("Bunny pushes deploy the page while manual catalog publication remains explicit", () => {
+test("Bunny releases deploy production tags while preview tags stop after quality checks", () => {
   const workflow = readFileSync(
     new URL("../../../.github/workflows/deploy-bunny.yml", import.meta.url),
     "utf8",
   );
+  assert.doesNotMatch(workflow, /branches:\s*\[develop\]/u);
+  assert.match(workflow, /tags:\s*\["v\*", "pre-v\*"\]/u);
+  assert.match(workflow, /startsWith\(github\.ref_name, 'v'\)/u);
+  assert.match(workflow, /github\.event_name == 'workflow_dispatch' && inputs\.refresh_catalog/u);
   assert.match(workflow, /refresh_catalog:\s+description:[\s\S]+type: boolean/u);
   assert.match(workflow, /inputs\.refresh_catalog != true[\s\S]+npm run build:config-page/u);
   assert.match(workflow, /inputs\.refresh_catalog \}\}[\s\S]+npm run catalog:refresh/u);
