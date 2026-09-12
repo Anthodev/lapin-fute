@@ -221,6 +221,60 @@ test("obsolete work is cancelled without becoming the new favorite's failure", (
   assert.equal(f6.timers.size, 0, "clock change cancels pre-BEGIN traffic expectations");
 });
 
+test("rapid detail navigation settles once on the final favorite after 500 ms", () => {
+  const target = harness();
+  const records = appearances(6);
+  configure(target, records);
+  data(target, 0, records.map(() => departure()));
+  target.runtime.button("select");
+  data(target, 1, [departure()]);
+  const before = target.out.filter((message) => message.get(1) === 1).length;
+  target.runtime.button("down");
+  target.runtime.button("down");
+  target.runtime.button("up");
+  target.runtime.button("down");
+  assert.equal(target.r.active, 2);
+  assert.equal(target.timers.size, 1);
+  assert.equal(target.out.filter((message) => message.get(1) === 1).length, before);
+  const [timer] = target.timers.values();
+  assert.equal(timer.delay, 500);
+  target.timers.clear();
+  timer.fn();
+  const requests = target.out.filter((message) => message.get(1) === 1);
+  assert.equal(requests.length, before + 1);
+  assert.equal(requests.at(-1).get(3), field(records[2], 0));
+  assert.equal(requests.at(-1).get(24), 1);
+});
+
+test("fifty refresh and rapid-navigation cycles keep durable and timer state bounded", () => {
+  const target = harness();
+  const records = appearances(6);
+  configure(target, records);
+  data(target, 0, records.map(() => departure()));
+  target.runtime.button("select");
+  data(target, 1, [departure()]);
+  const durableKeys = [...target.store.values.keys()].sort();
+  const committedRecords = target.r.records;
+  for (let cycle = 0; cycle < 50; cycle++) {
+    target.runtime.button("selectLong");
+    data(target, 1, [departure()]);
+    target.runtime.button(cycle % 2 ? "up" : "down");
+    target.runtime.button(cycle % 2 ? "down" : "up");
+    assert.equal(target.timers.size, 1);
+    const [timer] = target.timers.values();
+    target.timers.clear();
+    timer.fn();
+    data(target, 1, [departure()]);
+    assert.equal(target.r.pending, 0);
+    assert.equal(target.r.candidate, null);
+  }
+  assert.equal(target.r.records, committedRecords);
+  assert.deepEqual([...target.store.values.keys()].sort(), durableKeys);
+  assert.equal(target.timers.size, 0);
+  assert.equal(target.r.requests.length, 3);
+  assert.equal(target.r.requests.filter(Boolean).length, 2);
+});
+
 test("enqueue failures belong to the attempted request, never unrelated sync", () => {
   const f7 = harness();
   readyDetail(f7);

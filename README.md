@@ -40,7 +40,7 @@ The name nods to Bison Futé, the French road-traffic information service, and t
 - **Six favorites, five transport modes.** Choose any stop, line, and direction across Métro, RER, Transilien, Tram, and Bus. Favorites are renamed and reordered on the phone page, which shows official line badges and colors.
 - **Departures at a glance.** The favorites list already shows the next departures for each stop; Select opens a full board for one favorite. Countdowns keep ticking on the watch between refreshes.
 - **Traffic view.** Select again on a departure board to page through the current service messages for that line.
-- **Refresh when needed.** Open the app, switch favorite, choose Refresh all, or hold Select to request departures. Recent results are reused for 60 seconds; there is no periodic network polling.
+- **Refresh when needed.** Open the app, switch favorite, choose Refresh all, or hold Select to request departures. Recent results are reused for 60 seconds; after a failed refresh, the last complete result remains visibly stale for at most 15 minutes. There is no periodic network polling.
 - **Clear data states.** The app distinguishes real-time departures, mixed real-time and scheduled results, updates in progress, and missing cached data.
 - **English and French.** The watch interface and the settings page are both bilingual.
 - **Settings that fit your phone.** Light and dark themes follow your system preference. Collapsible sections keep favorite editing, PRIM access, and watch synchronization easy to reach.

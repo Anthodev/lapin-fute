@@ -71,9 +71,18 @@ function normalizeIncomingPayload(payload) {
   return aliasCount > 0 ? normalized : null;
 }
 
+function cacheAge(timestamp, storedAt, now) {
+  return now - Math.min(timestamp * 1000, storedAt);
+}
+
 function cacheFresh(timestamp, storedAt, now) {
-  var age = now - Math.min(timestamp * 1000, storedAt);
+  var age = cacheAge(timestamp, storedAt, now);
   return age >= 0 && age < contracts.CACHE_FRESH_SECONDS * 1000;
+}
+
+function cacheUseful(timestamp, storedAt, now) {
+  var age = cacheAge(timestamp, storedAt, now);
+  return age >= 0 && age < contracts.USEFUL_STALE_SECONDS * 1000;
 }
 
 function sameFavoriteContentSet(left, right) {
@@ -159,6 +168,7 @@ function Companion(options) {
     cacheMisses: 0,
     successes: 0,
     failures: 0,
+    rateLimitedResponses: 0,
     totalLatencyMs: 0,
     lastLatencyMs: 0
   };
@@ -550,7 +560,8 @@ Companion.prototype._favoriteView = function (favorite, flightErrors, aggregateE
   if (entry !== null && entry.serviceId !== favorite.serviceId) entry = null;
   var code = aggregateError || (flightErrors && flightErrors[favorite.serviceId]) || null;
   if (!code && entry && entry.refreshError) code = entry.refreshError.code;
-  var hasData = entry !== null && hasOwn.call(entry, "result");
+  var hasData = entry !== null && hasOwn.call(entry, "result")
+    && cacheUseful(entry.result.fetchedAt, entry.resultStoredAt, this._clock.now());
   if (!hasData && cacheOnly && code !== "API_KEY_REQUIRED" && code !== "API_KEY_INVALID") code = "NO_CACHED_DATA";
   return {
     hasData: hasData,
@@ -853,6 +864,9 @@ Companion.prototype._storeTraffic = function (favorite, language, data, requestI
 
 Companion.prototype._acceptOutcome = function (flight, outcome) {
   if (flight.generation !== this._lifecycleGeneration) return false;
+  if (outcome.status === "UNAVAILABLE" && outcome.error.code === "RATE_LIMITED") {
+    this._metrics.rateLimitedResponses += 1;
+  }
   if (outcome.status !== "UNAVAILABLE" || outcome.error.code !== "API_KEY_INVALID") return true;
   var requests = this._requests.slice();
   this._metrics.failures += 1;
@@ -1093,6 +1107,7 @@ Companion.prototype.metrics = function () {
     cacheMisses: this._metrics.cacheMisses,
     successes: this._metrics.successes,
     failures: this._metrics.failures,
+    rateLimitedResponses: this._metrics.rateLimitedResponses,
     totalLatencyMs: this._metrics.totalLatencyMs,
     lastLatencyMs: this._metrics.lastLatencyMs
   };
