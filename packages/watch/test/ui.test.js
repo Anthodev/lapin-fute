@@ -105,6 +105,24 @@ for (const profile of [0, 1]) {
   });
 }
 
+for (const profile of [0, 1]) {
+  test(`profile ${profile}: detail emphasizes the destination and aligns the primary countdown`, async (t) => {
+    const h = await renderHarness(t, profile);
+    configure(h, appearances(2, "fav", { profile }));
+    data(h, 0, [departure(), departure()]);
+    h.runtime.button("select");
+    data(h, 1, [departure()]);
+    const rows = h.show();
+    const destination = rows.find((row) => row.text === "Vers 0");
+    const value = rows.find((row) => row.text === "5");
+    const unit = rows.find((row) => row.text === "min");
+    assert.equal(destination.font, "bold 14px Gothic");
+    assert.equal(value.font, "bold 40px Gothic");
+    assert.equal(unit.font, "bold 18px Gothic");
+    assert.equal(value.y, unit.y);
+  });
+}
+
 test("retained credential failures outrank traffic loading until matching success", async (t) => {
   const h = await renderHarness(t);
   readyDetail(h);
