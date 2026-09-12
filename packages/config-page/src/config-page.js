@@ -22,14 +22,16 @@ function byId(id) {
 }
 
 const elements = Object.fromEntries([
-  "page-title", "intro", "key-title", "key-status", "key-explanation", "key-link", "key-label",
-  "key-input", "key-toggle", "key-error", "key-pending", "key-remove", "favorites-title",
-  "favorites-empty", "favorites-list", "add-title", "search-label", "place-search", "search-hint",
-  "catalog-status", "place-results", "service-step", "services-label", "service-select", "preview",
-  "preview-title", "preview-line", "preview-stop", "preview-destination", "preview-departures",
-  "favorite-name-label", "favorite-name", "favorite-add", "add-section", "save", "config-view",
-  "sync-title", "sync-hint", "force-sync-label", "force-sync",
-  "config-footer", "about-open", "about-view", "about-back", "about-title", "about-en", "about-fr",
+  "page-title", "intro", "prim-section", "key-title", "key-status", "key-required", "key-explanation",
+  "key-link", "key-docs-link", "key-required-hint", "key-label", "key-input", "key-toggle", "key-error",
+  "key-pending", "key-remove", "favorites-section", "favorites-title", "favorites-count", "favorites-status", "favorites-empty",
+  "favorites-list", "add-title", "search-label", "place-search", "search-hint", "catalog-status",
+  "place-results", "service-step", "services-label", "service-select", "preview", "preview-title",
+  "preview-line", "preview-stop", "preview-destination", "preview-departures", "favorite-name-label",
+  "favorite-name", "favorite-add", "add-section", "save", "config-view", "sync-section", "sync-title", "sync-hint",
+  "force-sync-label", "force-sync", "config-footer", "about-open", "about-view", "about-back",
+  "about-title", "about-en", "about-fr",
+  "add-caption", "sync-caption",
 ].map((id) => [id.replaceAll("-", "_"), byId(id)]));
 
 const opening = parseConfigFragment(window.location.hash);
@@ -53,9 +55,13 @@ function setText(element, value) {
 
 const NEUTRAL_LINE_BACKGROUND = "#52616f";
 const NEUTRAL_LINE_TEXT = "#ffffff";
+const SVG_NAMESPACE = "http://www.w3.org/2000/svg";
+const ICON_MOVE_UP = "M6 14l6-6 6 6";
+const ICON_MOVE_DOWN = "M6 10l6 6 6-6";
+const ICON_REMOVE = "M4 7h16M9 7V4h6v3M6 7l1 13a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2l1-13M10 11v6M14 11v6";
 
 function fallbackLineBadge(service) {
-  const namespace = "http://www.w3.org/2000/svg";
+  const namespace = SVG_NAMESPACE;
   const width = Math.max(40, 18 + (Array.from(service.lineLabel).length * 12));
   const backgroundColor = service.lineColor ?? NEUTRAL_LINE_BACKGROUND;
   const textColor = service.lineTextColor ?? NEUTRAL_LINE_TEXT;
@@ -113,16 +119,20 @@ function applyCopy() {
   document.title = copy.pageTitle;
   document.documentElement.lang = opening.locale;
   for (const [key, element] of [
-    ["pageTitle", elements.page_title], ["intro", elements.intro], ["keyTitle", elements.key_title],
+    ["pageHeading", elements.page_title], ["intro", elements.intro], ["keyTitle", elements.key_title],
     ["keyExplanation", elements.key_explanation], ["keyLink", elements.key_link],
+    ["keyDocsLink", elements.key_docs_link], ["keyRequirement", elements.key_required],
+    ["keyRequiredHint", elements.key_required_hint],
     ["keyLabel", elements.key_label], ["favoritesTitle", elements.favorites_title],
     ["favoritesEmpty", elements.favorites_empty], ["favoriteAddTitle", elements.add_title],
+    ["favoriteAddCaption", elements.add_caption],
     ["searchLabel", elements.search_label], ["searchHint", elements.search_hint],
     ["servicesLabel", elements.services_label], ["previewTitle", elements.preview_title],
     ["favoriteNameLabel", elements.favorite_name_label], ["favoriteAdd", elements.favorite_add],
     ["save", elements.save], ["aboutOpen", elements.about_open], ["aboutBack", elements.about_back],
     ["aboutTitle", elements.about_title],
     ["syncTitle", elements.sync_title], ["syncHint", elements.sync_hint],
+    ["syncCaption", elements.sync_caption],
     ["forceSyncLabel", elements.force_sync_label],
   ]) setText(element, copy[key]);
   elements.key_input.placeholder = copy.keyPlaceholder;
@@ -134,6 +144,8 @@ function applyCopy() {
 
 function renderKey() {
   setText(elements.key_status, state.hasKey ? copy.keyStatusConfigured : copy.keyStatusMissing);
+  elements.key_required.hidden = state.hasKey;
+  elements.key_required_hint.hidden = state.hasKey;
   const removing = state.keyDraft.removeRequested;
   const replacing = state.keyDraft.value.length > 0;
   elements.key_pending.hidden = !removing && !replacing;
@@ -154,12 +166,69 @@ function actionButton(label, disabled, action, className = "quiet") {
   return button;
 }
 
+function iconButton(label, disabled, pathDefinition, action, extraClass = "") {
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = `icon-button quiet${extraClass.length > 0 ? ` ${extraClass}` : ""}`;
+  button.disabled = disabled;
+  button.setAttribute("aria-label", label);
+  const icon = document.createElementNS(SVG_NAMESPACE, "svg");
+  icon.setAttribute("viewBox", "0 0 24 24");
+  icon.setAttribute("aria-hidden", "true");
+  icon.setAttribute("focusable", "false");
+  const glyph = document.createElementNS(SVG_NAMESPACE, "path");
+  glyph.setAttribute("d", pathDefinition);
+  glyph.setAttribute("fill", "none");
+  glyph.setAttribute("stroke", "currentColor");
+  glyph.setAttribute("stroke-width", "2");
+  glyph.setAttribute("stroke-linecap", "round");
+  glyph.setAttribute("stroke-linejoin", "round");
+  icon.append(glyph);
+  button.append(icon);
+  button.addEventListener("click", action);
+  return button;
+}
+
+// A collapsed section must never swallow a validation error: opening the
+// section before writing the message or moving focus keeps the failure
+// visible instead of targeting a display:none element.
+function revealSection(section) {
+  if (section instanceof HTMLDetailsElement) section.open = true;
+}
+
+// Keyboard move/remove rebuilds the whole list; the activation request lets
+// renderFavorites put focus back on the affected favorite's same control
+// instead of dropping it to <body>.
+let pendingFavoriteFocus = null;
+
+function favoriteFocusTarget(request) {
+  if (state.favorites.length === 0) {
+    // The natural next step after the last removal is searching for a new
+    // favorite; the Add section may be collapsed, so reveal it first.
+    revealSection(elements.add_section);
+    return elements.place_search;
+  }
+  let index = state.favorites.findIndex((favorite) => favorite.id === request.id);
+  if (index < 0) index = Math.min(request.index, state.favorites.length - 1);
+  if (index < 0) return null;
+  const row = elements.favorites_list.children[index];
+  if (row === undefined) return null;
+  const control = row.querySelector(`[data-favorite-action="${request.action}"]`);
+  if (control !== null && !control.disabled) return control;
+  return row.querySelector("input");
+}
+
 function renderFavorites() {
   elements.favorites_list.replaceChildren();
   elements.favorites_empty.hidden = state.favorites.length > 0;
-  elements.add_section.hidden = state.favorites.length >= LIMITS.favorites;
-  if (state.favorites.length >= LIMITS.favorites) setText(elements.catalog_status, copy.favoriteLimit);
-  else if (elements.catalog_status.textContent === copy.favoriteLimit) setText(elements.catalog_status, "");
+  const atLimit = state.favorites.length >= LIMITS.favorites;
+  elements.add_section.hidden = atLimit;
+  elements.favorites_status.hidden = !atLimit;
+  if (atLimit) setText(elements.favorites_status, copy.favoriteLimit);
+  const used = state.favorites.length;
+  const available = LIMITS.favorites - used;
+  setText(elements.favorites_count,
+    `${used} ${used === 1 ? copy.favoriteUsed : copy.favoritesUsed} · ${available} ${available === 1 ? copy.favoriteAvailable : copy.favoritesAvailable}`);
 
   state.favorites.forEach((favorite, index) => {
     const item = document.createElement("li");
@@ -168,17 +237,25 @@ function renderFavorites() {
     renderLineBadge(route, favorite);
     const labels = document.createElement("div");
     labels.className = "favorite-labels";
+    const journey = document.createElement("div");
+    journey.className = "route-journey";
     const stop = document.createElement("strong");
+    stop.className = "route-stop";
     stop.textContent = favorite.stopLabel;
     const destination = document.createElement("span");
+    destination.className = "route-destination";
     destination.textContent = favorite.destinationLabel;
-    labels.append(stop, destination);
+    journey.append(stop, destination);
+    labels.append(journey);
     if (!Object.hasOwn(favorite, "routing")) {
       const unresolved = document.createElement("span");
       unresolved.className = "unresolved";
       unresolved.textContent = copy.favoriteUnresolved;
       labels.append(unresolved);
     }
+    const routeRow = document.createElement("div");
+    routeRow.className = "favorite-route";
+    routeRow.append(route, labels);
 
     const renameLabel = document.createElement("label");
     renameLabel.className = "visually-hidden";
@@ -187,6 +264,7 @@ function renderFavorites() {
     renameLabel.textContent = copy.favoriteRename;
     const rename = document.createElement("input");
     rename.id = renameId;
+    rename.className = "favorite-name";
     rename.type = "text";
     rename.autocomplete = "off";
     rename.maxLength = LIMITS.labelUtf8Bytes;
@@ -194,23 +272,58 @@ function renderFavorites() {
     rename.placeholder = copy.favoriteNamePlaceholder;
     rename.addEventListener("change", () => {
       if (utf8Bytes(rename.value.trim()) <= LIMITS.labelUtf8Bytes) {
-        dispatch({ type: "favorite-rename", id: favorite.id, displayName: rename.value });
-      } else {
-        rename.value = favorite.displayName ?? "";
+        // A rename changes no row besides the one being edited, so commit
+        // into state without the rebuild: rebuilding here would drop
+        // keyboard focus to body after the change and replace the icon
+        // button under a just-pressed pointer.
+        state = reduceConfigState(state, { type: "favorite-rename", id: favorite.id, displayName: rename.value });
       }
+      // Reconcile the field with committed state rather than the
+      // render-time capture: valid edits trim (and renames make the capture
+      // stale), while oversized or control-bearing values are rejected by
+      // the reducer and must revert to what is actually stored.
+      const current = state.favorites.find((entry) => entry.id === favorite.id);
+      rename.value = current?.displayName ?? "";
     });
 
-
+    // Compact editing strip: reorder and remove sit beside the name field as
+    // icon buttons; the localized action names double as accessible names.
+    // Each control is tagged so focus can follow the affected row after the
+    // rebuild that a move or removal triggers.
     const actions = document.createElement("div");
     actions.className = "favorite-actions";
-    actions.append(
-      actionButton(copy.favoriteMoveUp, index === 0, () => dispatch({ type: "favorite-move", id: favorite.id, delta: -1 })),
-      actionButton(copy.favoriteMoveDown, index === state.favorites.length - 1, () => dispatch({ type: "favorite-move", id: favorite.id, delta: 1 })),
-      actionButton(copy.favoriteRemove, false, () => dispatch({ type: "favorite-remove", id: favorite.id }), "quiet danger"),
-    );
-    item.append(route, labels, renameLabel, rename, actions);
+    const moveUpControl = iconButton(copy.favoriteMoveUp, index === 0, ICON_MOVE_UP,
+      () => {
+        pendingFavoriteFocus = { id: favorite.id, index, action: "move-up" };
+        dispatch({ type: "favorite-move", id: favorite.id, delta: -1 });
+      });
+    const moveDownControl = iconButton(copy.favoriteMoveDown, index === state.favorites.length - 1, ICON_MOVE_DOWN,
+      () => {
+        pendingFavoriteFocus = { id: favorite.id, index, action: "move-down" };
+        dispatch({ type: "favorite-move", id: favorite.id, delta: 1 });
+      });
+    const removeControl = iconButton(copy.favoriteRemove, false, ICON_REMOVE,
+      () => {
+        pendingFavoriteFocus = { id: favorite.id, index, action: "remove" };
+        dispatch({ type: "favorite-remove", id: favorite.id });
+      }, "danger");
+    moveUpControl.dataset.favoriteAction = "move-up";
+    moveDownControl.dataset.favoriteAction = "move-down";
+    removeControl.dataset.favoriteAction = "remove";
+    actions.append(moveUpControl, moveDownControl, removeControl);
+    const edit = document.createElement("div");
+    edit.className = "favorite-edit";
+    edit.append(renameLabel, rename, actions);
+    item.append(routeRow, edit);
     elements.favorites_list.append(item);
   });
+
+  if (pendingFavoriteFocus !== null) {
+    const request = pendingFavoriteFocus;
+    pendingFavoriteFocus = null;
+    const target = favoriteFocusTarget(request);
+    if (target !== null) target.focus();
+  }
 }
 
 function clearServiceSelection() {
@@ -228,10 +341,27 @@ function renderPlaces() {
   elements.place_results.replaceChildren();
   for (const place of places) {
     const item = document.createElement("li");
-    const label = place.localityLabel
-      ? `${place.stopLabel} — ${place.localityLabel} · ${place.mode}`
-      : `${place.stopLabel} · ${place.mode}`;
-    item.append(actionButton(label, false, () => selectPlace(place), "choice"));
+    const button = actionButton("", false, () => selectPlace(place), "choice");
+    const labels = document.createElement("span");
+    labels.className = "choice-labels";
+    const stop = document.createElement("strong");
+    stop.textContent = place.stopLabel;
+    const context = document.createElement("span");
+    context.className = "choice-context";
+    context.textContent = place.localityLabel ? `${place.localityLabel} · ${place.mode}` : place.mode;
+    const lines = document.createElement("span");
+    lines.className = "choice-lines";
+    for (const line of place.lines) {
+      // Search rows reuse the exact favorite/preview badge renderers: the
+      // enclosing place mode selects the official pictogram, and lines
+      // without one (BUS and unlisted labels) fall back to official colors.
+      const badge = document.createElement("span");
+      renderLineBadge(badge, { ...line, lineMode: place.mode });
+      lines.append(badge);
+    }
+    labels.append(stop, context, lines);
+    button.append(labels);
+    item.append(button);
     elements.place_results.append(item);
   }
 }
@@ -247,6 +377,7 @@ async function selectPlace(place) {
     if (controller.signal.aborted) return;
     serviceController = null;
     if (services.length === 0) {
+      revealSection(elements.add_section);
       setText(elements.catalog_status, copy.servicesEmpty);
       return;
     }
@@ -262,11 +393,13 @@ async function selectPlace(place) {
       elements.service_select.append(option);
     });
     elements.service_step.hidden = false;
+    revealSection(elements.add_section);
     setText(elements.catalog_status, "");
     elements.service_select.focus();
   } catch (error) {
     if (controller.signal.aborted) return;
     serviceController = null;
+    revealSection(elements.add_section);
     setText(elements.catalog_status, error instanceof CatalogClientError && error.code === "INVALID_SERVICE"
       ? copy.invalidService
       : copy.backendUnavailable);
@@ -360,9 +493,15 @@ elements.place_search.addEventListener("input", async () => {
     if (generation !== searchGeneration) return;
     places = result;
     renderPlaces();
-    setText(elements.catalog_status, places.length === 0 ? copy.searchNoResults : "");
+    if (places.length === 0) {
+      revealSection(elements.add_section);
+      setText(elements.catalog_status, copy.searchNoResults);
+    } else {
+      setText(elements.catalog_status, "");
+    }
   } catch (error) {
     if (error?.name === "AbortError" || generation !== searchGeneration) return;
+    revealSection(elements.add_section);
     setText(elements.catalog_status, error instanceof CatalogClientError && error.code === "INVALID_QUERY"
       ? copy.searchHint
       : copy.backendUnavailable);
@@ -423,6 +562,7 @@ elements.force_sync.addEventListener("change", () => {
 elements.save.addEventListener("click", () => {
   const keyError = apiKeyError(state.keyDraft.value);
   if (keyError !== null) {
+    revealSection(elements.prim_section);
     setText(elements.key_error, copy[keyError]);
     elements.key_error.hidden = false;
     elements.key_input.focus();
@@ -430,11 +570,20 @@ elements.save.addEventListener("click", () => {
   }
   const outcome = planConfigResult(state);
   if (!outcome.ok) {
-    setText(elements.catalog_status, copy[outcome.error]);
+    // At the favorite limit the add section carries the hidden attribute,
+    // so save failures surface in the favorites list section instead: it is
+    // visible in exactly the states where these failures occur.
+    revealSection(elements.favorites_section);
+    elements.favorites_status.hidden = false;
+    setText(elements.favorites_status, copy[outcome.error]);
+    elements.favorites_status.scrollIntoView({ block: "nearest" });
     return;
   }
   if (!closePayloadFits(outcome.payload)) {
-    setText(elements.catalog_status, copy.saveTooLarge);
+    revealSection(elements.favorites_section);
+    elements.favorites_status.hidden = false;
+    setText(elements.favorites_status, copy.saveTooLarge);
+    elements.favorites_status.scrollIntoView({ block: "nearest" });
     return;
   }
   const closeUrl = closeSession.close(outcome.payload);
@@ -442,6 +591,56 @@ elements.save.addEventListener("click", () => {
   elements.save.disabled = true;
   window.location.assign(closeUrl);
 });
+
+// Section open/closed state is the only local persistence on this page:
+// four booleans under one namespaced key, keyed by the stable section IDs.
+// The key draft, favorites, and catalog data never reach storage, and
+// unavailable or corrupt storage (private mode, blocked cookies, cleared
+// origins) leaves the markup defaults in place and the page functional.
+const SECTION_STORAGE_KEY = "lapin-fute:config-sections:v1";
+const sectionElements = [
+  elements.prim_section,
+  elements.favorites_section,
+  elements.add_section,
+  elements.sync_section,
+];
+
+function readStoredSectionStates() {
+  try {
+    const raw = window.localStorage.getItem(SECTION_STORAGE_KEY);
+    if (raw === null) return null;
+    const saved = JSON.parse(raw);
+    if (saved === null || typeof saved !== "object") return null;
+    return sectionElements
+      .filter((section) => typeof saved[section.id] === "boolean")
+      .map((section) => [section, saved[section.id]]);
+  } catch {
+    return null;
+  }
+}
+
+function persistSectionStates() {
+  try {
+    const states = {};
+    for (const section of sectionElements) states[section.id] = section.open;
+    window.localStorage.setItem(SECTION_STORAGE_KEY, JSON.stringify(states));
+  } catch {
+    // Persistence is a convenience; toggling must keep working without it.
+  }
+}
+
+// Restore all sections before registering listeners so queued toggle events
+// persist the complete restored state.
+const storedSectionStates = readStoredSectionStates();
+if (storedSectionStates !== null) {
+  for (const [section, open] of storedSectionStates) section.open = open;
+}
+for (const section of sectionElements) {
+  section.addEventListener("toggle", persistSectionStates);
+}
+// The details toggle event is queued with rendering steps and can be lost
+// to an immediate close, so navigating away flushes the live DOM state.
+window.addEventListener("pagehide", persistSectionStates);
 
 applyCopy();
 renderKey();

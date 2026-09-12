@@ -7,88 +7,141 @@
     <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self'; base-uri 'none'; form-action 'none'; object-src 'none'">
     <title>Lapin Futé</title>
     <link rel="stylesheet" href="./styles/config-page.css">
+    <link rel="icon" type="image/svg+xml" href="./assets/lapin-fute.svg">
   </head>
   <body>
-    <header class="masthead">
-      <div class="route-mark" aria-hidden="true">LF</div>
-      <div>
-        <h1 id="page-title">Lapin Futé</h1>
-        <p id="intro"></p>
+    <header class="app-header">
+      <div class="app-brand">
+        <img class="brand-mark" src="./assets/lapin-fute.svg" alt="" width="64" height="64">
+        <span>Lapin Futé</span>
       </div>
     </header>
 
     <main>
       <div id="config-view">
-      <section aria-labelledby="key-title">
-        <div class="section-heading">
-          <span class="step" aria-hidden="true">01</span>
-          <h2 id="key-title">PRIM access</h2>
+      <div class="page-heading">
+        <h1 id="page-title">Settings</h1>
+        <p id="intro"></p>
+      </div>
+      <div class="settings-list">
+      <details class="settings-section" id="prim-section" aria-labelledby="key-title" open>
+        <summary>
+          <span class="section-icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24" fill="none" focusable="false"><circle cx="8" cy="9" r="4"></circle><path d="m11 12 8 8m-3-3 3-3m-6 0 3-3"></path></svg>
+          </span>
+          <span class="summary-copy">
+            <h2 id="key-title">PRIM access</h2>
+            <span class="summary-hint" id="key-required-hint" hidden></span>
+          </span>
+          <span class="disclosure" aria-hidden="true"></span>
+        </summary>
+        <div class="section-body">
+          <p class="requirement" id="key-required" hidden></p>
+          <div class="key-links">
+            <a id="key-link" class="link-action" href="https://prim.iledefrance-mobilites.fr/fr/mes-jetons-authentification" target="_blank" rel="noopener noreferrer"></a>
+            <a id="key-docs-link" class="link-secondary" href="https://prim.iledefrance-mobilites.fr/en/aide-et-contact/documentation/donnees-disponibles/api/generer-un-jeton-pour-acceder-aux-api" target="_blank" rel="noopener noreferrer"></a>
+          </div>
+          <label class="field-label" for="key-input" id="key-label"></label>
+          <div class="key-row">
+            <input id="key-input" type="password" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false">
+            <button type="button" id="key-toggle" class="quiet" aria-pressed="false">Show</button>
+          </div>
+          <p class="error" id="key-error" role="alert" hidden></p>
+          <p class="pending" id="key-pending" role="status" hidden></p>
+          <button type="button" id="key-remove" class="danger quiet" hidden>Remove key</button>
+          <div class="key-note">
+            <p class="status" id="key-status"></p>
+            <p class="support" id="key-explanation"></p>
+          </div>
         </div>
-        <p class="status" id="key-status"></p>
-        <p class="support"><span id="key-explanation"></span> <a id="key-link" href="https://prim.iledefrance-mobilites.fr/en/aide-et-contact/documentation/donnees-disponibles/api/generer-un-jeton-pour-acceder-aux-api" target="_blank" rel="noopener noreferrer"></a></p>
-        <label class="field-label" for="key-input" id="key-label"></label>
-        <div class="key-row">
-          <input id="key-input" type="password" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false">
-          <button type="button" id="key-toggle" class="quiet" aria-pressed="false">Show</button>
-        </div>
-        <p class="error" id="key-error" role="alert" hidden></p>
-        <p class="pending" id="key-pending" role="status" hidden></p>
-        <button type="button" id="key-remove" class="danger quiet" hidden>Remove key</button>
-      </section>
+      </details>
 
-      <section aria-labelledby="favorites-title">
-        <div class="section-heading">
-          <span class="step" aria-hidden="true">02</span>
-          <h2 id="favorites-title">Favorite departures</h2>
+      <details class="settings-section" id="favorites-section" aria-labelledby="favorites-title">
+        <summary>
+          <span class="section-icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24" fill="none" focusable="false"><path d="m12 3 2.8 5.7 6.2.9-4.5 4.4 1.1 6.2-5.6-3-5.6 3 1.1-6.2L3 9.6l6.2-.9L12 3Z"></path></svg>
+          </span>
+          <span class="summary-copy">
+            <h2 id="favorites-title">Favorite departures</h2>
+            <span class="favorite-capacity" id="favorites-count" aria-live="polite"></span>
+          </span>
+          <span class="disclosure" aria-hidden="true"></span>
+        </summary>
+        <div class="section-body">
+          <p class="empty-state" id="favorites-empty" hidden></p>
+          <p class="error" id="favorites-status" role="status" hidden></p>
+          <ol id="favorites-list" class="favorites"></ol>
         </div>
-        <p class="status" id="favorites-empty" hidden></p>
-        <ol id="favorites-list" class="favorites"></ol>
-      </section>
+      </details>
 
-      <section aria-labelledby="add-title" id="add-section">
-        <div class="section-heading">
-          <span class="step" aria-hidden="true">03</span>
-          <h2 id="add-title">Add a favorite</h2>
-        </div>
-        <label class="field-label" for="place-search" id="search-label"></label>
-        <input id="place-search" type="search" inputmode="search" autocomplete="off" autocapitalize="sentences" spellcheck="false">
-        <p class="support" id="search-hint"></p>
-        <p id="catalog-status" class="status" role="status" aria-live="polite"></p>
-        <ul id="place-results" class="choice-list"></ul>
+      <details class="settings-section" id="add-section" aria-labelledby="add-title">
+        <summary>
+          <span class="section-icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24" fill="none" focusable="false"><path d="M12 5v14M5 12h14"></path></svg>
+          </span>
+          <span class="summary-copy">
+            <h2 id="add-title">Add a favorite</h2>
+            <span class="section-caption" id="add-caption"></span>
+          </span>
+          <span class="disclosure" aria-hidden="true"></span>
+        </summary>
+        <div class="section-body">
+          <label class="field-label" for="place-search" id="search-label"></label>
+          <div class="search-field">
+            <svg viewBox="0 0 24 24" fill="none" aria-hidden="true" focusable="false"><circle cx="10.5" cy="10.5" r="6.5"></circle><path d="m16 16 4.5 4.5"></path></svg>
+            <input id="place-search" type="search" inputmode="search" autocomplete="off" autocapitalize="sentences" spellcheck="false" aria-describedby="search-hint">
+          </div>
+          <p class="support" id="search-hint"></p>
+          <p id="catalog-status" class="status" role="status" aria-live="polite"></p>
+          <ul id="place-results" class="choice-list"></ul>
 
-        <div id="service-step" hidden>
-          <label class="field-label" for="service-select" id="services-label"></label>
-          <select id="service-select"></select>
-        </div>
+          <div id="service-step" hidden>
+            <label class="field-label" for="service-select" id="services-label"></label>
+            <select id="service-select"></select>
+          </div>
 
-        <div id="preview" class="preview" hidden>
-          <p class="eyebrow" id="preview-title"></p>
-          <p><span id="preview-line" class="line-chip"></span> <strong id="preview-stop"></strong></p>
-          <p id="preview-destination" class="destination"></p>
-          <p id="preview-departures" class="recorded-preview"></p>
-          <label class="field-label" for="favorite-name" id="favorite-name-label"></label>
-          <input id="favorite-name" type="text" autocomplete="off" maxlength="96">
-          <button type="button" id="favorite-add" class="secondary"></button>
+          <div id="preview" class="preview" hidden>
+            <p class="eyebrow" id="preview-title"></p>
+            <div class="preview-route">
+              <span id="preview-line" class="line-badge"></span>
+              <div class="route-journey">
+                <strong id="preview-stop" class="route-stop"></strong>
+                <span id="preview-destination" class="route-destination"></span>
+              </div>
+            </div>
+            <p id="preview-departures" class="recorded-preview"></p>
+            <label class="field-label" for="favorite-name" id="favorite-name-label"></label>
+            <input id="favorite-name" type="text" autocomplete="off" maxlength="96">
+            <button type="button" id="favorite-add" class="secondary"></button>
+          </div>
         </div>
-      </section>
+      </details>
 
-      <section aria-labelledby="sync-title" id="sync-section">
-        <div class="section-heading">
-          <span class="step" aria-hidden="true">04</span>
-          <h2 id="sync-title">Watch synchronization</h2>
+      <details class="settings-section" id="sync-section" aria-labelledby="sync-title">
+        <summary>
+          <span class="section-icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24" fill="none" focusable="false"><rect x="6" y="5" width="12" height="14" rx="4"></rect><path d="M9 5V2h6v3M9 19v3h6v-3m-6-9h6m-3-3 3 3-3 3"></path></svg>
+          </span>
+          <span class="summary-copy">
+            <h2 id="sync-title">Watch synchronization</h2>
+            <span class="section-caption" id="sync-caption"></span>
+          </span>
+          <span class="disclosure" aria-hidden="true"></span>
+        </summary>
+        <div class="section-body">
+          <label class="check-row" for="force-sync">
+            <input id="force-sync" type="checkbox">
+            <span id="force-sync-label"></span>
+          </label>
+          <p class="support" id="sync-hint"></p>
         </div>
-        <label class="check-row" for="force-sync">
-          <input id="force-sync" type="checkbox">
-          <span id="force-sync-label"></span>
-        </label>
-        <p class="support" id="sync-hint"></p>
-      </section>
+      </details>
+      </div>
       </div>
 
       <section id="about-view" class="about-view" aria-labelledby="about-title" hidden>
-        <button type="button" id="about-back" class="quiet"></button>
-        <div class="section-heading about-heading">
-          <span class="step" aria-hidden="true">LF</span>
+        <button type="button" id="about-back" class="back-link quiet"></button>
+        <div class="about-heading">
           <h2 id="about-title"></h2>
         </div>
 

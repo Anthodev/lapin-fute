@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64" role="img" aria-labelledby="lapin-fute-title lapin-fute-desc">
+  <title id="lapin-fute-title">Lapin Futé</title>
+  <desc id="lapin-fute-desc">Un billet rouge arrondi à deux encoches, percé d'un trajet en transparence qui dessine les oreilles et les joues du lapin et se termine par deux arrêts ronds.</desc>
+  <defs>
+    <mask id="lapin-fute-cutout" maskUnits="userSpaceOnUse" x="0" y="0" width="64" height="64">
+      <rect width="64" height="64" fill="#ffffff"/>
+      <path fill="none" stroke="#000000" stroke-width="4.5" stroke-linecap="round" stroke-linejoin="round" d="M25 50C19.6 48.8 16.5 45.5 16.5 41.3C16.5 37.4 19 34.3 22 32L18.8 18.5C18.1 15 19.5 13 22 13C25 13 26.6 16.9 27.1 21.3L28.5 30.5Q32 29.5 35.5 30.5L36.9 21.3C37.4 16.9 39 13 42 13C44.5 13 45.9 15 45.2 18.5L42 32C45 34.3 47.5 37.4 47.5 41.3C47.5 45.5 44.4 48.8 39 50"/>
+      <g fill="#000000">
+        <circle cx="25" cy="50" r="3.5"/>
+        <circle cx="39" cy="50" r="3.5"/>
+      </g>
+    </mask>
+  </defs>
+  <path fill="#fa4a36" mask="url(#lapin-fute-cutout)" d="M15 4H49A11 11 0 0 1 60 15V26A6 6 0 0 0 60 38V49A11 11 0 0 1 49 60H15A11 11 0 0 1 4 49V38A6 6 0 0 0 4 26V15A11 11 0 0 1 15 4Z"/>
+</svg>

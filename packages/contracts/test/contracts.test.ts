@@ -37,6 +37,7 @@ import {
   isOverviewRequest,
   isOverviewResult,
   isPersonalApiKey,
+  isPlaceLine,
   isPlaceSearchItem,
   isPlaceSearchResult,
   isServiceOption,
@@ -429,6 +430,45 @@ test("catalog contracts freeze transport modes, error codes, and limits", () => 
   assert.equal(LIMITS.catalogSearchResults, 20);
 });
 
+test("place lines require complete display metadata within the existing label and color bounds", () => {
+  const line = { lineLabel: "13", lineColor: "#82c8e6", lineTextColor: "#000000" };
+  const place = { placeId: `plc_${"A".repeat(43)}`, stopLabel: "Université", mode: "METRO", lines: [line] };
+  assert.equal(isPlaceLine(line), true);
+  assert.equal(isPlaceSearchItem(place), true);
+  assert.equal(isPlaceLine({ ...line, lineLabel: "é".repeat(LIMITS.labelUtf8Bytes / 2) }), true);
+
+  const { lines: _lines, ...withoutLines } = place;
+  assert.equal(isPlaceSearchItem(withoutLines), false);
+  for (const invalid of [undefined, null, {}, line, [], [null], new Array(1)]) {
+    assert.equal(isPlaceSearchItem({ ...place, lines: invalid }), false);
+  }
+  for (const field of ["lineLabel", "lineColor", "lineTextColor"] as const) {
+    const missing: Partial<typeof line> = { ...line };
+    delete missing[field];
+    assert.equal(isPlaceLine(missing), false);
+    assert.equal(isPlaceSearchItem({ ...place, lines: [missing] }), false);
+  }
+  for (const invalid of [
+    { ...line, lineLabel: "" },
+    { ...line, lineLabel: "é".repeat(LIMITS.labelUtf8Bytes / 2 + 1) },
+    { ...line, lineLabel: "13\n" },
+    { ...line, lineColor: "#82C8E6" },
+    { ...line, lineColor: "#12345" },
+    { ...line, lineTextColor: "transparent" },
+    { ...line, lineMode: "METRO" },
+    { ...line, lineRef: "STIF:Line::C01313:" },
+    { ...line, destinationLabel: "Terminus" },
+  ]) {
+    assert.equal(isPlaceLine(invalid), false);
+    assert.equal(isPlaceSearchItem({ ...place, lines: [invalid] }), false);
+  }
+  // The response byte bound, not an arbitrary line-count limit, controls transport size.
+  assert.equal(isPlaceSearchItem({
+    ...place,
+    lines: Array.from({ length: 65 }, (_, index) => ({ ...line, lineLabel: String(index) })),
+  }), true);
+});
+
 test("catalog validators require phone routing and keep place search display-only", () => {
   const opaque64 = "x".repeat(LIMITS.idUtf8Bytes);
   const placeItem = {
@@ -436,6 +476,7 @@ test("catalog validators require phone routing and keep place search display-onl
     stopLabel: "Châtelet",
     localityLabel: "Paris",
     mode: "METRO",
+    lines: [{ lineLabel: "4", lineColor: "#cf009e", lineTextColor: "#ffffff" }],
   };
   const serviceOption = {
     serviceId: `svc_${"B".repeat(43)}`,
@@ -447,7 +488,7 @@ test("catalog validators require phone routing and keep place search display-onl
     lineTextColor: "#000000",
     routing,
   };
-  const requiredPlace = { placeId: placeItem.placeId, stopLabel: placeItem.stopLabel, mode: placeItem.mode };
+  const requiredPlace = { placeId: placeItem.placeId, stopLabel: placeItem.stopLabel, mode: placeItem.mode, lines: placeItem.lines };
 
   assert.equal(isPlaceSearchItem(placeItem), true);
   assert.equal(isPlaceSearchItem(requiredPlace), true);

@@ -2,6 +2,8 @@ import { DatabaseSync, type StatementSync } from "node:sqlite";
 import {
   LIMITS,
   TRANSPORT_MODE,
+  isPlaceLine,
+  type PlaceLine,
   type PlaceSearchItem,
   type ServiceOption,
   type TransportMode,
@@ -30,6 +32,7 @@ interface PlaceRow {
   readonly stopLabel: string;
   readonly localityLabel: string | null;
   readonly mode: TransportMode;
+  readonly lines: string;
 }
 
 interface ServiceRow {
@@ -446,11 +449,40 @@ function normalizedMatchQuery(query: string): string {
     .join(" AND ");
 }
 
+// Keep native identity until display ordering and duplicate checks are complete.
+export const PLACE_LINES_SQL = `json_group_array(DISTINCT json_object(
+  'lineRef', services.line_ref,
+  'lineLabel', services.line_label,
+  'lineColor', services.line_color,
+  'lineTextColor', services.line_text_color
+))`;
+const lineLabelOrder = new Intl.Collator("fr", { numeric: true, sensitivity: "base" });
+
+export function placeLinesFromJson(serialized: string): PlaceLine[] {
+  const entries = JSON.parse(serialized) as (PlaceLine & { readonly lineRef: string })[];
+  entries.sort((left, right) => lineLabelOrder.compare(left.lineLabel, right.lineLabel)
+    || (left.lineRef < right.lineRef ? -1 : left.lineRef > right.lineRef ? 1 : 0));
+  const identities = new Set<string>();
+  return entries.map((entry) => {
+    // DISTINCT removed destination copies. A remaining duplicate ref is conflicting metadata.
+    if (identities.has(entry.lineRef)) invalidCandidate("inconsistent line metadata");
+    identities.add(entry.lineRef);
+    const line = {
+      lineLabel: entry.lineLabel,
+      lineColor: entry.lineColor,
+      lineTextColor: entry.lineTextColor,
+    };
+    if (!isPlaceLine(line)) invalidCandidate("line metadata");
+    return line;
+  });
+}
+
 function placeItem(entry: PlaceRow): PlaceSearchItem {
   const item: PlaceSearchItem = {
     placeId: entry.placeId,
     stopLabel: entry.stopLabel,
     mode: entry.mode,
+    lines: placeLinesFromJson(entry.lines),
   };
   if (entry.localityLabel !== null) item.localityLabel = entry.localityLabel;
   return item;
@@ -467,19 +499,25 @@ export class SqliteCatalogReader implements CatalogReader {
   private constructor(database: DatabaseSync) {
     this.#database = database;
     this.#searchPlacesStatement = database.prepare(`
+      WITH matches AS MATERIALIZED (
+        SELECT places.place_id, places.stop_label, places.locality_label, places.mode,
+          bm25(place_search) AS search_rank
+        FROM place_search
+        JOIN places ON places.place_id = place_search.place_id
+        WHERE place_search MATCH ?
+        ORDER BY search_rank, places.stop_label COLLATE NOCASE, places.place_id
+        LIMIT ?
+      )
       SELECT
-        places.place_id AS placeId,
-        places.stop_label AS stopLabel,
-        places.locality_label AS localityLabel,
-        places.mode AS mode
-      FROM place_search
-      JOIN places ON places.place_id = place_search.place_id
-      WHERE place_search MATCH ?
-      ORDER BY
-        bm25(place_search),
-        places.stop_label COLLATE NOCASE,
-        places.place_id
-      LIMIT ?
+        matches.place_id AS placeId,
+        matches.stop_label AS stopLabel,
+        matches.locality_label AS localityLabel,
+        matches.mode AS mode,
+        ${PLACE_LINES_SQL} AS lines
+      FROM matches
+      JOIN services ON services.place_id = matches.place_id
+      GROUP BY matches.place_id
+      ORDER BY matches.search_rank, matches.stop_label COLLATE NOCASE, matches.place_id
     `);
     this.#placeExistsStatement = database.prepare(`
       SELECT 1

@@ -11,6 +11,8 @@ import {
   isApiKeyUpdate,
   isFavorite,
   isPersonalApiKey,
+  isPlaceLine as canonicalIsPlaceLine,
+  isPlaceSearchItem as canonicalIsPlaceSearchItem,
   type Favorite,
 } from "../../contracts/src/index.ts";
 import {
@@ -29,6 +31,8 @@ import {
   initialConfigState,
   isFavoriteShape,
   isPhoneFavorite,
+  isPlaceLine,
+  isPlaceSearchItem,
   isPlaceSearchResult,
   isServiceOptionsResult,
   isServiceRouting,
@@ -536,11 +540,18 @@ test("three backend services can be added, renamed, reordered, and removed atomi
 });
 
 test("catalog response guards reject identifiers and malformed or oversized collections", () => {
-  const place = { placeId: "plc-a", stopLabel: "Châtelet", localityLabel: "Paris", mode: "METRO" };
+  const placeLines = [{ lineLabel: "14", lineColor: "#62259d", lineTextColor: "#ffffff" }];
+  const place = { placeId: "plc-a", stopLabel: "Châtelet", localityLabel: "Paris", mode: "METRO", lines: placeLines };
   const service = serviceOption("svc-a");
   assert.equal(isPlaceSearchResult({ schemaVersion: 1, places: [place] }), true);
   assert.equal(isPlaceSearchResult({ schemaVersion: 1, places: Array(21).fill(place) }), false);
   assert.equal(isPlaceSearchResult({ schemaVersion: 1, places: [{ ...place, monitoringRef: "raw" }] }), false);
+  const { lines: _placeLines, ...withoutLines } = place;
+  assert.equal(isPlaceSearchResult({ schemaVersion: 1, places: [withoutLines] }), false);
+  assert.equal(isPlaceSearchResult({ schemaVersion: 1, places: [{ ...place, lines: [] }] }), false);
+  const sparsePlaceLines: unknown[] = [placeLines[0]];
+  sparsePlaceLines.length = 2;
+  assert.equal(isPlaceSearchResult({ schemaVersion: 1, places: [{ ...place, lines: sparsePlaceLines }] }), false);
   assert.equal(isServiceOptionsResult({ schemaVersion: 1, placeId: "plc-a", services: [service] }, "plc-a"), true);
   assert.equal(isServiceOptionsResult({ schemaVersion: 1, placeId: "other", services: [service] }, "plc-a"), false);
   const { routing: _routing, ...routingLess } = service;
@@ -830,9 +841,12 @@ test("page keeps secrets out of durable and observable surfaces", () => {
   const controller = readFileSync(join(here, "../src/config-page.js"), "utf8");
   const client = readFileSync(join(here, "../src/catalog-client.js"), "utf8");
   const html = readFileSync(join(here, "../index.html"), "utf8");
-  for (const source of [core, controller, client]) {
+  for (const source of [core, client]) {
     assert.doesNotMatch(source, /localStorage|sessionStorage|document\\.cookie|WebSocket|console\\./u);
   }
+  // The controller itself may persist section open/closed booleans in
+  // localStorage; every other durable or observable surface stays banned.
+  assert.doesNotMatch(controller, /sessionStorage|document\\.cookie|WebSocket|console\\./u);
   assert.doesNotMatch(client, /prim\\.iledefrance-mobilites/u);
   assert.match(html, /type="password" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false"/u);
   assert.match(html, /connect-src 'self'/u);
@@ -897,6 +911,48 @@ test("favorites without presentation fields resolve no official image and use an
   assert.match(controller, /const textColor = service\.lineTextColor \?\? NEUTRAL_LINE_TEXT/u);
   assert.match(controller, /svg\.setAttribute\("role", "img"\)/u);
   assert.match(controller, /svg\.setAttribute\("aria-label", service\.lineLabel\)/u);
+});
+
+test("mirrored place search validation matches the canonical lines contract", () => {
+  const line = { lineLabel: "13", lineColor: "#82c8e6", lineTextColor: "#000000" };
+  const placeId = `plc_${"0".repeat(43)}`;
+  const valid = {
+    placeId,
+    stopLabel: "Saint-Denis - Université",
+    localityLabel: "Saint-Denis",
+    mode: "METRO",
+    lines: [line, { lineLabel: "1611", lineColor: "#009645", lineTextColor: "#ffffff" }],
+  };
+  const sparse: unknown[] = [line];
+  sparse.length = 2;
+  const cases: Array<[unknown, boolean]> = [
+    [valid, true],
+    [{ ...valid, localityLabel: undefined }, true],
+    [{ ...valid, lines: [{ ...line, lineLabel: "x".repeat(96) }] }, true],
+    [{ ...valid, lines: [{ ...line, lineLabel: "é".repeat(48) }] }, true],
+    [{ ...valid, lines: [] }, false],
+    [{ ...valid, lines: undefined }, false],
+    [{ ...valid, lines: "13" }, false],
+    [{ ...valid, lines: sparse }, false],
+    [{ ...valid, lines: [null] }, false],
+    [{ ...valid, lines: [{ ...line, lineRef: "STIF:Line::C01393:" }] }, false],
+    [{ ...valid, lines: [{ lineLabel: "13", lineColor: "#82c8e6" }] }, false],
+    [{ ...valid, lines: [{ ...line, lineColor: "#82C8E6" }] }, false],
+    [{ ...valid, lines: [{ ...line, lineTextColor: "#fff" }] }, false],
+    [{ ...valid, lines: [{ ...line, lineLabel: "" }] }, false],
+    [{ ...valid, lines: [{ ...line, lineLabel: "x".repeat(97) }] }, false],
+    [{ ...valid, lines: [{ ...line, lineLabel: "é".repeat(49) }] }, false],
+    [{ ...valid, lines: [{ ...line, lineLabel: "13\n" }] }, false],
+    [{ ...valid, monitoringRef: "raw" }, false],
+  ];
+  for (const [value, expected] of cases) {
+    assert.equal(isPlaceSearchItem(value), expected);
+    assert.equal(canonicalIsPlaceSearchItem(value), expected);
+  }
+  assert.equal(isPlaceLine(line), true);
+  assert.equal(canonicalIsPlaceLine(line), true);
+  assert.equal(isPlaceLine({ ...line, extra: true }), false);
+  assert.equal(canonicalIsPlaceLine({ ...line, extra: true }), false);
 });
 
 test("the first-load gzip metric includes the eagerly imported badge resolver", () => {

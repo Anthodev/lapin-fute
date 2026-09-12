@@ -14,6 +14,7 @@ const manifest = {
 function place(index, stopLabel = "Châtelet", localityLabel = "Paris") {
   return {
     placeId: `plc_${String(index).padStart(43, "0")}`, stopLabel, localityLabel, mode: "BUS",
+    lines: [{ lineLabel: "21", lineColor: "#0064b0", lineTextColor: "#ffffff" }],
     searchText: normalizeCatalogSearchText(`${stopLabel} ${localityLabel}`),
   };
 }
@@ -65,6 +66,47 @@ test("static search scans every page, keeps the best twenty and preserves homony
   assert.equal(new Set(results.map((entry) => entry.placeId)).size, 20);
   assert.equal(results.some((entry) => Object.hasOwn(entry, "searchText")), false);
   assert.deepEqual(requests, ["catalog/manifest.json", `catalog/${revision}/search/63_68/0.json`, `catalog/${revision}/search/63_68/1.json`]);
+});
+
+test("search rows carry precomputed lines without extra requests and reject malformed metadata", async () => {
+  const enriched = place(1, "Saint-Denis - Université");
+  enriched.lines = [
+    { lineLabel: "1611", lineColor: "#009645", lineTextColor: "#ffffff" },
+    { lineLabel: "253", lineColor: "#6f4fa0", lineTextColor: "#ffffff" },
+  ];
+  const { client, requests } = fixtureClient((url) => url === "catalog/manifest.json" ? response(manifest)
+    : response({ schemaVersion: 1, revision, page: 0, nextPage: null, places: [enriched] }));
+  const results = await client.searchPlaces("universite");
+  // searchText is stripped; every validated field, the lines included, survives.
+  assert.deepEqual(results, [{
+    placeId: enriched.placeId, stopLabel: "Saint-Denis - Université", localityLabel: "Paris", mode: "BUS",
+    lines: enriched.lines,
+  }]);
+  // Exactly the manifest and the one search page: no per-result service fetches.
+  assert.equal(requests.length, 2);
+  assert.match(requests[1], /\/search\/[^/]+\/0\.json$/u);
+
+  const { lines: _omitted, ...withoutLines } = enriched;
+  const sparse = { ...enriched, lines: [enriched.lines[0]] };
+  sparse.lines.length = 2;
+  const malformed = [
+    withoutLines,
+    { ...enriched, lines: [] },
+    { ...enriched, lines: "21" },
+    sparse,
+    { ...enriched, lines: [{ ...enriched.lines[0], lineRef: "STIF:Line::C01611:" }] },
+    { ...enriched, lines: [{ lineLabel: "253", lineColor: "#6f4fa0" }] },
+    { ...enriched, lines: [{ ...enriched.lines[0], lineColor: "#6F4FA0" }] },
+    { ...enriched, lines: [{ ...enriched.lines[0], lineTextColor: "#fff" }] },
+    { ...enriched, lines: [{ ...enriched.lines[0], lineLabel: "" }] },
+    { ...enriched, lines: [{ ...enriched.lines[0], lineLabel: "é".repeat(49) }] },
+    { ...enriched, lines: [{ ...enriched.lines[0], lineLabel: "1611\n" }] },
+  ];
+  for (const entry of malformed) {
+    const failing = fixtureClient((url) => url === "catalog/manifest.json" ? response(manifest)
+      : response({ schemaVersion: 1, revision, page: 0, nextPage: null, places: [entry] }));
+    await assert.rejects(failing.client.searchPlaces("universite"), unavailable);
+  }
 });
 
 test("static search uses AND token prefixes, Unicode normalization and one-codepoint buckets", async () => {
