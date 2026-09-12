@@ -1,255 +1,204 @@
 "use strict";
 
-var test = require("node:test");
-var assert = require("node:assert/strict");
-var path = require("node:path");
-var url = require("node:url");
-var companion = require("../src");
-var fixture = require("../../../fixtures/departures/foundation.json");
-var fakes = require("./fakes");
-
-var contracts = companion.contracts;
-var codec = companion.codec;
-
-async function sharedContracts() {
-  var contractPath = path.resolve(__dirname, "../../contracts/src/index.ts");
-  return import(url.pathToFileURL(contractPath).href);
+const test = require("node:test");
+const assert = require("node:assert/strict");
+const { contracts: C, codec, MessageQueue } = require("../src");
+const { createConfigurationSync } = require("../src/configuration-sync");
+const layout = require("../src/display-layout");
+const display = require("../src/display");
+const fixture = require("../../../fixtures/departures/foundation.json");
+const fakes = require("./fakes");
+const T = C.MESSAGE_TYPE;
+const EPOCH = "000000000000001";
+const id = (kind, sequence, epoch = EPOCH) => epoch + kind + sequence.toString(16).padStart(8, "0");
+function frames(...messages) { let index = 0; return () => index < messages.length ? messages[index++] : null; }
+function harness() {
+  const Pebble = new fakes.FakePebble(false), defer = fakes.createDefer(false), failures = [];
+  const queue = new MessageQueue(Pebble, defer, code => failures.push(code));
+  return { Pebble, defer, queue, failures };
+}
+function drain(h) {
+  for (let i = 0; h.Pebble.pending.length || h.defer.pending.length; i++) {
+    assert.ok(i < 1000, "transport settles without retries");
+    if (h.Pebble.pending.length) h.Pebble.ack(); else h.defer.runNext();
+  }
+}
+function hello(epoch = EPOCH, profile = 0, clock = 0, token = "w" + epoch) {
+  return { SCHEMA_VERSION: 2, MESSAGE_TYPE: T.DISPLAY_HELLO, REQUEST_ID: token,
+    WATCH_SESSION_ID: "w" + epoch, DISPLAY_EPOCH: epoch, DISPLAY_PROFILE: profile, CLOCK_12H: clock };
+}
+function syncHarness() {
+  const h = harness(); h.completed = [];
+  h.sync = createConfigurationSync({ queue: h.queue, onSynchronized: binding => h.completed.push(binding) });
+  h.sync.ready(); drain(h);
+  assert.equal(h.sync.hello(hello()).changed, true);
+  return h;
+}
+function target(favorites = [fixture.favorite]) {
+  return { favorites, records: favorites.map(f => layout.prepareAppearance(f, 0, "fr")),
+    keyStatus: 1, language: "fr", lifecycleGeneration: 7 };
+}
+function need(h, token, mask, additions = {}) {
+  return h.sync.receive(Object.assign({ SCHEMA_VERSION: 2, MESSAGE_TYPE: T.CONFIG_NEED,
+    REQUEST_ID: token, DISPLAY_GENERATION: parseInt(token.slice(16), 16),
+    CONFIG_NEED_MASK: mask, DISPLAY_PROFILE: 0, CLOCK_12H: 0 }, additions));
 }
 
-test("PebbleKit constants exactly mirror the canonical alias and numeric contracts", async function () {
-  var shared = await sharedContracts();
-  assert.deepEqual(contracts.APP_MESSAGE_KEY_ORDER, shared.APP_MESSAGE_KEY_ORDER);
-  assert.deepEqual(contracts.APP_MESSAGE_KEY, shared.APP_MESSAGE_KEY);
-  assert.deepEqual(contracts.MESSAGE_TYPE, shared.MESSAGE_TYPE);
-  assert.deepEqual(contracts.KEY_STATUS, shared.KEY_STATUS);
-  assert.deepEqual(contracts.REQUEST_TRIGGER, shared.REQUEST_TRIGGER);
-  assert.deepEqual(contracts.TRANSPORT_MODE, shared.TRANSPORT_MODE);
-  assert.deepEqual(contracts.WIRE_LANGUAGE, shared.WIRE_LANGUAGE);
-  assert.deepEqual(contracts.LIMITS, shared.LIMITS);
-  assert.equal(contracts.SCHEMA_VERSION, shared.SCHEMA_VERSION);
-  assert.equal(contracts.CACHE_FRESH_SECONDS, shared.CACHE_FRESH_SECONDS);
-  assert.equal(contracts.FAVORITE_SETTLE_MS, shared.FAVORITE_SETTLE_MS);
-});
-
-test("presentation fields form an optional complete group and remain outside AppMessage", function () {
-  var copied = contracts.copyFavorite(fixture.favorite);
-  var legacy;
-  var legacyCopy;
-  var presentationFields = ["lineMode", "lineColor", "lineTextColor"];
-  assert.deepEqual(copied, fixture.favorite);
-  assert.equal(contracts.isFavorite(copied), true);
-  assert.equal(contracts.isFavorite(Object.assign({}, copied, { lineColor: "#FFBE00" })), false);
-  assert.equal(contracts.isFavorite(Object.assign({}, copied, { lineMode: "metro" })), false);
-  delete copied.lineTextColor;
-  assert.equal(contracts.isFavorite(copied), false);
-
-  legacy = contracts.copyFavorite(fixture.favorite);
-  presentationFields.forEach(function (field) { delete legacy[field]; });
-  assert.equal(contracts.isFavorite(legacy), true);
-  assert.equal(contracts.isFavorite(Object.assign({}, legacy, { lineMode: "METRO" })), false);
-  assert.equal(contracts.isFavorite(Object.assign({}, legacy, {
-    lineMode: "METRO",
-    lineColor: "#ffbe00"
-  })), false);
-  legacyCopy = contracts.copyFavorite(legacy);
-  assert.deepEqual(legacyCopy, legacy);
-  presentationFields.forEach(function (field) {
-    assert.equal(Object.prototype.hasOwnProperty.call(legacyCopy, field), false);
+// The foreign-session, wrong-epoch and wrong-kind inputs are independent
+// admission failures, not snapshots of mirrored constants.
+test("strict watch decoder admits overview CACHE_ONLY but rejects retired and mismatched envelopes", () => {
+  const request = { SCHEMA_VERSION: 2, MESSAGE_TYPE: T.OVERVIEW_REQUEST,
+    REQUEST_ID: id("r", 1), DISPLAY_GENERATION: 1, REQUEST_TRIGGER: 5 };
+  assert.deepEqual(codec.decodeDataRequest(request), {
+    kind: "overview", requestId: id("r", 1), wireGeneration: 1, trigger: 5
   });
-
-  assert.equal(codec.encodeConfiguration(
-    "presentation-wire",
-    [fixture.favorite],
-    contracts.KEY_STATUS.CONFIGURED,
-    "en"
-  ).some(function (message) {
-    return Object.prototype.hasOwnProperty.call(message, "lineMode")
-      || Object.prototype.hasOwnProperty.call(message, "lineColor")
-      || Object.prototype.hasOwnProperty.call(message, "lineTextColor");
-  }), false);
+  for (const change of [{ SCHEMA_VERSION: 1 }, { REQUEST_TRIGGER: 1 }, { REQUEST_TRIGGER: 3 },
+    { REQUEST_ID: id("c", 1) }, { REQUEST_ID: id("r", 0) }, { DISPLAY_GENERATION: 0 }, { EXTRA: 1 }]) {
+    assert.equal(codec.decodeDataRequest({ ...request, ...change }), null);
+  }
+  const detail = { ...request, MESSAGE_TYPE: T.REQUEST, FAVORITE_ID: "🚆" };
+  assert.equal(codec.decodeDataRequest(detail).favoriteId, "🚆");
+  assert.equal(codec.decodeDataRequest({ ...detail, FAVORITE_ID: "\ud800" }), null);
+  assert.equal(codec.decodeDataRequest({ ...detail, REQUEST_TRIGGER: 0 }), null);
 });
 
-test("recorded fixture round trips through symbolic configuration and result payloads", async function () {
-  var shared = await sharedContracts();
-  var receiver = new shared.ProtocolReceiver();
-  var configurationMessages;
-  var resultMessages;
-  var request;
-
-  assert.equal(shared.isFavorite(fixture.favorite), true);
-  assert.equal(shared.isDepartureResult(fixture.result), true);
-  configurationMessages = codec.encodeConfiguration(
-    "config-round-trip",
-    [fixture.favorite],
-    contracts.KEY_STATUS.CONFIGURED,
-    "fr"
-  );
-  configurationMessages.forEach(function (message) {
-    assert.equal(Object.keys(message).some(function (key) { return /^[0-9]+$/.test(key); }), false);
-    assert.equal(shared.isAppMessage(message), true);
-    assert.equal(receiver.receive(message), true);
-  });
-  assert.equal(receiver.committed.configuration.language, "fr");
-  assert.equal(receiver.committed.configuration.favorites.length, 1);
-
-  assert.equal(receiver.expectResponse(fixture.result.requestId, fixture.result.favoriteId), true);
-  resultMessages = codec.encodeResult(fixture.result);
-  resultMessages.forEach(function (message) {
-    assert.equal(Object.keys(message).some(function (key) { return /^[0-9]+$/.test(key); }), false);
-    assert.equal(shared.isAppMessage(message), true);
-    assert.equal(receiver.receive(message), true);
-  });
-  assert.equal(receiver.committed.result.departures.length, 2);
-
-  request = codec.encodeRequest({
-    requestId: "request-round-trip",
-    favoriteId: fixture.favorite.id,
-    trigger: contracts.REQUEST_TRIGGER.MANUAL_SELECT
-  });
-  assert.deepEqual(codec.decodeRequest(request), {
-    requestId: "request-round-trip",
-    favoriteId: fixture.favorite.id,
-    trigger: contracts.REQUEST_TRIGGER.MANUAL_SELECT
-  });
-  assert.equal(shared.isAppMessage(request), true);
+test("lazy configuration waits for correlated NEED and COMMIT ACK before exposing the binding", () => {
+  const h = syncHarness(), prepared = target();
+  const token = h.sync.synchronize(prepared, false);
+  drain(h);
+  assert.deepEqual(h.Pebble.sent.slice(1).map(m => m.MESSAGE_TYPE), [T.CONFIG_BEGIN, T.CONFIG_ENTRY]);
+  const data = { requestId: id("r", 1), wireGeneration: 1 };
+  assert.equal(h.sync.resolveDataBinding(data), null);
+  need(h, id("c", 2), 1);
+  assert.equal(h.Pebble.sent.length, 3);
+  need(h, token, 1);
+  while (h.Pebble.sent.at(-1).MESSAGE_TYPE !== T.CONFIG_COMMIT) {
+    if (h.Pebble.pending.length) h.Pebble.ack(); else h.defer.runNext();
+  }
+  assert.equal(h.completed.length, 0);
+  assert.equal(h.sync.pendingDataBinding(data), true);
+  drain(h);
+  assert.equal(h.completed.length, 1);
+  assert.equal(h.sync.resolveDataBinding(data).favorites[0].id, prepared.favorites[0].id);
+  assert.equal(h.sync.pendingDataBinding(data), false);
 });
 
-test("configuration encoder requires a normalized contextual language", function () {
-  assert.throws(function () {
-    codec.encodeConfiguration("config-1", [], contracts.KEY_STATUS.MISSING, "fr_FR");
-  }, /language must be en or fr/);
-  assert.equal(
-    codec.encodeConfiguration("config-1", [], contracts.KEY_STATUS.MISSING, "en")[0].DISPLAY_NAME,
-    "en"
-  );
+test("FULL sends complete inventory and requires every body bit; reorder DIFF sends no bodies", () => {
+  const h = syncHarness();
+  const favorites = [fixture.favorite, { ...fixture.favorite, id: "second", sortOrder: 1 }];
+  const token = h.sync.synchronize(target(favorites), true);
+  drain(h);
+  assert.equal(h.Pebble.sent.filter(m => m.MESSAGE_TYPE === T.CONFIG_ENTRY).length, 2);
+  need(h, token, 1); drain(h);
+  assert.equal(h.Pebble.sent.filter(m => m.MESSAGE_TYPE === T.FAVORITE).length, 0);
+  need(h, token, 3); drain(h);
+  assert.equal(h.completed.length, 1);
+  const before = h.Pebble.sent.length;
+  const reversed = favorites.slice().reverse().map((f, sortOrder) => ({ ...f, sortOrder }));
+  const reorder = h.sync.synchronize(target(reversed), false);
+  drain(h); need(h, reorder, 0); drain(h);
+  assert.equal(h.Pebble.sent.slice(before).some(m => m.MESSAGE_TYPE === T.FAVORITE), false);
+  assert.deepEqual(h.completed.at(-1).favorites.map(f => f.id), reversed.map(f => f.id));
 });
 
-test("callback queue completes batches only after their final ACK and preserves FIFO deferral", function () {
-  var Pebble = new fakes.FakePebble(false);
-  var defer = fakes.createDefer(false);
-  var failures = [];
-  var completions = [];
-  var queue = new companion.MessageQueue(Pebble, defer, function (code) { failures.push(code); });
-
-  queue.enqueue(
-    [{ id: "batch-a-1" }, { id: "batch-a-2" }],
-    function () { completions.push("a"); }
-  );
-  queue.enqueue([{ id: "batch-b-1" }], function () { completions.push("b"); });
-  assert.deepEqual(Pebble.sent.map(function (message) { return message.id; }), ["batch-a-1"]);
-  assert.equal(Pebble.maxInFlight, 1);
-
-  Pebble.ack();
-  assert.deepEqual(completions, []);
-  assert.deepEqual(Pebble.sent.map(function (message) { return message.id; }), ["batch-a-1"]);
-  assert.equal(defer.pending.length, 1);
-  queue.enqueue([{ id: "batch-c-1" }], function () { completions.push("c"); });
-  assert.equal(defer.pending.length, 1);
-
-  defer.runNext();
-  Pebble.ack();
-  assert.deepEqual(completions, ["a"]);
-  assert.deepEqual(Pebble.sent.map(function (message) { return message.id; }), [
-    "batch-a-1",
-    "batch-a-2"
-  ]);
-  defer.runNext();
-  Pebble.ack();
-  assert.deepEqual(completions, ["a", "b"]);
-  defer.runNext();
-  Pebble.ack();
-
-  assert.deepEqual(Pebble.sent.map(function (message) { return message.id; }), [
-    "batch-a-1",
-    "batch-a-2",
-    "batch-b-1",
-    "batch-c-1"
-  ]);
-  assert.deepEqual(completions, ["a", "b", "c"]);
-  assert.equal(defer.pending.length, 0);
-  assert.equal(queue.isSending(), false);
-  assert.deepEqual(failures, []);
+test("HELLO correlation, epoch floor and profile changes guard configuration preparation", () => {
+  const h = syncHarness();
+  const token = h.sync.synchronize(target(), false); drain(h); need(h, token, 1); drain(h);
+  assert.equal(h.sync.hello(hello()).changed, false);
+  assert.equal(h.sync.hello(hello("000000000000002", 0, 0, "obsolete-phone-token")).changed, false);
+  assert.equal(h.sync.hello(hello("000000000000002")).changed, true);
+  assert.equal(h.sync.resolveDataBinding({ requestId: id("r", 1), wireGeneration: 1 }), null);
+  assert.equal(h.sync.hello(hello()).changed, false);
+  const next = h.sync.synchronize(target(), false);
+  assert.equal(next, id("c", 1, "000000000000002"));
+  drain(h);
+  need(h, next, 1, { CLOCK_12H: 1 }); drain(h);
+  assert.equal(h.completed.length, 1);
+  assert.equal(h.sync.hello(hello("000000000000002", 1, 1)).changed, true);
 });
 
-test("clear invalidates a stale deferred advance without blocking a new batch", function () {
-  var Pebble = new fakes.FakePebble(false);
-  var defer = fakes.createDefer(false);
-  var failures = [];
-  var queue = new companion.MessageQueue(Pebble, defer, function (code) { failures.push(code); });
-
-  queue.enqueue([{ id: "discarded-1" }, { id: "discarded-2" }]);
-  Pebble.ack();
-  assert.equal(defer.pending.length, 1);
-  queue.clear();
-  queue.enqueue([{ id: "fresh" }]);
-  assert.deepEqual(Pebble.sent.map(function (message) { return message.id; }), ["discarded-1", "fresh"]);
-
-  defer.runNext();
-  assert.deepEqual(Pebble.sent.map(function (message) { return message.id; }), ["discarded-1", "fresh"]);
-  Pebble.ack();
-  assert.equal(queue.isSending(), false);
-  assert.deepEqual(failures, []);
+test("superseded sync ignores stale NEED and late transport failure without resetting c-sequence", () => {
+  const h = syncHarness();
+  const first = h.sync.synchronize(target(), false);
+  const second = h.sync.synchronize(target(), false);
+  h.Pebble.fail(); drain(h);
+  need(h, first, 1); drain(h);
+  assert.equal(h.completed.length, 0);
+  need(h, second, 1); drain(h);
+  assert.equal(h.completed[0].generation, 2);
+  assert.deepEqual(h.failures, []);
 });
 
-test("a stale failure cannot clear or fail a newer queue generation", function () {
-  var Pebble = new fakes.FakePebble(false);
-  var defer = fakes.createDefer(false);
-  var failures = [];
-  var queue = new companion.MessageQueue(Pebble, defer, function (code) { failures.push(code); });
-
-  queue.enqueue([{ id: "discarded" }]);
-  queue.clear();
-  queue.enqueue([{ id: "fresh" }]);
-  Pebble.fail();
-
-  assert.deepEqual(failures, []);
-  assert.deepEqual(Pebble.sent.map(function (message) { return message.id; }), ["discarded"]);
-  assert.equal(defer.pending.length, 1);
-
-  defer.runNext();
-  assert.deepEqual(Pebble.sent.map(function (message) { return message.id; }), ["discarded", "fresh"]);
-  Pebble.ack();
-  assert.equal(queue.isSending(), false);
-  assert.deepEqual(failures, []);
+test("Unicode appearance and traffic continuation strings cross D2 without clipping source data", () => {
+  const f = { ...fixture.favorite, id: "🚆🇫🇷", stopLabel: "Étoile 🚆" };
+  const record = layout.prepareAppearance(f, 1, "fr");
+  assert.equal(display.recordField(record, 0), f.id);
+  const body = codec.encodeFavoriteBody({ requestId: id("c", 1), generation: 1, index: 0, record });
+  assert.ok(codec.dictionaryBytes(body) <= C.APP_MESSAGE_INBOX_BYTES);
+  const fragments = layout.prepareTraffic(1, 1788000000, "Perturbations", "", "é".repeat(192), 1);
+  const request = { requestId: id("r", 1), wireGeneration: 1, kind: "traffic", favoriteId: f.id };
+  const next = codec.createDisplayTransfer(request, fragments);
+  const sent = []; for (let m; (m = next()) !== null;) sent.push(m);
+  assert.equal(sent[0].ITEM_COUNT, fragments.length);
+  assert.equal(sent.at(-1).MESSAGE_TYPE, T.DISPLAY_COMMIT);
+  assert.equal(sent.slice(1, -1).map(m => m.DISPLAY_RECORD).join(""), fragments.join(""));
+  sent.forEach(m => assert.ok(codec.dictionaryBytes(m) <= C.APP_MESSAGE_INBOX_BYTES));
 });
 
-test("failed AppMessage drops the batch without retry or completion", function () {
-  var Pebble = new fakes.FakePebble(false);
-  var defer = fakes.createDefer(false);
-  var failures = [];
-  var completions = [];
-  var queue = new companion.MessageQueue(Pebble, defer, function (code) { failures.push(code); });
-
-  queue.enqueue(
-    [{ SCHEMA_VERSION: 1 }, { MESSAGE_TYPE: 2 }],
-    function () { completions.push("complete"); }
-  );
-  Pebble.fail();
-  assert.equal(Pebble.sent.length, 1);
-  assert.equal(defer.pending.length, 0);
-  assert.deepEqual(failures, ["APP_MESSAGE_FAILED"]);
-  assert.deepEqual(completions, []);
-  assert.equal(queue.isSending(), false);
+test("queue is lazy, bounded, atomic and yields after each ACK including final completion", () => {
+  const h = harness(), complete = [];
+  let produced = 0;
+  h.queue.enqueue(() => ++produced <= 2 ? { n: produced } : null, () => complete.push("a"));
+  h.queue.enqueue(frames({ n: 3 }), () => complete.push("b"));
+  h.queue.enqueue(frames({ n: 4 })); h.queue.enqueue(frames({ n: 5 }));
+  assert.equal(h.queue.enqueue(frames({ n: 6 })), false);
+  assert.equal(produced, 1);
+  h.Pebble.ack();
+  assert.equal(produced, 1);
+  h.defer.runNext(); h.Pebble.ack();
+  assert.deepEqual(complete, []);
+  drain(h);
+  assert.deepEqual(h.Pebble.sent.map(m => m.n), [1, 2, 3, 4, 5]);
+  assert.deepEqual(complete, ["a", "b"]);
+  assert.equal(h.Pebble.maxInFlight, 1);
 });
 
-test("synchronous AppMessage failure drops the batch and reports one failure", function () {
-  var Pebble = new fakes.FakePebble(false);
-  var defer = fakes.createDefer(false);
-  var failures = [];
-  var completions = [];
-  var queue;
-  Pebble.sendAppMessage = function (message) {
-    this.sent.push(message);
-    throw new Error("synchronous send failure");
-  };
-  queue = new companion.MessageQueue(Pebble, defer, function (code) {
-    failures.push(code);
-  });
+test("an unattempted SDK echo survives failed D2 work, but the echo itself is never retried", () => {
+  const h = harness();
+  h.queue.enqueue(frames({ n: "failed" }, { n: "discarded" }));
+  h.queue.enqueue(codec.one({ "15025": 1 }), undefined, true);
+  h.queue.enqueue(frames({ n: "discarded-too" }));
+  h.Pebble.fail();
+  h.defer.runNext();
+  assert.deepEqual(h.Pebble.sent, [{ n: "failed" }, { "15025": 1 }]);
+  h.Pebble.fail(); drain(h);
+  assert.equal(h.Pebble.sent.length, 2);
+  assert.deepEqual(h.failures, ["APP_MESSAGE_FAILED", "APP_MESSAGE_FAILED"]);
+});
 
-  queue.enqueue([{ id: "throws" }], function () { completions.push("complete"); });
-  assert.deepEqual(Pebble.sent, [{ id: "throws" }]);
-  assert.deepEqual(failures, ["APP_MESSAGE_FAILED"]);
-  assert.deepEqual(completions, []);
-  assert.equal(queue.isSending(), false);
-  assert.equal(defer.pending.length, 0);
+test("clear waits for the physical flight and stale callbacks cannot corrupt its replacement", () => {
+  const h = harness();
+  h.queue.enqueue(frames({ n: "old" }));
+  const old = h.Pebble.pending[0];
+  h.queue.clear(); h.queue.enqueue(frames({ n: "new" }));
+  assert.equal(h.Pebble.sent.length, 1);
+  h.Pebble.fail(); h.defer.runNext();
+  old.success(); old.failure();
+  assert.equal(h.Pebble.sent.length, 2);
+  assert.equal(h.queue.isSending(), true);
+  drain(h);
+  assert.equal(h.Pebble.maxInFlight, 1);
+  assert.deepEqual(h.failures, []);
+});
+
+test("cancellation retires old deferred work and synchronous transport throws fail once", () => {
+  const h = harness();
+  h.queue.enqueue(frames({ n: "old" }, { n: "never" }));
+  h.Pebble.ack(); h.queue.cancelApplication(); h.queue.enqueue(frames({ n: "new" }));
+  drain(h);
+  assert.deepEqual(h.Pebble.sent.map(m => m.n), ["old", "new"]);
+  const broken = harness();
+  broken.Pebble.sendAppMessage = () => { throw new Error("send failed"); };
+  broken.queue.enqueue(frames({ n: 1 })); drain(broken);
+  assert.deepEqual(broken.failures, ["APP_MESSAGE_FAILED"]);
 });

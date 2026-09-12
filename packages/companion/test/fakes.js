@@ -144,6 +144,8 @@ function createXHRFactory() {
     this.body = null;
     this.status = 0;
     this.responseText = "";
+    this.response = null;
+    this.aborted = false;
     this.responseHeaders = Object.create(null);
     factory.instances.push(this);
   }
@@ -167,14 +169,22 @@ function createXHRFactory() {
   };
 
   FakeXHR.prototype.respond = function (status, body, headers) {
+    var bytes;
     this.status = status;
     this.responseText = typeof body === "string" ? body : JSON.stringify(body);
+    bytes = Buffer.from(this.responseText, "utf8");
+    this.response = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
     this.responseHeaders = headers || Object.create(null);
-    this.onload();
+    if (!this.aborted && typeof this.onload === "function") this.onload();
   };
 
   FakeXHR.prototype.networkError = function () {
-    this.onerror();
+    if (!this.aborted && typeof this.onerror === "function") this.onerror();
+  };
+
+  FakeXHR.prototype.abort = function () {
+    this.aborted = true;
+    if (typeof this.onabort === "function") this.onabort();
   };
 
   factory.XHR = FakeXHR;

@@ -1,0 +1,146 @@
+{
+  "disruptions": [
+    {
+      "id": "delay-active",
+      "applicationPeriods": [
+        { "begin": "20260115T095900", "end": "20260115T110000" }
+      ],
+      "lastUpdate": "20260115T095500",
+      "cause": "PERTURBATION",
+      "severity": "PERTURBEE",
+      "title": "Métro 2 : ralentissements",
+      "message": "<p>Le trafic est ralenti &amp; les temps d’attente sont allongés.</p>"
+    },
+    {
+      "id": "information-active",
+      "applicationPeriods": [
+        { "begin": "20260115T090000", "end": "20260115T120000" }
+      ],
+      "lastUpdate": "20260115T094500",
+      "cause": "INFORMATION",
+      "severity": "INFORMATION",
+      "title": "Information voyageurs",
+      "message": "<p>La circulation a repris normalement.</p>"
+    },
+    {
+      "id": "stopped-active",
+      "applicationPeriods": [
+        { "begin": "20260115T093000", "end": "20260115T103000" }
+      ],
+      "lastUpdate": "20260115T095800",
+      "cause": "PERTURBATION",
+      "severity": { "name": "BLOQUANTE", "effect": "NO_SERVICE" },
+      "title": "RER A : trafic interrompu",
+      "message": "<p>Le trafic est interrompu entre les deux terminus.</p>"
+    },
+    {
+      "id": "blocking-unclassified",
+      "applicationPeriods": [
+        { "begin": "20260115T093000", "end": "20260115T103000" }
+      ],
+      "lastUpdate": "20260115T095700",
+      "cause": "PERTURBATION",
+      "severity": "BLOQUANTE",
+      "title": "Tram T3 : incident",
+      "message": "<p>Une perturbation est en cours.</p>"
+    },
+    {
+      "id": "future-delay",
+      "applicationPeriods": [
+        { "begin": "20260115T120000", "end": "20260115T130000" }
+      ],
+      "lastUpdate": "20260115T090000",
+      "cause": "TRAVAUX",
+      "severity": "PERTURBEE",
+      "title": "Travaux prévus",
+      "message": "<p>Des travaux sont prévus plus tard.</p>"
+    }
+  ],
+  "lines": [
+    {
+      "id": "line:IDFM:C100",
+      "name": "1",
+      "shortName": "1",
+      "mode": "Metro",
+      "networkId": "network:IDFM:Operator_100",
+      "impactedObjects": []
+    },
+    {
+      "id": "line:IDFM:C200",
+      "name": "2",
+      "shortName": "2",
+      "mode": "Metro",
+      "networkId": "network:IDFM:Operator_100",
+      "impactedObjects": [
+        {
+          "type": "line",
+          "id": "line:IDFM:C200",
+          "name": "2",
+          "disruptionIds": ["delay-active", "information-active", "future-delay"]
+        }
+      ]
+    },
+    {
+      "id": "line:IDFM:C300",
+      "name": "A",
+      "shortName": "A",
+      "mode": "RapidTransit",
+      "networkId": "network:IDFM:71",
+      "impactedObjects": [
+        {
+          "type": "line",
+          "id": "line:IDFM:C300",
+          "name": "A",
+          "disruptionIds": ["delay-active", "blocking-unclassified", "stopped-active"]
+        }
+      ]
+    },
+    {
+      "id": "line:IDFM:C400",
+      "name": "T3",
+      "shortName": "T3",
+      "mode": "Tramway",
+      "networkId": "network:IDFM:Operator_100",
+      "impactedObjects": [
+        {
+          "type": "line",
+          "id": "line:IDFM:C400",
+          "name": "T3",
+          "disruptionIds": ["delay-active", "blocking-unclassified"]
+        }
+      ]
+    },
+    {
+      "id": "line:IDFM:C500",
+      "name": "5",
+      "shortName": "5",
+      "mode": "Metro",
+      "networkId": "network:IDFM:Operator_100",
+      "impactedObjects": [
+        {
+          "type": "line",
+          "id": "line:IDFM:C500",
+          "name": "5",
+          "disruptionIds": ["information-active"]
+        }
+      ]
+    },
+    {
+      "id": "line:IDFM:C600",
+      "name": "6",
+      "shortName": "6",
+      "mode": "Metro",
+      "networkId": "network:IDFM:Operator_100",
+      "impactedObjects": [
+        {
+          "type": "stop_point",
+          "id": "stop_point:IDFM:12345",
+          "name": "Un arrêt",
+          "disruptionIds": ["delay-active"]
+        }
+      ]
+    }
+  ],
+  "lastUpdatedDate": "2026-01-15T09:00:00.000Z",
+  "unknownFutureField": { "accepted": true }
+}

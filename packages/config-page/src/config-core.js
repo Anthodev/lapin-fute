@@ -19,7 +19,8 @@ export const LIMITS = {
   apiKeyUtf8Bytes: 512,
   idUtf8Bytes: 64,
   labelUtf8Bytes: 96,
-  favorites: 8,
+  favorites: 6,
+  httpResponseBytes: 262144,
   catalogQueryMinCharacters: 2,
   catalogQueryMaxCharacters: 100,
   catalogSearchResults: 20,
@@ -36,6 +37,7 @@ const FAVORITE_FIELDS = [
   "lineMode",
   "lineColor",
   "lineTextColor",
+  "routing",
   "sortOrder",
 ];
 
@@ -104,16 +106,21 @@ export const COPY = {
     favoriteNameLabel: "Favorite name (optional)",
     favoriteNamePlaceholder: "For example, Home",
     favoriteAdd: "Add favorite",
-    favoriteLimit: "You have reached the 8-favorite limit.",
+    favoriteLimit: "You have reached the 6-favorite limit.",
     favoriteMoveUp: "Move up",
     favoriteMoveDown: "Move down",
     favoriteRename: "Rename",
     favoriteRemove: "Remove",
+    favoriteUnresolved: "Not found in the catalog anymore: remove it, then search for the stop again.",
     renamePrompt: "Favorite name",
     save: "Save settings",
     aboutOpen: "About",
     aboutBack: "Back to settings",
     aboutTitle: "About Lapin Futé",
+    syncTitle: "Watch synchronization",
+    syncHint: "The watch normally receives only what changed. Tick this to resend everything if the watch shows outdated favorites.",
+    forceSyncLabel: "Force a full synchronization at the next save",
+    saveTooLarge: "These settings are too large to transfer. Remove the favorite with the longest entry and add it again.",
   },
   fr: {
     pageTitle: "Réglages Lapin Futé",
@@ -152,16 +159,21 @@ export const COPY = {
     favoriteNameLabel: "Nom du favori (facultatif)",
     favoriteNamePlaceholder: "Par exemple, Maison",
     favoriteAdd: "Ajouter le favori",
-    favoriteLimit: "Vous avez atteint la limite de 8 favoris.",
+    favoriteLimit: "Vous avez atteint la limite de 6 favoris.",
     favoriteMoveUp: "Monter",
     favoriteMoveDown: "Descendre",
     favoriteRename: "Renommer",
     favoriteRemove: "Supprimer",
     renamePrompt: "Nom du favori",
+    favoriteUnresolved: "Introuvable dans le catalogue : supprimez-le, puis recherchez à nouveau l’arrêt.",
     save: "Enregistrer les réglages",
     aboutOpen: "À propos",
     aboutBack: "Retour aux réglages",
     aboutTitle: "À propos de Lapin Futé",
+    syncTitle: "Synchronisation de la montre",
+    syncHint: "La montre ne reçoit normalement que les changements. Cochez cette case pour tout renvoyer si la montre affiche des favoris obsolètes.",
+    forceSyncLabel: "Forcer une synchronisation complète au prochain enregistrement",
+    saveTooLarge: "Ces réglages sont trop volumineux pour être transférés. Supprimez le favori comportant l’entrée la plus longue, puis rajoutez-le.",
   },
 };
 
@@ -195,8 +207,39 @@ export function isFavoriteShape(value) {
   );
 }
 
+// --- Service routing -----------------------------------------------------------
+// The accepted no-backend contract: routing references are exact-key objects of
+// non-empty opaque strings. No per-reference byte cap is invented; the page and
+// close fragment bounds (32768 characters) constrain total size.
+
+const ROUTING_FIELDS = ["monitoringRef", "lineRef", "destinationRef"];
+
+export function isServiceRouting(value) {
+  return exactFields(value, ROUTING_FIELDS, ROUTING_FIELDS)
+    && ROUTING_FIELDS.every((field) => typeof value[field] === "string" && value[field].length > 0);
+}
+
+// PhoneFavorite: a Favorite that may carry routing. Missing routing marks a
+// routing-unresolved favorite and stays fully valid; a present routing must be
+// exactly valid (present-but-undefined is rejected, mirroring lineMode).
+
+export function isPhoneFavorite(value) {
+  if (!isFavoriteShape(value)) return false;
+  if (!Object.hasOwn(value, "routing")) return true;
+  return isServiceRouting(value.routing);
+}
+
+// Storage/payload copy for the phone: unlike the watch projection this keeps a
+// fresh copy of routing.
+
+export function copyPhoneFavorite(favorite) {
+  const copy = { ...favorite };
+  if (Object.hasOwn(copy, "routing")) copy.routing = { ...copy.routing };
+  return copy;
+}
+
 const PLACE_FIELDS = ["placeId", "stopLabel", "localityLabel", "mode"];
-const SERVICE_FIELDS = ["serviceId", "stopLabel", "lineLabel", "destinationLabel", "lineMode", "lineColor", "lineTextColor"];
+const SERVICE_FIELDS = ["serviceId", "stopLabel", "lineLabel", "destinationLabel", "lineMode", "lineColor", "lineTextColor", "routing"];
 const TRANSPORT_MODES = ["BUS", "METRO", "TRAM", "RER", "TRANSILIEN"];
 
 function exactFields(value, allowed, required) {
@@ -229,7 +272,8 @@ export function isServiceOption(value) {
     && boundedString(value.destinationLabel, LIMITS.labelUtf8Bytes)
     && TRANSPORT_MODES.includes(value.lineMode)
     && isLineColor(value.lineColor)
-    && isLineColor(value.lineTextColor);
+    && isLineColor(value.lineTextColor)
+    && isServiceRouting(value.routing);
 }
 
 export function isServiceOptionsResult(value, placeId) {
@@ -253,6 +297,7 @@ export function favoriteFromService(id, service, sortOrder, displayName = undefi
     lineMode: service.lineMode,
     lineColor: service.lineColor,
     lineTextColor: service.lineTextColor,
+    routing: { ...service.routing },
     sortOrder,
   };
   if (displayName !== undefined && boundedString(displayName, LIMITS.labelUtf8Bytes)) {
@@ -271,8 +316,8 @@ function renumber(favorites) {
 // hasKey is the only credential-related field; the stored key itself is never
 // present. Any other top-level shape is rejected before it can enter page state.
 
+export const MAX_OPENING_FRAGMENT_LENGTH = 32768;
 const OPENING_FIELDS = ["hasKey", "favorites", "language"];
-const MAX_OPENING_FRAGMENT_LENGTH = 32768;
 
 function emptyOpeningState() {
   return { hasKey: false, language: "en", locale: "en", favorites: [] };
@@ -301,7 +346,7 @@ export function parseConfigFragment(hash) {
     hasKey: parsed.hasKey,
     language: parsed.language,
     locale: selectLocale(parsed.language),
-    favorites: parsed.favorites.filter(isFavoriteShape).map((favorite) => ({ ...favorite })),
+    favorites: parsed.favorites.filter(isPhoneFavorite).map(copyPhoneFavorite),
   };
 }
 
@@ -314,6 +359,7 @@ export function initialConfigState(query) {
     hasKey: query.hasKey,
     keyDraft: { ...EMPTY_KEY_DRAFT },
     favorites: query.favorites,
+    forceFullSync: false,
   };
 }
 
@@ -334,12 +380,13 @@ export function reduceConfigState(state, action) {
     case "key-remove-cancelled":
       return { ...state, keyDraft: { ...state.keyDraft, removeRequested: false } };
     case "favorite-add": {
-      if (state.favorites.length >= LIMITS.favorites || !isFavoriteShape(action.favorite)
+      if (state.favorites.length >= LIMITS.favorites || !isPhoneFavorite(action.favorite)
           || state.favorites.some((favorite) => favorite.id === action.favorite.id)) return state;
-      return {
-        ...state,
-        favorites: renumber([...state.favorites, { ...action.favorite }]),
-      };
+      const candidate = renumber([...state.favorites, { ...action.favorite }]);
+      // A favorite whose routing would overflow the one-shot close bound is
+      // rejected whole: neither the list nor the session is disturbed.
+      if (!favoritesFitCloseBound(candidate)) return state;
+      return { ...state, favorites: candidate };
     }
     case "favorite-rename": {
       const displayName = typeof action.displayName === "string" ? action.displayName.trim() : "";
@@ -372,6 +419,20 @@ export function reduceConfigState(state, action) {
       favorites.splice(to, 0, moved);
       return { ...state, favorites: renumber(favorites) };
     }
+    case "favorite-hydrate": {
+      // Routing recovery: a known serviceId gains routing in place; unknown,
+      // malformed, or bound-overflowing hydration never deletes or reorders
+      // the stored favorite.
+      if (!isPhoneFavorite(action.favorite) || action.favorite.id !== action.id) return state;
+      if (!state.favorites.some((favorite) => favorite.id === action.id)) return state;
+      const candidate = renumber(state.favorites.map((favorite) => (
+        favorite.id === action.id ? action.favorite : favorite
+      )));
+      if (!favoritesFitCloseBound(candidate)) return state;
+      return { ...state, favorites: candidate };
+    }
+    case "force-full-sync":
+      return { ...state, forceFullSync: action.value === true };
     default:
       return state;
   }
@@ -398,7 +459,8 @@ export function planApiKeyUpdate(hasKey, keyDraft) {
 }
 
 // Plans the full configuration payload: the key decision plus the whole
-// favorite list (atomic replacement, capped at the contract maximum).
+// favorite list (atomic replacement; an oversized list is rejected, never
+// silently truncated).
 
 export function planConfigResult(state) {
   const apiKeyUpdate = planApiKeyUpdate(state.hasKey, state.keyDraft);
@@ -406,14 +468,17 @@ export function planConfigResult(state) {
     const error = apiKeyError(apiKeyUpdate.value);
     if (error !== null) return { ok: false, error };
   }
-  return {
-    ok: true,
-    payload: {
-      schemaVersion: SCHEMA_VERSION,
-      apiKeyUpdate,
-      favorites: state.favorites.slice(0, LIMITS.favorites).map(stampFavorite),
-    },
+  if (state.favorites.length > LIMITS.favorites) {
+    return { ok: false, error: "favoriteLimit" };
+  }
+  const payload = {
+    schemaVersion: SCHEMA_VERSION,
+    apiKeyUpdate,
+    favorites: state.favorites.map(stampFavorite),
   };
+  // One-shot full resync: absent unless explicitly requested on the settings page.
+  if (state.forceFullSync === true) payload.forceFullSync = true;
+  return { ok: true, payload };
 }
 
 function stampFavorite(favorite, sortOrder) {
@@ -429,6 +494,9 @@ function stampFavorite(favorite, sortOrder) {
     stamped.lineMode = favorite.lineMode;
     stamped.lineColor = favorite.lineColor;
     stamped.lineTextColor = favorite.lineTextColor;
+  }
+  if (Object.hasOwn(favorite, "routing")) {
+    stamped.routing = { ...favorite.routing };
   }
   stamped.sortOrder = sortOrder;
   if (favorite.displayName !== undefined) stamped.displayName = favorite.displayName;
@@ -447,6 +515,47 @@ export function encodeCloseFragment(payload) {
   return CLOSE_PREFIX + encodeURIComponent(JSON.stringify(payload));
 }
 
+// The phone accepts at most 32768 characters of "pebblejs://close#" plus the
+// encoded payload (its MAX_CLOSE_RESPONSE_LENGTH). Producers enforce the
+// complete encoded bound before any one-shot close or list mutation so an
+// oversized selection can never empty favorites or burn the session.
+
+export const MAX_CLOSE_PAYLOAD_LENGTH = 32768;
+
+export function closePayloadFits(payload) {
+  try {
+    return CLOSE_PREFIX.length + encodeURIComponent(JSON.stringify(payload)).length
+      <= MAX_CLOSE_PAYLOAD_LENGTH;
+  } catch {
+    // Unpaired surrogates make encodeURIComponent throw on some engines; such
+    // a payload can never round-trip, so report it as not fitting.
+    return false;
+  }
+}
+
+// Early-rejection envelope for selection/hydration. The true permitted worst
+// case composes both escaping layers: JSON.stringify turns one backslash into
+// two, and encodeURIComponent then turns each into %5C, so one key byte
+// becomes six encoded characters (quotes behave identically; canonical
+// boundedString excludes control characters, and every other byte inflates
+// at most threefold). A 512-byte key of backslashes therefore bounds every
+// key the page can plan; the flag adds only a fixed tail. If this envelope
+// fits, every real save payload fits too; the actual payload is still checked
+// authoritatively at close time.
+
+function favoritesFitCloseBound(favorites) {
+  return closePayloadFits({
+    schemaVersion: SCHEMA_VERSION,
+    apiKeyUpdate: {
+      schemaVersion: SCHEMA_VERSION,
+      action: "REPLACE",
+      value: "\\".repeat(LIMITS.apiKeyUtf8Bytes),
+    },
+    favorites,
+    forceFullSync: true,
+  });
+}
+
 export function createCloseSession() {
   let closed = false;
   return {
@@ -455,6 +564,8 @@ export function createCloseSession() {
     },
     close(payload) {
       if (closed) return null;
+      // An oversized payload never consumes the one-shot session.
+      if (!closePayloadFits(payload)) return null;
       closed = true;
       return encodeCloseFragment(payload);
     },

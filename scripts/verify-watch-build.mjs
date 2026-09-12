@@ -1,9 +1,6 @@
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import {
-  APP_MESSAGE_KEY,
-  APP_MESSAGE_KEY_ORDER
-} from "../packages/contracts/src/index.ts";
+import { APP_MESSAGE_KEYS } from "../packages/contracts/src/index.ts";
 
 const packagePath = new URL("../packages/watch/package.json", import.meta.url);
 const generatedPath = new URL(
@@ -12,17 +9,16 @@ const generatedPath = new URL(
 );
 
 function assertExactMap(actual, source) {
-  const entries = Object.entries(actual).sort((left, right) => left[1] - right[1]);
-  if (entries.length !== APP_MESSAGE_KEY_ORDER.length) {
-    throw new Error(`${source} must contain exactly 25 AppMessage aliases`);
+  const expected = Object.entries(APP_MESSAGE_KEYS);
+  if (actual === null || typeof actual !== "object" || Array.isArray(actual)
+      || Object.keys(actual).length !== expected.length) {
+    throw new Error(`${source} must contain exactly ${expected.length} AppMessage aliases`);
   }
-  entries.forEach(([name, value], index) => {
-    if (name !== APP_MESSAGE_KEY_ORDER[index] || value !== APP_MESSAGE_KEY[name]) {
-      throw new Error(
-        `${source} AppMessage mismatch at ${index}: expected ${APP_MESSAGE_KEY_ORDER[index]}=${index}`
-      );
+  for (const [name, value] of expected) {
+    if (!Object.hasOwn(actual, name) || actual[name] !== value) {
+      throw new Error(`${source} AppMessage mismatch: expected ${name}=${value}`);
     }
-  });
+  }
 }
 
 export function verifyWatchBuild() {
@@ -30,10 +26,11 @@ export function verifyWatchBuild() {
   const generated = JSON.parse(readFileSync(generatedPath, "utf8"));
   assertExactMap(packageMetadata.pebble.messageKeys, "packages/watch/package.json");
   assertExactMap(generated, "packages/watch/build/js/message_keys.json");
+  const aliases = Object.entries(APP_MESSAGE_KEYS).sort((left, right) => left[1] - right[1]);
   return {
-    aliases: APP_MESSAGE_KEY_ORDER.length,
-    first: APP_MESSAGE_KEY_ORDER[0],
-    last: APP_MESSAGE_KEY_ORDER[APP_MESSAGE_KEY_ORDER.length - 1]
+    aliases: aliases.length,
+    first: aliases[0][0],
+    last: aliases[aliases.length - 1][0]
   };
 }
 

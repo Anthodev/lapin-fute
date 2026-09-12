@@ -1,20 +1,8 @@
 {
   "include": [
-    "$(MODDABLE)/examples/manifest_mod.json",
-    "$(MODDABLE)/examples/manifest_typings.json"
+    "$(MODDABLE)/examples/manifest_mod.json"
   ],
   "modules": {
-    "*": [
-      "./main",
-      "./controller",
-      "./model",
-      "./protocol",
-      "./message-queue",
-      "./localization",
-      "./presentation",
-      "./storage",
-      "./ui",
-      "./contracts"
-    ]
+    "main": "../generated/main"
   }
 }

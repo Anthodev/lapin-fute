@@ -1,78 +1,81 @@
 "use strict";
 
+var CAPACITY = 4;
+
 function MessageQueue(Pebble, defer, onFailure) {
-  if (!Pebble || typeof Pebble.sendAppMessage !== "function") {
-    throw new TypeError("Pebble.sendAppMessage is required");
+  if (!Pebble || typeof Pebble.sendAppMessage !== "function" || typeof defer !== "function") {
+    throw new TypeError("Pebble.sendAppMessage and defer adapters are required");
   }
-  if (typeof defer !== "function") throw new TypeError("defer adapter is required");
   this._Pebble = Pebble;
   this._defer = defer;
   this._onFailure = typeof onFailure === "function" ? onFailure : function () {};
-  this._batches = [];
+  this._jobs = [];
   this._active = null;
-  this._sending = false;
-  this._completing = false;
-  this._deferredGeneration = null;
+  this._flight = null;
+  this._deferred = null;
+  this._advancing = false;
   this._generation = 0;
-  this._nextBatchId = 1;
+  this._nextId = 1;
 }
 
-MessageQueue.prototype.enqueue = function (messages, onComplete) {
-  var batch;
-  if (!Array.isArray(messages) || messages.length === 0) {
-    throw new TypeError("A non-empty message sequence is required");
+// A producer returns one dictionary per invocation, then null. Its entire
+// transfer owns the FIFO until the final ACK and the following event turn.
+MessageQueue.prototype.enqueue = function (next, onComplete, control) {
+  if (typeof next !== "function" || onComplete !== undefined && typeof onComplete !== "function") {
+    throw new TypeError("A message producer and optional completion callback are required");
   }
-  if (typeof onComplete !== "undefined" && typeof onComplete !== "function") {
-    throw new TypeError("onComplete must be a function");
-  }
-  batch = {
-    id: this._nextBatchId,
-    messages: messages.slice(),
-    onComplete: typeof onComplete === "function" ? onComplete : null
-  };
-  this._nextBatchId += 1;
-  this._batches.push(batch);
+  if (this._jobs.length + (this._active ? 1 : 0) >= CAPACITY) return false;
+  var job = { id: this._nextId++, next: next, complete: onComplete, control: control === true };
+  this._jobs.push(job);
   this._advance();
-  return batch.id;
+  return job.id;
 };
 
-MessageQueue.prototype.replacePending = function (batchId, messages) {
-  var index;
-  if (!Array.isArray(messages) || messages.length === 0) {
-    throw new TypeError("A non-empty message sequence is required");
+MessageQueue.prototype.replacePending = function (id, next) {
+  if (typeof next !== "function") throw new TypeError("A message producer is required");
+  for (var i = 0; i < this._jobs.length; i += 1) {
+    if (this._jobs[i].id === id) { this._jobs[i].next = next; return true; }
   }
-  for (index = 0; index < this._batches.length; index += 1) {
-    if (this._batches[index].id !== batchId) continue;
-    this._batches[index].messages = messages.slice();
-    return true;
+  return false;
+};
+
+MessageQueue.prototype.removePending = function (id) {
+  for (var i = 0; i < this._jobs.length; i += 1) {
+    if (this._jobs[i].id === id) { this._jobs.splice(i, 1); return true; }
   }
   return false;
 };
 
 MessageQueue.prototype.clear = function () {
   this._generation += 1;
-  this._batches = [];
   this._active = null;
-  this._deferredGeneration = null;
+  this._jobs = [];
+  this._deferred = null;
+  // Do not release _flight before its callback: clear cannot cancel a native
+  // send, and a new generation must not put a second dictionary in flight.
 };
 
-MessageQueue.prototype.isSending = function () {
-  return this._sending;
+MessageQueue.prototype.cancelApplication = function () {
+  this._generation += 1;
+  this._active = null;
+  this._deferred = null;
+  this._jobs = this._jobs.filter(function (job) { return job.control; });
 };
 
-MessageQueue.prototype._scheduleAdvance = function (generation) {
+MessageQueue.prototype.isSending = function () { return this._flight !== null; };
+
+MessageQueue.prototype._scheduleAdvance = function () {
   var self = this;
-  if (this._deferredGeneration !== null) return;
-  this._deferredGeneration = generation;
+  if (this._deferred !== null) return;
+  var ticket = { generation: this._generation };
+  this._deferred = ticket;
   try {
     this._defer(function () {
-      if (self._deferredGeneration !== generation) return;
-      self._deferredGeneration = null;
-      if (generation !== self._generation) return;
+      if (self._deferred !== ticket || ticket.generation !== self._generation) return;
+      self._deferred = null;
       self._advance();
     });
-  } catch (ignored) {
-    this._deferredGeneration = null;
+  } catch (error) {
     this.clear();
     this._onFailure("APP_MESSAGE_FAILED");
   }
@@ -80,66 +83,54 @@ MessageQueue.prototype._scheduleAdvance = function (generation) {
 
 MessageQueue.prototype._advance = function () {
   var self = this;
-  var completed;
-  var message;
-  var generation;
-  if (this._sending || this._completing || this._deferredGeneration !== null) return;
-  if (!this._active || this._active.messages.length === 0) {
-    this._active = this._batches.shift() || null;
-  }
-  if (!this._active) return;
-
-  message = this._active.messages[0];
-  this._sending = true;
-  generation = this._generation;
+  if (this._flight || this._deferred || this._advancing) return;
+  this._advancing = true;
   try {
-    this._Pebble.sendAppMessage(message, function () {
-      self._sending = false;
-      if (generation !== self._generation) {
-        if (self._active !== null || self._batches.length > 0) {
-          self._scheduleAdvance(self._generation);
-        }
-        return;
+    while (!this._flight && !this._deferred) {
+      if (!this._active) this._active = this._jobs.shift() || null;
+      if (!this._active) break;
+      var job = this._active;
+      var message;
+      try { message = job.next(); }
+      catch (error) {
+        this.cancelApplication();
+        this._onFailure("APP_MESSAGE_FAILED");
+        continue;
       }
-      self._active.messages.shift();
-      if (self._active.messages.length === 0) {
-        completed = self._active;
-        self._active = null;
-        if (completed.onComplete !== null) {
-          self._completing = true;
-          try {
-            completed.onComplete();
-          } catch (ignored) {
-            // Completion metadata must not change acknowledged transport state.
-          }
-          self._completing = false;
-          if (generation !== self._generation) {
-            if (self._active !== null || self._batches.length > 0) {
-              self._scheduleAdvance(self._generation);
-            }
-            return;
-          }
-        }
+      if (message === null) {
+        this._active = null;
+        if (job.complete) job.complete();
+        continue;
       }
-      if (self._active !== null || self._batches.length > 0) {
-        self._scheduleAdvance(generation);
-      }
-    }, function () {
-      self._sending = false;
-      if (generation !== self._generation) {
-        if (self._active !== null || self._batches.length > 0) {
-          self._scheduleAdvance(self._generation);
-        }
-        return;
-      }
-      self.clear();
+      var flight = { generation: this._generation };
+      this._flight = flight;
+      this._send(message, flight);
+    }
+  } finally { this._advancing = false; }
+};
+
+MessageQueue.prototype._send = function (message, flight) {
+  var self = this;
+  function settled(success) {
+    if (self._flight !== flight) return;
+    self._flight = null;
+    if (flight.generation !== self._generation) {
+      self._scheduleAdvance();
+      return;
+    }
+    if (!success) {
+      // Only queued, unattempted SDK controls survive. Never retry the failed
+      // job, including a failed SDK echo, and never retry application data.
+      self.cancelApplication();
       self._onFailure("APP_MESSAGE_FAILED");
-    });
-  } catch (ignored) {
-    self._sending = false;
-    self.clear();
-    self._onFailure("APP_MESSAGE_FAILED");
+    }
+    // Also defer when the FIFO is temporarily empty: reentrant enqueue from
+    // another callback must not run in the ACK's event turn.
+    self._scheduleAdvance();
   }
+  try {
+    this._Pebble.sendAppMessage(message, function () { settled(true); }, function () { settled(false); });
+  } catch (error) { settled(false); }
 };
 
 module.exports = MessageQueue;

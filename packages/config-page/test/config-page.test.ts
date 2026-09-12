@@ -18,34 +18,60 @@ import {
   COPY,
   EMPTY_KEY_DRAFT,
   LIMITS,
+  MAX_CLOSE_PAYLOAD_LENGTH,
   SCHEMA_VERSION,
   apiKeyError,
   copyFor,
+  closePayloadFits,
   createCloseSession,
   encodeCloseFragment,
   favoriteFromService,
   initialConfigState,
   isFavoriteShape,
+  isPhoneFavorite,
   isPlaceSearchResult,
   isServiceOptionsResult,
+  isServiceRouting,
   parseConfigFragment,
   planApiKeyUpdate,
   planConfigResult,
   reduceConfigState,
   selectLocale,
   utf8Bytes,
+  copyPhoneFavorite,
 } from "../src/config-core.js";
-import {
-  SEARCH_DEBOUNCE_MS,
-  CatalogClientError,
-  createCatalogClient,
-} from "../src/catalog-client.js";
 import { RECORDED_PREVIEW } from "../src/preview-fixture.js";
 import { lineBadgeAssetUrl } from "../src/line-badge-assets.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const require = createRequire(import.meta.url);
 const companionConfiguration = require("../../companion/src/configuration.js");
+
+const SERVICE_ROUTING = {
+  monitoringRef: "MONITORING:A:1234567",
+  lineRef: "IDFM:line:METRO:1",
+  destinationRef: "IDFM:destination:LA_DEFENSE",
+};
+
+type ServiceRouting = typeof SERVICE_ROUTING;
+type PhoneFavorite = Favorite & { routing?: ServiceRouting };
+
+function routingFavorite(id: string, sortOrder: number): PhoneFavorite {
+  return { ...favorite(id, sortOrder), routing: { ...SERVICE_ROUTING } };
+}
+
+function serviceOption(serviceId: string) {
+  return {
+    serviceId,
+    stopLabel: "Châtelet",
+    lineLabel: "4",
+    destinationLabel: "Bagneux",
+    lineMode: "METRO",
+    lineColor: "#be418d",
+    lineTextColor: "#ffffff",
+    routing: { ...SERVICE_ROUTING },
+  };
+}
 
 function favorite(id: string, sortOrder: number): Favorite {
   return {
@@ -62,7 +88,7 @@ function favorite(id: string, sortOrder: number): Favorite {
   };
 }
 
-function legacyFavorite(id: string, sortOrder: number): Favorite {
+function minimalFavorite(id: string, sortOrder: number): Favorite {
   return {
     schemaVersion: 1,
     id,
@@ -94,6 +120,8 @@ test("mirrored constants equal the canonical contract", () => {
   assert.equal(LIMITS.catalogQueryMinCharacters, CANONICAL_LIMITS.catalogQueryMinCharacters);
   assert.equal(LIMITS.catalogQueryMaxCharacters, CANONICAL_LIMITS.catalogQueryMaxCharacters);
   assert.equal(LIMITS.catalogSearchResults, CANONICAL_LIMITS.catalogSearchResults);
+  assert.equal(LIMITS.httpResponseBytes, CANONICAL_LIMITS.httpResponseBytes);
+  assert.equal(LIMITS.httpResponseBytes, 262144);
 });
 
 test("french language tags select french copy and everything else falls back to english", () => {
@@ -155,22 +183,22 @@ test("opening fragment parsing is secret-free and validates favorites", () => {
   );
   assert.deepEqual(invalid.favorites.map((entry) => entry.id), ["ok"]);
 });
-test("legacy favorites round trip without inventing presentation properties and partial groups reject", () => {
-  const legacy = legacyFavorite("legacy", 0);
-  const parsed = parseConfigFragment(fragmentWith([legacy]));
+test("minimal favorites round trip without inventing presentation properties and partial groups reject", () => {
+  const minimal = minimalFavorite("minimal", 0);
+  const parsed = parseConfigFragment(fragmentWith([minimal]));
   const presentationFields = ["lineMode", "lineColor", "lineTextColor"] as const;
 
-  assert.equal(isFavorite(legacy), true);
-  assert.equal(isFavoriteShape(legacy), true);
-  assert.deepEqual(parsed.favorites, [legacy]);
+  assert.equal(isFavorite(minimal), true);
+  assert.equal(isFavoriteShape(minimal), true);
+  assert.deepEqual(parsed.favorites, [minimal]);
   for (const field of presentationFields) {
     assert.equal(Object.hasOwn(parsed.favorites[0], field), false);
   }
 
   const partials = [
-    { ...legacy, lineMode: "METRO" },
-    { ...legacy, lineMode: "METRO", lineColor: "#ffbe00" },
-    { ...legacy, lineColor: "#ffbe00", lineTextColor: "#000000" },
+    { ...minimal, lineMode: "METRO" },
+    { ...minimal, lineMode: "METRO", lineColor: "#ffbe00" },
+    { ...minimal, lineColor: "#ffbe00", lineTextColor: "#000000" },
   ];
   for (const partial of partials) {
     assert.equal(isFavorite(partial), false);
@@ -181,13 +209,13 @@ test("legacy favorites round trip without inventing presentation properties and 
       language: "fr_FR",
     })).favorites, []);
   }
-  assert.equal(isFavorite({ ...legacy, lineMode: undefined }), false);
-  assert.equal(isFavoriteShape({ ...legacy, lineMode: undefined }), false);
+  assert.equal(isFavorite({ ...minimal, lineMode: undefined }), false);
+  assert.equal(isFavoriteShape({ ...minimal, lineMode: undefined }), false);
 
   const outcome = planConfigResult(initialConfigState(parsed));
   assert.equal(outcome.ok, true);
   if (!outcome.ok) return;
-  assert.deepEqual(outcome.payload.favorites, [legacy]);
+  assert.deepEqual(outcome.payload.favorites, [minimal]);
   for (const field of presentationFields) {
     assert.equal(Object.hasOwn(outcome.payload.favorites[0], field), false);
   }
@@ -367,15 +395,51 @@ test("favorite edits replace the whole list atomically with renumbered order", (
   }
 });
 
-test("payload favorites are capped at the contract maximum", () => {
+test("an oversized favorite list is rejected at save instead of truncated, preserving state", () => {
   const many = Array.from({ length: LIMITS.favorites + 1 }, (_, index) => favorite(`f${index}`, index));
-  const outcome = planConfigResult(initialConfigState(parseConfigFragment(fragmentWith(many))));
+  const state = initialConfigState(parseConfigFragment(fragmentWith(many)));
+  const outcome = planConfigResult(state);
+  assert.equal(outcome.ok, false);
+  if (outcome.ok) return;
+  assert.equal(outcome.error, "favoriteLimit");
+  assert.equal(copyFor("en")[outcome.error].length > 0, true);
+  assert.equal(copyFor("fr")[outcome.error].length > 0, true);
+  // Rejection never mutates the list: the user keeps every entry and can
+  // recover by removing one favorite, after which the save succeeds whole.
+  assert.equal(state.favorites.length, LIMITS.favorites + 1);
+  const recovered = planConfigResult(reduceConfigState(state, { type: "favorite-remove", id: "f0" }));
+  assert.equal(recovered.ok, true);
+  if (!recovered.ok) return;
+  assert.equal(recovered.payload.favorites.length, LIMITS.favorites);
+});
+
+test("the seventh favorite is rejected by the add path while a valid six save whole", () => {
+  let state = initialConfigState(parseConfigFragment(fragmentWith([])));
+  for (let index = 0; index < LIMITS.favorites; index += 1) {
+    const entry = favoriteFromService(`cfg-${index}`, serviceOption(`svc-${index}`), index);
+    assert.ok(entry);
+    state = reduceConfigState(state, { type: "favorite-add", favorite: entry });
+  }
+  assert.equal(state.favorites.length, LIMITS.favorites);
+
+  const extra = favoriteFromService("cfg-extra", serviceOption("svc-extra"), LIMITS.favorites);
+  assert.ok(extra);
+  assert.equal(reduceConfigState(state, { type: "favorite-add", favorite: extra }), state);
+  assert.equal(state.favorites.length, LIMITS.favorites);
+
+  // The full valid six plans and round-trips the phone update untruncated.
+  const outcome = planConfigResult(state);
   assert.equal(outcome.ok, true);
   if (!outcome.ok) return;
-  assert.equal(outcome.payload.favorites.length, LIMITS.favorites);
-  for (const entry of outcome.payload.favorites) {
-    assert.equal(isFavorite(entry), true);
-  }
+  assert.deepEqual(outcome.payload.favorites.map((entry) => entry.serviceId), state.favorites.map((entry) => entry.serviceId));
+  const parsedUpdate = companionConfiguration.parseCloseFragment(encodeCloseFragment(outcome.payload));
+  assert.notEqual(parsedUpdate, null);
+  const applied = companionConfiguration.applyConfigurationUpdate(
+    companionConfiguration.emptyConfiguration(),
+    parsedUpdate,
+  );
+  assert.notEqual(applied, null);
+  assert.deepEqual(applied.favorites.map((entry) => entry.serviceId), outcome.payload.favorites.map((entry) => entry.serviceId));
 });
 
 test("the close fragment carries the key value only for REPLACE and is one-shot", () => {
@@ -438,9 +502,9 @@ test("the close fragment carries the key value only for REPLACE and is one-shot"
 
 test("three backend services can be added, renamed, reordered, and removed atomically", () => {
   const services = [
-    { serviceId: "svc-a", stopLabel: "Châtelet", lineLabel: "4", destinationLabel: "Bagneux", lineMode: "METRO", lineColor: "#be418d", lineTextColor: "#ffffff" },
-    { serviceId: "svc-b", stopLabel: "République", lineLabel: "96", destinationLabel: "Porte des Lilas", lineMode: "BUS", lineColor: "#007852", lineTextColor: "#ffffff" },
-    { serviceId: "svc-c", stopLabel: "Nation", lineLabel: "A", destinationLabel: "Cergy", lineMode: "RER", lineColor: "#e3051c", lineTextColor: "#ffffff" },
+    serviceOption("svc-a"),
+    { ...serviceOption("svc-b"), stopLabel: "République", lineLabel: "96", destinationLabel: "Porte des Lilas", lineMode: "BUS", lineColor: "#007852" },
+    { ...serviceOption("svc-c"), stopLabel: "Nation", lineLabel: "A", destinationLabel: "Cergy", lineMode: "RER", lineColor: "#e3051c" },
   ];
   let state = initialConfigState(parseConfigFragment(fragmentWith([])));
   services.forEach((service, index) => {
@@ -462,17 +526,28 @@ test("three backend services can be added, renamed, reordered, and removed atomi
   ]);
   const outcome = planConfigResult(state);
   assert.equal(outcome.ok, true);
-  if (outcome.ok) assert.equal(outcome.payload.favorites.every(isFavorite), true);
+  if (!outcome.ok) return;
+  assert.equal(outcome.payload.favorites.every(isPhoneFavorite), true);
+  // Routing travels with every re-selected service into the close payload.
+  assert.deepEqual(
+    outcome.payload.favorites.map((entry) => entry.routing?.lineRef),
+    [SERVICE_ROUTING.lineRef, SERVICE_ROUTING.lineRef],
+  );
 });
 
 test("catalog response guards reject identifiers and malformed or oversized collections", () => {
   const place = { placeId: "plc-a", stopLabel: "Châtelet", localityLabel: "Paris", mode: "METRO" };
-  const service = { serviceId: "svc-a", stopLabel: "Châtelet", lineLabel: "4", destinationLabel: "Bagneux", lineMode: "METRO", lineColor: "#be418d", lineTextColor: "#ffffff" };
+  const service = serviceOption("svc-a");
   assert.equal(isPlaceSearchResult({ schemaVersion: 1, places: [place] }), true);
   assert.equal(isPlaceSearchResult({ schemaVersion: 1, places: Array(21).fill(place) }), false);
   assert.equal(isPlaceSearchResult({ schemaVersion: 1, places: [{ ...place, monitoringRef: "raw" }] }), false);
   assert.equal(isServiceOptionsResult({ schemaVersion: 1, placeId: "plc-a", services: [service] }, "plc-a"), true);
   assert.equal(isServiceOptionsResult({ schemaVersion: 1, placeId: "other", services: [service] }, "plc-a"), false);
+  const { routing: _routing, ...routingLess } = service;
+  assert.equal(isServiceOptionsResult({ schemaVersion: 1, placeId: "plc-a", services: [routingLess] }, "plc-a"), false);
+  assert.equal(isServiceOptionsResult({ schemaVersion: 1, placeId: "plc-a", services: [
+    { ...service, routing: { ...SERVICE_ROUTING, monitoringRef: "" } },
+  ] }, "plc-a"), false);
   assert.equal(favoriteFromService("cfg-a", { ...service, lineRef: "raw" }, 0), null);
   assert.equal(isServiceOptionsResult({ schemaVersion: 1, placeId: "plc-a", services: [{ ...service, lineColor: "#BE418D" }] }, "plc-a"), false);
   assert.equal(isServiceOptionsResult({ schemaVersion: 1, placeId: "plc-a", services: [{ ...service, lineMode: "metro" }] }, "plc-a"), false);
@@ -480,6 +555,265 @@ test("catalog response guards reject identifiers and malformed or oversized coll
   assert.equal(favoriteFromService("cfg-a", missingTextColor, 0), null);
 });
 
+test("service routing validates exactly and only phone favorites may carry it", () => {
+  assert.equal(isServiceRouting({ ...SERVICE_ROUTING }), true);
+  assert.equal(isServiceRouting({ ...SERVICE_ROUTING, extra: "x" }), false);
+  assert.equal(isServiceRouting({ ...SERVICE_ROUTING, lineRef: "" }), false);
+  assert.equal(isServiceRouting({ ...SERVICE_ROUTING, directionId: "0" }), false);
+  const { destinationRef: _missingRef, ...missingRef } = SERVICE_ROUTING;
+  assert.equal(isServiceRouting(missingRef), false);
+  // The accepted contract invents no per-reference byte cap.
+  assert.equal(isServiceRouting({ ...SERVICE_ROUTING, monitoringRef: "M".repeat(4096) }), true);
+
+  assert.equal(isPhoneFavorite(routingFavorite("r1", 0)), true);
+  assert.equal(isPhoneFavorite({ ...routingFavorite("r1", 0), routing: { ...SERVICE_ROUTING, lineRef: "" } }), false);
+  assert.equal(isPhoneFavorite({ ...routingFavorite("r1", 0), routing: undefined }), false);
+  assert.equal(isPhoneFavorite(minimalFavorite("minimal", 0)), true);
+  assert.equal(isFavoriteShape(minimalFavorite("minimal", 0)), true);
+  assert.equal(isFavorite(minimalFavorite("minimal", 0)), true);
+});
+
+test("favorites created from catalog services carry a fresh routing copy", () => {
+  const service = serviceOption("svc-a");
+  const entry = favoriteFromService("cfg-a", service, 0, "Maison");
+  assert.ok(entry);
+  assert.deepEqual(entry.routing, SERVICE_ROUTING);
+  service.routing.monitoringRef = "MUTATED";
+  assert.equal(entry.routing.monitoringRef, SERVICE_ROUTING.monitoringRef);
+
+  assert.deepEqual(parseConfigFragment(fragmentWith([entry])).favorites, [entry]);
+  // A favorite with malformed routing is dropped whole, never half-kept.
+  assert.deepEqual(
+    parseConfigFragment(fragmentWith([
+      { ...entry, routing: { ...SERVICE_ROUTING, destinationRef: 3 } },
+    ])).favorites,
+    [],
+  );
+});
+
+test("routing survives the full page round trip and phone-side validation", () => {
+  const favorites: PhoneFavorite[] = [
+    routingFavorite("home", 0),
+    { ...routingFavorite("work", 1), displayName: "Bureau" },
+  ];
+  const state = initialConfigState(parseConfigFragment(fragmentWith(favorites)));
+  const outcome = planConfigResult(state);
+  assert.equal(outcome.ok, true);
+  if (!outcome.ok) return;
+  assert.deepEqual(outcome.payload.favorites, favorites);
+  // The watch projection validator stays strict: routing never reaches the watch.
+  assert.equal(isFavorite(outcome.payload.favorites[0]), false);
+
+  const parsedUpdate = companionConfiguration.parseCloseFragment(encodeCloseFragment(outcome.payload));
+  assert.notEqual(parsedUpdate, null);
+  assert.equal(parsedUpdate.forceFullSync, false);
+  assert.deepEqual(parsedUpdate.favorites, outcome.payload.favorites);
+  const applied = companionConfiguration.applyConfigurationUpdate(
+    companionConfiguration.emptyConfiguration(),
+    parsedUpdate,
+  );
+  assert.notEqual(applied, null);
+  assert.deepEqual(applied.favorites, outcome.payload.favorites);
+  assert.equal(companionConfiguration.isStoredConfiguration(applied), true);
+
+  // The companion-produced opening fragment carries routing and never the key.
+  const stored = {
+    schemaVersion: 1,
+    favorites: outcome.payload.favorites,
+    primApiKey: "stored-personal-key",
+    keyStatus: 1,
+  };
+  const url = companionConfiguration.configurationUrl(
+    "https://config.example.test/index.html",
+    stored,
+    "fr_FR",
+  );
+  assert.equal(typeof url, "string");
+  assert.equal(url.includes("stored-personal-key"), false);
+  const openingState = JSON.parse(decodeURIComponent(url.slice(url.indexOf("#") + 1)));
+  assert.deepEqual(openingState.favorites, outcome.payload.favorites);
+  assert.deepEqual(parseConfigFragment(new URL(url).hash).favorites, outcome.payload.favorites);
+
+  // Nested routing fields are scanned for key leakage on both channels.
+  assert.equal(companionConfiguration.isStoredConfiguration({
+    ...stored,
+    favorites: [{ ...favorites[0], routing: { ...SERVICE_ROUTING, monitoringRef: "x stored-personal-key" } }],
+  }), false);
+  const leakParsed = companionConfiguration.parseCloseFragment(encodeCloseFragment({
+    schemaVersion: SCHEMA_VERSION,
+    apiKeyUpdate: { schemaVersion: SCHEMA_VERSION, action: "KEEP" },
+    favorites: [{ ...favorites[0], routing: { ...SERVICE_ROUTING, monitoringRef: "x stored-personal-key" } }],
+  }));
+  assert.notEqual(leakParsed, null);
+  assert.equal(companionConfiguration.applyConfigurationUpdate(stored, leakParsed), null);
+  const replacementLeak = companionConfiguration.parseCloseFragment(encodeCloseFragment({
+    schemaVersion: SCHEMA_VERSION,
+    apiKeyUpdate: { schemaVersion: SCHEMA_VERSION, action: "REPLACE", value: "brand-new-key" },
+    favorites: [{ ...favorites[0], routing: { ...SERVICE_ROUTING, lineRef: "leak brand-new-key" } }],
+  }));
+  assert.notEqual(replacementLeak, null);
+  assert.equal(companionConfiguration.applyConfigurationUpdate(stored, replacementLeak), null);
+});
+
+test("force full synchronization is an explicit one-shot close flag", () => {
+  const base = initialConfigState(parseConfigFragment(fragmentWith(fixtureList)));
+  const quiet = planConfigResult(base);
+  assert.equal(quiet.ok, true);
+  if (!quiet.ok) return;
+  assert.equal(Object.hasOwn(quiet.payload, "forceFullSync"), false);
+  assert.deepEqual(Object.keys(quiet.payload).sort(), ["apiKeyUpdate", "favorites", "schemaVersion"]);
+
+  const forcedState = reduceConfigState(base, { type: "force-full-sync", value: true });
+  const forced = planConfigResult(forcedState);
+  assert.equal(forced.ok, true);
+  if (!forced.ok) return;
+  assert.equal(forced.payload.forceFullSync, true);
+  // Other pending changes are preserved alongside the flag.
+  assert.deepEqual(forced.payload.favorites, quiet.payload.favorites);
+  assert.deepEqual(forced.payload.apiKeyUpdate, quiet.payload.apiKeyUpdate);
+  const toggledOff = planConfigResult(reduceConfigState(forcedState, { type: "force-full-sync", value: false }));
+  assert.equal(toggledOff.ok, true);
+  if (!toggledOff.ok) return;
+  assert.equal(Object.hasOwn(toggledOff.payload, "forceFullSync"), false);
+
+  const forcedParsed = companionConfiguration.parseCloseFragment(encodeCloseFragment(forced.payload));
+  assert.notEqual(forcedParsed, null);
+  assert.equal(forcedParsed.forceFullSync, true);
+  const quietParsed = companionConfiguration.parseCloseFragment(encodeCloseFragment(quiet.payload));
+  assert.notEqual(quietParsed, null);
+  assert.equal(quietParsed.forceFullSync, false);
+  const appliedForced = companionConfiguration.applyConfigurationUpdate(
+    companionConfiguration.emptyConfiguration(),
+    forcedParsed,
+  );
+  assert.notEqual(appliedForced, null);
+  // One-shot: the flag is consumed by the phone and never stored.
+  assert.equal(Object.hasOwn(appliedForced, "forceFullSync"), false);
+  assert.equal(companionConfiguration.isStoredConfiguration(appliedForced), true);
+  assert.equal(companionConfiguration.parseCloseFragment(encodeCloseFragment({
+    ...forced.payload,
+    forceFullSync: "yes",
+  })), null);
+  assert.equal(companionConfiguration.isConfigurationUpdate({
+    schemaVersion: SCHEMA_VERSION,
+    favorites: [],
+    apiKeyUpdate: { schemaVersion: SCHEMA_VERSION, action: "KEEP" },
+    forceFullSync: 1,
+  }), false);
+});
+
+test("unresolved favorites hydrate in place or wait for explicit re-selection", () => {
+  let state = initialConfigState(parseConfigFragment(fragmentWith([minimalFavorite("unresolved", 0), favorite("home", 1)])));
+  assert.equal(Object.hasOwn(state.favorites[0], "routing"), false);
+
+  // Unknown, mismatched, or malformed hydration never deletes or reorders.
+  assert.equal(reduceConfigState(state, {
+    type: "favorite-hydrate",
+    id: "ghost",
+    favorite: routingFavorite("ghost", 0),
+  }), state);
+  assert.equal(reduceConfigState(state, {
+    type: "favorite-hydrate",
+    id: "unresolved",
+    favorite: routingFavorite("other", 0),
+  }), state);
+  assert.equal(reduceConfigState(state, {
+    type: "favorite-hydrate",
+    id: "unresolved",
+    favorite: { ...routingFavorite("unresolved", 0), routing: { ...SERVICE_ROUTING, lineRef: "" } },
+  }), state);
+
+  // Routing-only recovery: the stored favorite is copied verbatim — labels,
+  // colors, service binding, and the watch metadata hash — and only validated
+  // routing is attached, exactly as the page app constructs it.
+  const stored = state.favorites[0];
+  const hydrated = copyPhoneFavorite(stored);
+  hydrated.routing = { ...SERVICE_ROUTING };
+  state = reduceConfigState(state, { type: "favorite-hydrate", id: "unresolved", favorite: hydrated });
+  assert.deepEqual(state.favorites.map((entry) => entry.id), ["unresolved", "home"]);
+  assert.deepEqual(state.favorites.map((entry) => entry.sortOrder), [0, 1]);
+  assert.deepEqual(state.favorites[0], { ...stored, routing: SERVICE_ROUTING });
+
+  const outcome = planConfigResult(state);
+  assert.equal(outcome.ok, true);
+  if (!outcome.ok) return;
+  assert.equal(outcome.payload.favorites[0].routing !== undefined, true);
+  assert.equal(isFavorite(outcome.payload.favorites[1]), true);
+  // A missing catalog ID keeps the favorite valid exactly as it is.
+  const stillUnresolved = planConfigResult(initialConfigState(parseConfigFragment(
+    fragmentWith([minimalFavorite("unresolved", 0)]),
+  )));
+  assert.equal(stillUnresolved.ok, true);
+  if (!stillUnresolved.ok) return;
+  assert.equal(Object.hasOwn(stillUnresolved.payload.favorites[0], "routing"), false);
+});
+test("encoded close and opening fragments enforce the 32768 bound at producers", () => {
+  assert.equal(MAX_CLOSE_PAYLOAD_LENGTH, 32768);
+  const small = planConfigResult(initialConfigState(parseConfigFragment(fragmentWith(fixtureList))));
+  assert.equal(small.ok, true);
+  if (!small.ok) return;
+  assert.equal(closePayloadFits(small.payload), true);
+
+  // A valid static service with an enormous reference fits every per-field
+  // rule but must never reach the one-shot channel.
+  const bloatedFavorite: PhoneFavorite = {
+    ...routingFavorite("big", 0),
+    routing: { ...SERVICE_ROUTING, monitoringRef: "M".repeat(33000) },
+  };
+  const bloated = { ...small.payload, favorites: [bloatedFavorite] };
+  assert.equal(closePayloadFits(bloated), false);
+
+  // The one-shot session refuses oversized payloads without being consumed.
+  const session = createCloseSession();
+  assert.equal(session.close(bloated), null);
+  assert.equal(session.closed, false);
+  assert.equal(session.close(small.payload)?.startsWith(CLOSE_PREFIX), true);
+  assert.equal(session.closed, true);
+
+  // The phone rejects the same bound on the close channel.
+  assert.equal(companionConfiguration.parseCloseFragment(encodeCloseFragment(bloated)), null);
+
+  // The opening producer never emits a fragment the page would discard.
+  const oversizedConfig = {
+    schemaVersion: 1,
+    favorites: [bloatedFavorite],
+    primApiKey: "stored-personal-key",
+    keyStatus: 1,
+  };
+  assert.equal(companionConfiguration.isStoredConfiguration(oversizedConfig), true);
+  assert.equal(
+    companionConfiguration.configurationUrl("https://config.example.test/index.html", oversizedConfig, "en_US"),
+    null,
+  );
+  const compactUrl = companionConfiguration.configurationUrl(
+    "https://config.example.test/index.html",
+    { ...oversizedConfig, favorites: fixtureList },
+    "en_US",
+  );
+  assert.equal(typeof compactUrl, "string");
+  assert.equal(
+    (compactUrl ?? "").length <= "https://config.example.test/index.html#".length + MAX_CLOSE_PAYLOAD_LENGTH,
+    true,
+  );
+
+  // Selecting or hydrating an oversized candidate is rejected whole: the list
+  // is untouched and the session stays usable.
+  const base = initialConfigState(parseConfigFragment(fragmentWith(fixtureList)));
+  assert.equal(base.favorites.length, 2);
+  const refusedAdd = reduceConfigState(base, { type: "favorite-add", favorite: bloatedFavorite });
+  assert.equal(refusedAdd, base);
+  const bloatedHydration = copyPhoneFavorite(base.favorites[0]);
+  bloatedHydration.routing = { ...SERVICE_ROUTING, lineRef: "L".repeat(33000) };
+  assert.equal(reduceConfigState(base, {
+    type: "favorite-hydrate",
+    id: base.favorites[0].id,
+    favorite: bloatedHydration,
+  }), base);
+
+  assert.notEqual(COPY.en.saveTooLarge, undefined);
+  assert.notEqual(COPY.fr.saveTooLarge, undefined);
+  assert.notEqual(COPY.en.saveTooLarge, COPY.fr.saveTooLarge);
+});
 test("favorite preview uses the credential-free recorded departure fixture", () => {
   const recorded = JSON.parse(
     readFileSync(join(here, "../../../fixtures/departures/foundation.json"), "utf8"),
@@ -489,54 +823,6 @@ test("favorite preview uses the credential-free recorded departure fixture", () 
     recorded.result.departures.map(({ minutes, status }: { minutes: number; status: string }) => ({ minutes, status })),
   );
   assert.equal(JSON.stringify(RECORDED_PREVIEW).includes(recorded.favorite.serviceId), false);
-});
-test("catalog search waits 300 ms, cancels superseded work, and validates responses", async () => {
-  const timers = new Map<number, () => void>();
-  const delays: number[] = [];
-  let nextTimer = 0;
-  const requests: string[] = [];
-  const client = createCatalogClient({
-    setTimer(callback: () => void, delay: number) {
-      const id = ++nextTimer;
-
-      delays.push(delay);
-      timers.set(id, callback);
-      return id;
-    },
-    clearTimer(id: number) {
-      timers.delete(id);
-    },
-    async fetchImpl(url: string) {
-      requests.push(url);
-      return {
-        ok: true,
-        async json() {
-          return { schemaVersion: 1, places: [] };
-        },
-      };
-    },
-  });
-  const superseded = client.searchPlaces("ch");
-  const latest = client.searchPlaces("cha");
-  await assert.rejects(superseded, (error: unknown) => error instanceof DOMException && error.name === "AbortError");
-  assert.deepEqual(delays, [SEARCH_DEBOUNCE_MS, SEARCH_DEBOUNCE_MS]);
-  assert.equal(timers.size, 1);
-  [...timers.values()][0]!();
-  assert.deepEqual(await latest, []);
-  assert.deepEqual(requests, ["/api/catalog/places?q=cha"]);
-
-  const invalid = createCatalogClient({
-    setTimer(callback: () => void) {
-      queueMicrotask(callback);
-      return 1;
-    },
-    clearTimer() {},
-    async fetchImpl() {
-      return { ok: true, async json() { return { schemaVersion: 1, places: [{ placeId: "leak" }] }; } };
-    },
-  });
-  await assert.rejects(invalid.searchPlaces("invalid"), (error: unknown) =>
-    error instanceof CatalogClientError && error.code === "BACKEND_UNAVAILABLE");
 });
 
 test("page keeps secrets out of durable and observable surfaces", () => {
@@ -596,11 +882,11 @@ test("official rail badges cover every RER and Transilien line", () => {
   }
 });
 
-test("legacy favorites resolve no official image and use an accessible neutral fallback", () => {
-  const legacy = legacyFavorite("legacy-badge", 0);
+test("favorites without presentation fields resolve no official image and use an accessible neutral fallback", () => {
+  const minimal = minimalFavorite("minimal-badge", 0);
   const controller = readFileSync(join(here, "../src/config-page.js"), "utf8");
 
-  assert.equal(lineBadgeAssetUrl(legacy.lineMode, legacy.lineLabel), undefined);
+  assert.equal(lineBadgeAssetUrl(minimal.lineMode, minimal.lineLabel), undefined);
   assert.match(
     controller,
     /const assetUrl = service\.lineMode === undefined\s+\? undefined\s+:\s+lineBadgeAssetUrl\(service\.lineMode, service\.lineLabel\)/u,

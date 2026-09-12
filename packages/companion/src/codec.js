@@ -3,153 +3,157 @@
 var contracts = require("./contracts");
 var T = contracts.MESSAGE_TYPE;
 
-function base(messageType) {
-  return {
-    SCHEMA_VERSION: contracts.SCHEMA_VERSION,
-    MESSAGE_TYPE: messageType
+function dictionaryBytes(message) {
+  return Object.keys(message).reduce(function (size, key) {
+    var value = message[key];
+    return size + 7 + (typeof value === "number" ? 4 : contracts.utf8Bytes(value) + 1);
+  }, 1);
+}
+
+function packet(type, requestId, generation) {
+  var message = {
+    SCHEMA_VERSION: contracts.DISPLAY_WIRE_VERSION,
+    MESSAGE_TYPE: type,
+    REQUEST_ID: requestId
   };
-}
-
-function requireId(value, name) {
-  if (!contracts.boundedString(value, contracts.LIMITS.idUtf8Bytes)) {
-    throw new TypeError(name + " must be a bounded identifier");
-  }
-}
-
-function encodeRequest(request) {
-  var message;
-  requireId(request && request.requestId, "requestId");
-  requireId(request && request.favoriteId, "favoriteId");
-  if (Object.keys(contracts.REQUEST_TRIGGER).every(function (name) {
-    return contracts.REQUEST_TRIGGER[name] !== request.trigger;
-  })) {
-    throw new TypeError("trigger is not supported");
-  }
-  message = base(T.REQUEST);
-  message.REQUEST_ID = request.requestId;
-  message.FAVORITE_ID = request.favoriteId;
-  message.REQUEST_TRIGGER = request.trigger;
+  if (generation !== undefined) message.DISPLAY_GENERATION = generation;
   return message;
 }
 
-function decodeRequest(message) {
-  var trigger;
-  if (!contracts.isObject(message)
-      || !contracts.hasOnlyKeys(message, [
-        "SCHEMA_VERSION",
-        "MESSAGE_TYPE",
-        "REQUEST_ID",
-        "FAVORITE_ID",
-        "REQUEST_TRIGGER"
-      ])
-      || message.SCHEMA_VERSION !== contracts.SCHEMA_VERSION
-      || message.MESSAGE_TYPE !== T.REQUEST) return null;
-  trigger = message.REQUEST_TRIGGER;
-  if (!contracts.boundedString(message.REQUEST_ID, contracts.LIMITS.idUtf8Bytes)
-      || !contracts.boundedString(message.FAVORITE_ID, contracts.LIMITS.idUtf8Bytes)
-      || Object.keys(contracts.REQUEST_TRIGGER).every(function (name) {
-        return contracts.REQUEST_TRIGGER[name] !== trigger;
-      })) return null;
-  return {
-    requestId: message.REQUEST_ID,
-    favoriteId: message.FAVORITE_ID,
-    trigger: trigger
+function outgoing(message) {
+  if (!contracts.isAppMessage(message)) throw new TypeError("Invalid D2 display dictionary");
+  if (dictionaryBytes(message) > contracts.APP_MESSAGE_INBOX_BYTES) {
+    throw new RangeError("D2 dictionary exceeds the watch inbox");
+  }
+  return message;
+}
+
+function one(message) {
+  var pending = true;
+  return function () {
+    if (!pending) return null;
+    pending = false;
+    return message;
   };
 }
 
-function encodeConfiguration(sequenceId, favorites, keyStatus, language) {
-  var messages = [];
-  var begin;
-  requireId(sequenceId, "sequenceId");
-  if (!contracts.isFavoriteList(favorites)) throw new TypeError("favorites do not match the contract");
-  if (Object.keys(contracts.KEY_STATUS).every(function (name) {
-    return contracts.KEY_STATUS[name] !== keyStatus;
-  })) throw new TypeError("keyStatus is not supported");
-  if (language !== contracts.WIRE_LANGUAGE.EN && language !== contracts.WIRE_LANGUAGE.FR) {
-    throw new TypeError("language must be en or fr");
-  }
+function encodeReady(token) { return outgoing(packet(T.DISPLAY_READY, token)); }
 
-  begin = base(T.CONFIG_BEGIN);
-  begin.REQUEST_ID = sequenceId;
-  begin.ITEM_COUNT = favorites.length;
-  begin.KEY_STATUS = keyStatus;
-  begin.DISPLAY_NAME = language;
-  messages.push(begin);
-
-  favorites.forEach(function (favorite, index) {
-    var message = base(T.FAVORITE);
-    message.REQUEST_ID = sequenceId;
-    message.ITEM_INDEX = index;
-    message.FAVORITE_ID = favorite.id;
-    message.SERVICE_ID = favorite.serviceId;
-    if (typeof favorite.displayName !== "undefined") message.DISPLAY_NAME = favorite.displayName;
-    message.STOP_LABEL = favorite.stopLabel;
-    message.LINE_LABEL = favorite.lineLabel;
-    message.DESTINATION_LABEL = favorite.destinationLabel;
-    message.SORT_ORDER = favorite.sortOrder;
-    messages.push(message);
-  });
-
-  begin = base(T.CONFIG_COMMIT);
-  begin.REQUEST_ID = sequenceId;
-  messages.push(begin);
-  return messages;
+function encodeConfigurationStart(target) {
+  var message = packet(T.CONFIG_BEGIN, target.requestId, target.generation);
+  message.KEY_STATUS = target.keyStatus;
+  message.ITEM_COUNT = target.itemCount;
+  message.CONFIG_MODE = target.mode;
+  message.LANGUAGE = target.language;
+  message.DISPLAY_PROFILE = target.profile;
+  return outgoing(message);
 }
 
-function encodeResult(result) {
-  var messages = [];
-  var message;
-  if (!contracts.isDepartureResult(result)) throw new TypeError("result does not match the contract");
+function encodeConfigurationEntry(entry) {
+  var message = packet(T.CONFIG_ENTRY, entry.requestId, entry.generation);
+  message.FAVORITE_ID = entry.favoriteId;
+  message.ITEM_INDEX = entry.index;
+  message.DISPLAY_HASH = entry.hash;
+  return outgoing(message);
+}
 
-  message = base(T.RESULT_BEGIN);
-  message.REQUEST_ID = result.requestId;
-  message.FAVORITE_ID = result.favoriteId;
-  message.ITEM_COUNT = result.departures.length;
-  message.FETCHED_AT = result.fetchedAt;
-  if (typeof result.sourceUpdatedAt !== "undefined") message.SOURCE_UPDATED_AT = result.sourceUpdatedAt;
-  message.FRESHNESS = contracts.FRESHNESS.indexOf(result.freshness);
-  messages.push(message);
+function encodeFavoriteBody(body) {
+  var message = packet(T.FAVORITE, body.requestId, body.generation);
+  message.ITEM_INDEX = body.index;
+  message.DISPLAY_RECORD = body.record;
+  return outgoing(message);
+}
 
-  result.departures.forEach(function (departure, index) {
-    var item = base(T.DEPARTURE);
-    item.REQUEST_ID = result.requestId;
-    item.FAVORITE_ID = result.favoriteId;
-    item.ITEM_INDEX = index;
-    item.EXPECTED_AT = departure.expectedAt;
-    if (typeof departure.aimedAt !== "undefined") item.AIMED_AT = departure.aimedAt;
-    item.MINUTES = departure.minutes;
-    item.DEPARTURE_STATUS = contracts.DEPARTURE_STATUS.indexOf(departure.status);
-    if (typeof departure.nextIntervalMinutes !== "undefined") {
-      item.NEXT_INTERVAL_MINUTES = departure.nextIntervalMinutes;
+function encodeConfigurationCommit(commit) {
+  return outgoing(packet(T.CONFIG_COMMIT, commit.requestId, commit.generation));
+}
+
+function encodeDisplayBegin(transfer) {
+  var message = packet(T.DISPLAY_BEGIN, transfer.requestId, transfer.generation);
+  message.ITEM_COUNT = transfer.count;
+  message.DISPLAY_KIND = transfer.kind;
+  if (transfer.favoriteId !== undefined) message.FAVORITE_ID = transfer.favoriteId;
+  return outgoing(message);
+}
+
+function encodeDisplayRecord(item) {
+  var message = packet(T.DISPLAY_RECORD, item.requestId, item.generation);
+  message.ITEM_INDEX = item.index;
+  message.DISPLAY_RECORD = item.record;
+  message.DISPLAY_KIND = item.kind;
+  return outgoing(message);
+}
+
+function encodeDisplayCommit(commit) {
+  var message = packet(T.DISPLAY_COMMIT, commit.requestId, commit.generation);
+  message.DISPLAY_KIND = commit.kind;
+  return outgoing(message);
+}
+
+function createDisplayTransfer(request, records) {
+  var index = -1;
+  var kind = request.kind === "overview" ? 0 : request.kind === "detail" ? 1 : 2;
+  return function () {
+    var envelope = { requestId: request.requestId, generation: request.wireGeneration, kind: kind };
+    if (index === -1) {
+      index = 0;
+      envelope.count = records.length;
+      if (kind) envelope.favoriteId = request.favoriteId;
+      return encodeDisplayBegin(envelope);
     }
-    messages.push(item);
-  });
-
-  message = base(T.RESULT_COMMIT);
-  message.REQUEST_ID = result.requestId;
-  message.FAVORITE_ID = result.favoriteId;
-  messages.push(message);
-  return messages;
+    if (index < records.length) {
+      envelope.index = index;
+      envelope.record = records[index++];
+      return encodeDisplayRecord(envelope);
+    }
+    if (index++ === records.length) return encodeDisplayCommit(envelope);
+    return null;
+  };
 }
 
-function encodeError(error) {
-  var message;
-  if (!contracts.isErrorResult(error)) throw new TypeError("error does not match the contract");
-  message = base(T.ERROR);
-  message.REQUEST_ID = error.requestId;
-  if (typeof error.favoriteId !== "undefined") message.FAVORITE_ID = error.favoriteId;
-  message.ERROR_CODE = contracts.ERROR_CODE.indexOf(error.code);
-  message.OCCURRED_AT = error.occurredAt;
-  if (typeof error.retryAfterSeconds !== "undefined") {
-    message.RETRY_AFTER_SECONDS = error.retryAfterSeconds;
-  }
-  return message;
+function decodeHello(message) {
+  if (!contracts.isAppMessage(message) || message.MESSAGE_TYPE !== T.DISPLAY_HELLO) return null;
+  return {
+    token: message.REQUEST_ID, session: message.WATCH_SESSION_ID,
+    profile: message.DISPLAY_PROFILE, clock12: message.CLOCK_12H,
+    epoch: message.DISPLAY_EPOCH
+  };
+}
+
+function decodeNeed(message) {
+  if (!contracts.isAppMessage(message) || message.MESSAGE_TYPE !== T.CONFIG_NEED) return null;
+  return {
+    requestId: message.REQUEST_ID, generation: message.DISPLAY_GENERATION,
+    needMask: message.CONFIG_NEED_MASK, profile: message.DISPLAY_PROFILE, clock12: message.CLOCK_12H
+  };
+}
+
+function decodeDataRequest(message) {
+  if (!contracts.isAppMessage(message)) return null;
+  var kind;
+  if (message.MESSAGE_TYPE === T.OVERVIEW_REQUEST) kind = "overview";
+  else if (message.MESSAGE_TYPE === T.REQUEST) kind = "detail";
+  else if (message.MESSAGE_TYPE === T.TRAFFIC_REQUEST) kind = "traffic";
+  else return null;
+  var request = { kind: kind, requestId: message.REQUEST_ID, wireGeneration: message.DISPLAY_GENERATION };
+  if (kind !== "overview") request.favoriteId = message.FAVORITE_ID;
+  if (kind !== "traffic") request.trigger = message.REQUEST_TRIGGER;
+  return request;
 }
 
 module.exports = {
-  encodeRequest: encodeRequest,
-  decodeRequest: decodeRequest,
-  encodeConfiguration: encodeConfiguration,
-  encodeResult: encodeResult,
-  encodeError: encodeError
+  dictionaryBytes: dictionaryBytes,
+  one: one,
+  encodeReady: encodeReady,
+  encodeConfigurationStart: encodeConfigurationStart,
+  encodeConfigurationEntry: encodeConfigurationEntry,
+  encodeFavoriteBody: encodeFavoriteBody,
+  encodeConfigurationCommit: encodeConfigurationCommit,
+  encodeDisplayBegin: encodeDisplayBegin,
+  encodeDisplayRecord: encodeDisplayRecord,
+  encodeDisplayCommit: encodeDisplayCommit,
+  createDisplayTransfer: createDisplayTransfer,
+  decodeHello: decodeHello,
+  decodeNeed: decodeNeed,
+  decodeDataRequest: decodeDataRequest
 };

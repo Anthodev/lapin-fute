@@ -1,0 +1,13 @@
+{
+  "name": "@lapin-fute/catalog",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "csv-parse": "7.0.2",
+    "yauzl": "3.4.0"
+  },
+  "scripts": {
+    "test": "node --test test/*.test.ts"
+  }
+}

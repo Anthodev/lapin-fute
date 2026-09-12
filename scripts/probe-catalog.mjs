@@ -12,7 +12,7 @@ import {
   parseBearerAuthorization,
   redactSecrets,
   relayPrimRequest,
-} from "../packages/backend/src/index.ts";
+} from "../packages/catalog/src/prim-probe.ts";
 import {
   PRIM_ORIGIN,
   TRANSPORT_MODE,

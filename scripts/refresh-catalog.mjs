@@ -16,12 +16,14 @@ import {
   downloadCatalogSource,
   resolveIdfmGtfsDownload,
   validateCatalogCandidate,
-} from "../packages/backend/src/catalog-import.ts";
-import { redactSecrets } from "../packages/backend/src/index.ts";
+} from "../packages/catalog/src/catalog-import.ts";
+import { redactSecrets } from "../packages/catalog/src/prim-probe.ts";
+import { publishStaticCatalog } from "../packages/catalog/src/static-catalog.ts";
 
 const PROJECT_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const DEFAULT_ACTIVE_PATH = join(PROJECT_ROOT, "var/catalog/catalog.sqlite");
 const ACTIVE_PATH = resolve(process.env.CATALOG_PATH ?? DEFAULT_ACTIVE_PATH);
+const STATIC_PATH = resolve(process.env.CATALOG_STATIC_PATH ?? join(PROJECT_ROOT, "var/catalog/static"));
 const EVIDENCE_PATH = join(PROJECT_ROOT, "var/catalog/evidence/refresh-catalog.json");
 const METADATA_BODY_LIMIT = 1024 * 1024;
 const DATA_ORIGIN = new URL(IDFM_CATALOG_SOURCE_URL.gtfsRecord).origin;
@@ -153,7 +155,8 @@ async function fetchDatasetMetadata(source, datasetToken) {
     if (value?.dataset_id !== source.dataset || value?.has_records !== true) {
       throw new Error(`IDFM metadata identity for ${source.dataset} is invalid`);
     }
-    if (value.data_visible !== !source.restricted) {
+    // data_visible describes this caller's access, not the dataset's access policy.
+    if (source.restricted ? value.visibility !== "domain" : value.data_visible !== true) {
       throw new Error(`IDFM metadata visibility for ${source.dataset} changed`);
     }
 
@@ -216,7 +219,8 @@ function assertSameResult(expected, actual, phase) {
   const sameCounts = expected.placeCount === actual.placeCount
     && expected.serviceCount === actual.serviceCount
     && Object.keys(expected.countsByMode).every(
-      (mode) => expected.countsByMode[mode] === actual.countsByMode[mode],
+      (mode) => expected.countsByMode[mode] === actual.countsByMode[mode]
+        && expected.excludedAmbiguousServicesByMode[mode] === actual.excludedAmbiguousServicesByMode[mode],
     );
   if (expected.sourceRevision !== actual.sourceRevision || !sameCounts) {
     throw new Error(`Catalog ${phase} result changed after validation`);
@@ -282,6 +286,8 @@ async function refreshCatalog(datasetToken, state) {
 
   let downloads;
   let activated;
+  let buildResult;
+  let staticCatalog;
   try {
     const gtfsMetadata = await fetchDatasetMetadata(GTFS_SOURCE, datasetToken);
     const resolvedGtfs = await resolveIdfmGtfsDownload(datasetToken);
@@ -325,7 +331,7 @@ async function refreshCatalog(datasetToken, state) {
     const sourceRevision = revisionFor(downloads);
     const createdAt = new Date().toISOString();
     const candidatePath = join(workspace, "candidate.sqlite");
-    const buildResult = await buildCatalogCandidate({
+    buildResult = await buildCatalogCandidate({
       candidatePath,
       sourceRevision,
       createdAt,
@@ -362,6 +368,15 @@ async function refreshCatalog(datasetToken, state) {
     activated = activateCatalogCandidate(candidatePath, ACTIVE_PATH);
     state.atomicActivation = true;
     assertSameResult(validated, activated, "activation");
+    staticCatalog = publishStaticCatalog({
+      catalogPath: ACTIVE_PATH,
+      outputDirectory: STATIC_PATH,
+      attribution: downloads.map(({ metadata }) => sourceAttribution(
+        metadata,
+        `${DATA_ORIGIN}/api/explore/v2.1/catalog/datasets/${metadata.dataset}`,
+      )),
+    });
+    state.staticPublication = true;
   } finally {
     rmSync(workspace, { recursive: true, force: true });
     state.temporaryInputsRemoved = true;
@@ -378,7 +393,17 @@ async function refreshCatalog(datasetToken, state) {
       placeCount: activated.placeCount,
       serviceCount: activated.serviceCount,
       countsByMode: activated.countsByMode,
+      excludedAmbiguousServicesByMode: activated.excludedAmbiguousServicesByMode,
       placeResolution: buildResult.placeResolution ?? null,
+    },
+    staticCatalog: {
+      revision: staticCatalog.manifest.revision,
+      outputDirectory: staticCatalog.outputDirectory,
+      fileCount: staticCatalog.fileCount,
+      searchPageCount: staticCatalog.searchPageCount,
+      placePageCount: staticCatalog.placePageCount,
+      totalBytes: staticCatalog.totalBytes,
+      maximumFileBytes: staticCatalog.maximumFileBytes,
     },
     validation: {
       sqliteIntegrity: "ok",
@@ -391,6 +416,7 @@ async function refreshCatalog(datasetToken, state) {
     activation: {
       atomic: state.atomicActivation,
       temporaryInputsRemoved: state.temporaryInputsRemoved,
+      staticManifestAtomic: state.staticPublication === true,
       ...(activated.revalidatedAfterRenameFailure === true
         ? { revalidatedAfterRenameFailure: true }
         : {}),
@@ -404,6 +430,7 @@ const state = {
   atomicActivation: false,
   temporaryInputsRemoved: false,
   metadataRechecked: false,
+  staticPublication: false,
 };
 const datasetToken = process.env.IDFM_DATASET_TOKEN;
 
@@ -427,6 +454,7 @@ if (typeof datasetToken !== "string" || datasetToken.length === 0) {
       activation: {
         atomic: state.atomicActivation,
         temporaryInputsRemoved: state.temporaryInputsRemoved,
+        staticManifestAtomic: state.staticPublication === true,
       },
       maxRSSKiB: process.resourceUsage().maxRSS,
       error: message,
