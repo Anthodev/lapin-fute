@@ -61,6 +61,8 @@ test("Bunny releases deploy production tags while preview tags stop after qualit
   assert.doesNotMatch(workflow, /branches:\s*\[develop\]/u);
   assert.match(workflow, /tags:\s*\["v\*", "pre-v\*"\]/u);
   assert.match(workflow, /startsWith\(github\.ref_name, 'v'\)/u);
+  assert.match(workflow, /publish:\s+name: Publish GitHub release notes[\s\S]+needs: \[test, deploy\]/u);
+  assert.match(workflow, /gh release create "\$GITHUB_REF_NAME"[\s\S]+--verify-tag[\s\S]+--generate-notes/u);
   assert.match(workflow, /github\.event_name == 'workflow_dispatch' && inputs\.refresh_catalog/u);
   assert.match(workflow, /refresh_catalog:\s+description:[\s\S]+type: boolean/u);
   assert.match(workflow, /inputs\.refresh_catalog != true[\s\S]+npm run build:config-page/u);

@@ -136,3 +136,21 @@ jobs:
             --request POST \
             --header "AccessKey: $BUNNY_API_KEY" \
             "https://api.bunny.net/pullzone/$BUNNY_PULL_ZONE_ID/purgeCache"
+
+  publish:
+    name: Publish GitHub release notes
+    needs: [test, deploy]
+    if: ${{ startsWith(github.ref_name, 'v') }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Create release with generated notes
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" \
+            --repo "$GITHUB_REPOSITORY" \
+            --verify-tag \
+            --generate-notes \
+            --title "Lapin Futé $GITHUB_REF_NAME"
