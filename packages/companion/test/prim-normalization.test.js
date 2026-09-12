@@ -124,6 +124,13 @@ test("delays, cancelled visits and scheduled-only visits retain their distinct s
   ]));
 });
 
+test("a valid response without visits reports no scheduled departures", function () {
+  var payload = fixture("metro");
+  payload.Siri.ServiceDelivery.StopMonitoringDelivery[0].MonitoredStopVisit = [];
+  assert.deepEqual(departures.normalizePrimDepartureResponse(payload, routing(2001), FETCHED_AT),
+    snapshot("SCHEDULED", []));
+});
+
 test("foreign stop, line and destination visits do not contaminate departures or source freshness", function () {
   var payload = fixture("partial");
   var list = visits(payload);

@@ -56,8 +56,8 @@
   },
   {
     "token": "noDepartures",
-    "en": "No departures announced",
-    "fr": "Aucun départ annoncé"
+    "en": "No departures planned",
+    "fr": "Aucun départ prévu"
   },
   {
     "token": "departed",
