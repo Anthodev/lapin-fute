@@ -52,3 +52,17 @@ test("full configuration build still requires and copies a published catalog", (
     rmSync(paths.root, { recursive: true, force: true });
   }
 });
+
+test("Bunny pushes deploy the page while manual catalog publication remains explicit", () => {
+  const workflow = readFileSync(
+    new URL("../../../.github/workflows/deploy-bunny.yml", import.meta.url),
+    "utf8",
+  );
+  assert.match(workflow, /refresh_catalog:\s+description:[\s\S]+type: boolean/u);
+  assert.match(workflow, /inputs\.refresh_catalog != true[\s\S]+npm run build:config-page/u);
+  assert.match(workflow, /inputs\.refresh_catalog \}\}[\s\S]+npm run catalog:refresh/u);
+  assert.match(
+    workflow,
+    /if \[\[ -f var\/config-site\/catalog\/manifest\.json \]\]; then\s+upload_file/u,
+  );
+});

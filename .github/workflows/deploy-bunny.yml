@@ -5,6 +5,12 @@ on:
     branches: [develop]
     tags: ["preview-*"]
   workflow_dispatch:
+    inputs:
+      refresh_catalog:
+        description: Rebuild and publish the IDFM catalog
+        required: true
+        default: false
+        type: boolean
 
 permissions:
   contents: read
@@ -46,12 +52,18 @@ jobs:
       - run: npm ci
 
       - name: Refresh production catalog
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.refresh_catalog }}
         env:
           IDFM_DATASET_TOKEN: ${{ secrets.IDFM_DATASET_TOKEN }}
         run: npm run catalog:refresh
 
       - name: Build static configuration site
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.refresh_catalog }}
         run: npm run build:config-site
+
+      - name: Build configuration page
+        if: ${{ github.event_name != 'workflow_dispatch' || inputs.refresh_catalog != true }}
+        run: npm run build:config-page
 
       - name: Upload static site to Bunny Storage
         shell: bash
@@ -97,7 +109,9 @@ jobs:
                 bash -c 'upload_file "$1"' _
 
           # Publish the catalog pointer only after every immutable catalog file.
-          upload_file var/config-site/catalog/manifest.json
+          if [[ -f var/config-site/catalog/manifest.json ]]; then
+            upload_file var/config-site/catalog/manifest.json
+          fi
 
       - name: Purge Bunny CDN cache
         env:
