@@ -4,8 +4,9 @@ import { existsSync, mkdtempSync, opendirSync, readFileSync, rmSync } from "node
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { LIMITS, TRANSPORT_MODE } from "../../contracts/src/index.ts";
+import { LIMITS, TRANSPORT_MODE, isPlaceSearchItem } from "../../contracts/src/index.ts";
 import { buildCatalogCandidateFromRecords, createPlaceIdentity, createServiceIdentity } from "../src/catalog-import.ts";
+import { SqliteCatalogReader } from "../src/catalog.ts";
 import { publishStaticCatalog } from "../src/static-catalog.ts";
 import { createCatalogClient } from "../../config-page/src/catalog-client.js";
 import { catalogSearchBucket, normalizeCatalogSearchText } from "../../config-page/src/search-text.js";
@@ -58,12 +59,22 @@ test("validated catalog publication preserves all modes, stable service identity
   const options = await catalogFixture(t);
   const publication = publishStaticCatalog(options);
   const client = pageClient(options.outputDirectory);
+  const reader = SqliteCatalogReader.open(options.catalogPath);
   const selections = ["gare du nord", "chatelet", "porte de versailles", "chatelet les halles", "saint lazare"];
   const modes = new Set();
   for (const query of selections) {
     for (const place of await client.searchPlaces(query)) {
       modes.add(place.mode);
-      for (const service of await client.listServices(place.placeId)) {
+      assert.equal(isPlaceSearchItem(place), true);
+      assert.deepEqual(place, reader.searchPlaces(query).find((entry) => entry.placeId === place.placeId));
+      const services = await client.listServices(place.placeId);
+      const nativeLines = new Map(services.map((service) => [service.routing.lineRef, {
+        lineLabel: service.lineLabel, lineColor: service.lineColor, lineTextColor: service.lineTextColor,
+      }]));
+      assert.equal(place.lines.length, nativeLines.size);
+      for (const line of nativeLines.values()) assert.ok(place.lines.some((entry) =>
+        entry.lineLabel === line.lineLabel && entry.lineColor === line.lineColor && entry.lineTextColor === line.lineTextColor));
+      for (const service of services) {
         assert.equal(service.lineMode, place.mode);
         assert.deepEqual(await client.lookupService(service.serviceId), service);
       }
@@ -86,6 +97,83 @@ test("validated catalog publication preserves all modes, stable service identity
   const repeated = publishStaticCatalog(options);
   assert.equal(repeated.manifest.revision, publication.manifest.revision);
   assert.deepEqual(readFileSync(join(options.outputDirectory, "manifest.json")), before);
+});
+
+test("search publication keeps every native line in natural order and refreshes display metadata by revision", async (t) => {
+  const options = await catalogFixture(t);
+  const database = new DatabaseSync(options.catalogPath);
+  const insertPlace = database.prepare("INSERT INTO places VALUES (?, ?, ?, ?, ?)");
+  const insertSearch = database.prepare("INSERT INTO place_search(search_text, place_id) VALUES (?, ?)");
+  const insertService = database.prepare("INSERT INTO services VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)");
+  const busLines = [
+    { lineId: "C-UNI10", lineLabel: "10", lineColor: "#333333" },
+    { lineId: "C-UNI2-B", lineLabel: "2", lineColor: "#222222" },
+    { lineId: "C-UNI2-C", lineLabel: "2", lineColor: "#111111" },
+    { lineId: "C-UNI2-A", lineLabel: "2", lineColor: "#111111" },
+  ];
+  try {
+    database.exec("BEGIN");
+    for (const [mode, lines] of [
+      ["BUS", busLines],
+      ["METRO", [{ lineId: "C-UNI13", lineLabel: "13", lineColor: "#82c8e6" }]],
+    ]) {
+      const place = createPlaceIdentity(mode, "STATIC-UNIVERSITY");
+      insertPlace.run(place.placeId, "Saint-Denis Université", "Saint-Denis", mode, place.canonicalTuple);
+      insertSearch.run(normalizeCatalogSearchText(`Saint-Denis Université ${mode}`), place.placeId);
+      for (const line of lines) {
+        for (const direction of ["0", "1"]) {
+          const monitoringRef = `fixture:university:${mode}:${direction}`;
+          const destinationRef = `fixture:university:terminal:${direction}`;
+          const service = createServiceIdentity({ mode, lineId: line.lineId, monitoringRef, directionId: direction, destinationRef });
+          insertService.run(
+            service.serviceId, place.placeId, "Saint-Denis Université", line.lineLabel, `Terminus ${direction}`,
+            line.lineColor, "#ffffff", monitoringRef, `IDFM:${line.lineId}`, direction, destinationRef, service.canonicalTuple,
+          );
+        }
+      }
+    }
+    database.exec("COMMIT");
+  } finally {
+    database.close();
+  }
+
+  const first = publishStaticCatalog(options);
+  const requests = [];
+  const oldClient = pageClient(options.outputDirectory, requests);
+  const places = await oldClient.searchPlaces("universite");
+  assert.equal(places.length, 2);
+  assert.equal(places.every(isPlaceSearchItem), true);
+  assert.equal(requests.some((url) => /\/(?:places|services)\//u.test(url)), false);
+  const expectedBus = [
+    { lineLabel: "2", lineColor: "#111111", lineTextColor: "#ffffff" },
+    { lineLabel: "2", lineColor: "#222222", lineTextColor: "#ffffff" },
+    { lineLabel: "2", lineColor: "#111111", lineTextColor: "#ffffff" },
+    { lineLabel: "10", lineColor: "#333333", lineTextColor: "#ffffff" },
+  ];
+  assert.deepEqual(places.find((place) => place.mode === "BUS").lines, expectedBus);
+  assert.deepEqual(places.find((place) => place.mode === "METRO").lines, [
+    { lineLabel: "13", lineColor: "#82c8e6", lineTextColor: "#ffffff" },
+  ]);
+  const live = SqliteCatalogReader.open(options.catalogPath).searchPlaces("universite");
+  for (const place of places) assert.deepEqual(place, live.find((entry) => entry.placeId === place.placeId));
+
+  const update = new DatabaseSync(options.catalogPath);
+  try {
+    update.prepare("UPDATE services SET line_label = ?, line_color = ?, line_text_color = ? WHERE line_ref = ?")
+      .run("3", "#abcdef", "#000000", "IDFM:C-UNI2-B");
+  } finally {
+    update.close();
+  }
+  const second = publishStaticCatalog(options);
+  assert.equal(second.manifest.sourceRevision, first.manifest.sourceRevision);
+  assert.notEqual(second.manifest.revision, first.manifest.revision);
+  const refreshed = await pageClient(options.outputDirectory).searchPlaces("universite");
+  assert.deepEqual(refreshed.find((place) => place.mode === "BUS").lines, [
+    expectedBus[0], expectedBus[2],
+    { lineLabel: "3", lineColor: "#abcdef", lineTextColor: "#000000" },
+    expectedBus[3],
+  ]);
+  assert.deepEqual((await oldClient.searchPlaces("universite")).find((place) => place.mode === "BUS").lines, expectedBus);
 });
 
 test("new publication removes a stale service only for new sessions and keeps open sessions on their revision", async (t) => {
@@ -129,9 +217,10 @@ test("publisher splits search and busy-place pages by decoded bytes without drop
     insertSearch.run("busy fixture", busy.placeId);
     for (let index = 0; index < 12; index += 1) {
       const destinationRef = `fixture:busy:${index}`;
-      const service = createServiceIdentity({ mode: "BUS", lineId: "C-BUSY", monitoringRef: longMonitoring, directionId: "0", destinationRef });
+      const lineId = `C-BUSY-${index}`;
+      const service = createServiceIdentity({ mode: "BUS", lineId, monitoringRef: longMonitoring, directionId: "0", destinationRef });
       longServiceId ??= service.serviceId;
-      insertService.run(service.serviceId, busy.placeId, "Busy fixture", String(index).padStart(2, "0"), "Fixture terminal", "#123456", "#ffffff", longMonitoring, "IDFM:C-BUSY", "0", destinationRef, service.canonicalTuple);
+      insertService.run(service.serviceId, busy.placeId, "Busy fixture", String(index).padStart(2, "0"), "Fixture terminal", "#123456", "#ffffff", longMonitoring, `IDFM:${lineId}`, "0", destinationRef, service.canonicalTuple);
     }
     database.exec("COMMIT");
   } finally {
@@ -147,6 +236,14 @@ test("publisher splits search and busy-place pages by decoded bytes without drop
   const client = pageClient(options.outputDirectory, requests);
   const matches = await client.searchPlaces("café");
   assert.deepEqual(matches.map((place) => place.stopLabel.slice(0, 9)), Array.from({ length: 20 }, (_, index) => `Café ${String(index).padStart(4, "0")}`));
+  assert.equal(requests.some((url) => /\/(?:places|services)\//u.test(url)), false);
+  for (const place of matches) assert.deepEqual(place.lines, [
+    { lineLabel: "99", lineColor: "#123456", lineTextColor: "#ffffff" },
+  ]);
+  const busyMatches = await client.searchPlaces("busy");
+  assert.deepEqual(busyMatches[0].lines, Array.from({ length: 12 }, (_, index) => ({
+    lineLabel: String(index).padStart(2, "0"), lineColor: "#123456", lineTextColor: "#ffffff",
+  })));
   const services = await client.listServices(busy.placeId);
   assert.deepEqual(services.map((service) => service.lineLabel), Array.from({ length: 12 }, (_, index) => String(index).padStart(2, "0")));
   assert.equal((await client.lookupService(longServiceId)).routing.monitoringRef, longMonitoring);
@@ -154,6 +251,14 @@ test("publisher splits search and busy-place pages by decoded bytes without drop
   assert.equal(requests.some((url) => url.includes(`/places/${busy.placeId}/1.json`)), true);
   assert.deepEqual((await client.searchPlaces("C.")).map((place) => place.placeId), matches.map((place) => place.placeId));
   assert.equal(requests.some((url) => url.includes("/search/63/1.json")), true);
+  const exportedPlaces = [];
+  for (let page = 0; page !== null;) {
+    const body = JSON.parse(readFileSync(join(options.outputDirectory, revision, "search", "63_61", `${page}.json`), "utf8"));
+    exportedPlaces.push(...body.places.map((place) => place.placeId));
+    page = body.nextPage;
+  }
+  assert.deepEqual(exportedPlaces.sort(), Array.from({ length: 800 }, (_, index) =>
+    createPlaceIdentity("BUS", `STATIC-${index}`).placeId).sort());
   let fileCount = 0;
   let totalBytes = 0;
   let maximum = 0;

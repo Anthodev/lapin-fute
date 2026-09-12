@@ -28,6 +28,7 @@ import {
   validateCatalogCandidate,
   type CatalogSourceAttribution,
 } from "./catalog-import.ts";
+import { PLACE_LINES_SQL, placeLinesFromJson } from "./catalog.ts";
 import { catalogSearchBucket, normalizeCatalogSearchText } from "../../config-page/src/search-text.js";
 
 const PLACE_ID = /^plc_[A-Za-z0-9_-]{43}$/u;
@@ -72,8 +73,11 @@ interface PageWriter {
 const PLACE_QUERY = `
   SELECT places.place_id AS placeId, places.stop_label AS stopLabel,
     places.locality_label AS localityLabel, places.mode AS mode,
-    place_search.search_text AS searchText
-  FROM places JOIN place_search ON place_search.place_id = places.place_id
+    place_search.search_text AS searchText, ${PLACE_LINES_SQL} AS lines
+  FROM places
+  JOIN place_search ON place_search.place_id = places.place_id
+  JOIN services ON services.place_id = places.place_id
+  GROUP BY places.place_id
   ORDER BY places.place_id
 `;
 const SERVICE_QUERY = `
@@ -115,11 +119,13 @@ function publicAttribution(sources: readonly CatalogSourceAttribution[]): Catalo
 }
 
 function searchRow(row: SqlRow): SearchRow {
+  if (typeof row.lines !== "string") fail("invalid search row");
   const place = {
     placeId: row.placeId,
     stopLabel: row.stopLabel,
     ...(row.localityLabel === null ? {} : { localityLabel: row.localityLabel }),
     mode: row.mode,
+    lines: placeLinesFromJson(row.lines),
   };
   if (!isPlaceSearchItem(place) || !PLACE_ID.test(place.placeId)
     || typeof row.searchText !== "string" || row.searchText === ""
@@ -209,9 +215,10 @@ export function publishStaticCatalog(options: PublishStaticCatalogOptions): Stat
     }
     // Hash the same pinned SQLite snapshot that will be exported, in bounded rows.
     const digest = createHash("sha256").update(EXPORT_FORMAT).update(JSON.stringify({ metadata, attribution }));
-    for (const query of [PLACE_QUERY, SERVICE_QUERY]) {
-      for (const row of database.prepare(query).iterate()) digest.update(JSON.stringify(row)).update("\n");
+    for (const row of database.prepare(PLACE_QUERY).iterate() as Iterable<SqlRow>) {
+      digest.update(JSON.stringify(searchRow(row))).update("\n");
     }
+    for (const row of database.prepare(SERVICE_QUERY).iterate()) digest.update(JSON.stringify(row)).update("\n");
     const revision = digest.digest("hex");
     const manifest: StaticCatalogManifest = {
       schemaVersion: SCHEMA_VERSION,

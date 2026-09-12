@@ -71,12 +71,16 @@ export function selectLocale(language) {
 export const COPY = {
   en: {
     pageTitle: "Lapin Futé settings",
+    pageHeading: "Settings",
     intro: "Choose the departures you want at hand on your Pebble.",
     keyTitle: "PRIM access",
-    keyStatusConfigured: "A key is configured on this phone.",
+    keyStatusConfigured: "A key is saved on this phone. It is not verified against PRIM.",
     keyStatusMissing: "No key is configured.",
     keyExplanation: "Your personal key stays in plaintext on your phone. This page never receives the saved key.",
     keyLink: "Create a PRIM token",
+    keyDocsLink: "Instructions",
+    keyRequirement: "A personal PRIM token is required to retrieve live departures. You can prepare your favorites without one.",
+    keyRequiredHint: "PRIM token required for live departures",
     keyLabel: "Replace with a new key",
     keyPlaceholder: "Paste a new key",
     keyShow: "Show",
@@ -88,8 +92,13 @@ export const COPY = {
     keyErrorTooLong: "The key must be at most 512 UTF-8 bytes.",
     keyErrorNewline: "The key must not contain control characters.",
     favoritesTitle: "Favorite departures",
+    favoriteUsed: "used",
+    favoritesUsed: "used",
+    favoriteAvailable: "available",
+    favoritesAvailable: "available",
     favoritesEmpty: "No favorites yet. Search for a stop to add one.",
     favoriteAddTitle: "Add a favorite",
+    favoriteAddCaption: "Stop, line and direction",
     searchLabel: "Stop or station",
     searchPlaceholder: "Search by name",
     searchHint: "Enter at least 2 characters.",
@@ -118,15 +127,20 @@ export const COPY = {
     aboutBack: "Back to settings",
     aboutTitle: "About Lapin Futé",
     syncTitle: "Watch synchronization",
+    syncCaption: "Transfer options",
     syncHint: "The watch normally receives only what changed. Tick this to resend everything if the watch shows outdated favorites.",
     forceSyncLabel: "Force a full synchronization at the next save",
     saveTooLarge: "These settings are too large to transfer. Remove the favorite with the longest entry and add it again.",
   },
   fr: {
     pageTitle: "Réglages Lapin Futé",
+    pageHeading: "Réglages",
     intro: "Choisissez les prochains départs à garder sous la main sur votre Pebble.",
     keyTitle: "Accès PRIM",
-    keyStatusConfigured: "Une clé est configurée sur ce téléphone.",
+    keyStatusConfigured: "Une clé est enregistrée sur ce téléphone. Elle n’est pas vérifiée auprès de PRIM.",
+    keyDocsLink: "Instructions",
+    keyRequirement: "Un jeton PRIM personnel est obligatoire pour récupérer les prochains départs en temps réel. Vous pouvez préparer vos favoris sans jeton.",
+    keyRequiredHint: "Jeton PRIM requis pour les départs en temps réel",
     keyStatusMissing: "Aucune clé n’est configurée.",
     keyExplanation: "Votre clé personnelle reste en clair sur votre téléphone. Cette page ne reçoit jamais la clé enregistrée.",
     keyLink: "Créer un jeton PRIM",
@@ -141,8 +155,13 @@ export const COPY = {
     keyErrorTooLong: "La clé doit contenir au maximum 512 octets UTF-8.",
     keyErrorNewline: "La clé ne doit pas contenir de caractère de contrôle.",
     favoritesTitle: "Départs favoris",
+    favoriteUsed: "utilisé",
+    favoritesUsed: "utilisés",
+    favoriteAvailable: "disponible",
+    favoritesAvailable: "disponibles",
     favoritesEmpty: "Aucun favori. Recherchez un arrêt pour en ajouter un.",
     favoriteAddTitle: "Ajouter un favori",
+    favoriteAddCaption: "Arrêt, ligne et direction",
     searchLabel: "Arrêt ou gare",
     searchPlaceholder: "Rechercher par nom",
     searchHint: "Saisissez au moins 2 caractères.",
@@ -171,6 +190,7 @@ export const COPY = {
     aboutBack: "Retour aux réglages",
     aboutTitle: "À propos de Lapin Futé",
     syncTitle: "Synchronisation de la montre",
+    syncCaption: "Options de transfert",
     syncHint: "La montre ne reçoit normalement que les changements. Cochez cette case pour tout renvoyer si la montre affiche des favoris obsolètes.",
     forceSyncLabel: "Forcer une synchronisation complète au prochain enregistrement",
     saveTooLarge: "Ces réglages sont trop volumineux pour être transférés. Supprimez le favori comportant l’entrée la plus longue, puis rajoutez-le.",
@@ -238,7 +258,8 @@ export function copyPhoneFavorite(favorite) {
   return copy;
 }
 
-const PLACE_FIELDS = ["placeId", "stopLabel", "localityLabel", "mode"];
+const PLACE_LINE_FIELDS = ["lineLabel", "lineColor", "lineTextColor"];
+const PLACE_FIELDS = ["placeId", "stopLabel", "localityLabel", "mode", "lines"];
 const SERVICE_FIELDS = ["serviceId", "stopLabel", "lineLabel", "destinationLabel", "lineMode", "lineColor", "lineTextColor", "routing"];
 const TRANSPORT_MODES = ["BUS", "METRO", "TRAM", "RER", "TRANSILIEN"];
 
@@ -248,12 +269,32 @@ function exactFields(value, allowed, required) {
     && required.every((field) => Object.hasOwn(value, field));
 }
 
+export function isPlaceLine(value) {
+  return exactFields(value, PLACE_LINE_FIELDS, PLACE_LINE_FIELDS)
+    && boundedString(value.lineLabel, LIMITS.labelUtf8Bytes)
+    && isLineColor(value.lineColor)
+    && isLineColor(value.lineTextColor);
+}
+
+// Producer-precomputed display lines for one search row: an entry per native
+// line with no per-line mode or ref. The list is required and nonempty; the
+// response byte bound (not a speculative count cap) limits its length. Holes
+// are visited by for...of, which Array.prototype.every would silently skip.
+function isPlaceLineList(lines) {
+  if (!Array.isArray(lines) || lines.length === 0) return false;
+  for (const line of lines) {
+    if (!isPlaceLine(line)) return false;
+  }
+  return true;
+}
+
 export function isPlaceSearchItem(value) {
-  return exactFields(value, PLACE_FIELDS, ["placeId", "stopLabel", "mode"])
+  return exactFields(value, PLACE_FIELDS, ["placeId", "stopLabel", "mode", "lines"])
     && boundedString(value.placeId, LIMITS.idUtf8Bytes)
     && boundedString(value.stopLabel, LIMITS.labelUtf8Bytes)
     && (value.localityLabel === undefined || boundedString(value.localityLabel, LIMITS.labelUtf8Bytes))
-    && TRANSPORT_MODES.includes(value.mode);
+    && TRANSPORT_MODES.includes(value.mode)
+    && isPlaceLineList(value.lines);
 }
 
 export function isPlaceSearchResult(value) {

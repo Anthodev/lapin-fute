@@ -5,7 +5,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { LIMITS, type TransportMode } from "../../contracts/src/index.ts";
+import { LIMITS, isPlaceSearchItem, type TransportMode } from "../../contracts/src/index.ts";
 import { CatalogManager, SqliteCatalogReader } from "../src/catalog.ts";
 
 interface PlaceSeed {
@@ -315,8 +315,8 @@ test("search is accent tolerant, punctuation safe, and bounded by Unicode code p
   assert.throws(() => reader.searchPlaces("a"), RangeError);
   assert.throws(() => reader.searchPlaces("a".repeat(101)), RangeError);
   assert.throws(() => reader.searchPlaces("--"), RangeError);
-  assert.doesNotThrow(() => reader.searchPlaces("😀a"));
-  assert.doesNotThrow(() => reader.searchPlaces("z".repeat(100)));
+  assert.deepEqual(reader.searchPlaces("😀a"), []);
+  assert.deepEqual(reader.searchPlaces("z".repeat(100)), []);
 });
 
 test("search preserves homonyms and applies deterministic ranking before the 20-row bound", () => {
@@ -373,8 +373,76 @@ test("search preserves homonyms and applies deterministic ranking before the 20-
   );
 });
 
+test("search deduplicates destinations by native line and keeps equal labels and homonymous modes", () => {
+  const places: PlaceSeed[] = (["BUS", "METRO"] as const).map((mode) => ({
+    key: `university-${mode}`,
+    mode,
+    sourceCode: "zda-university",
+    stopLabel: "Saint-Denis Université",
+    localityLabel: "Saint-Denis",
+  }));
+  const busLines = [
+    { lineRef: "native-10", lineLabel: "10", lineColor: "#333333" },
+    { lineRef: "native-2-b", lineLabel: "2", lineColor: "#222222" },
+    { lineRef: "native-2-c", lineLabel: "2", lineColor: "#111111" },
+    { lineRef: "native-2-a", lineLabel: "2", lineColor: "#111111" },
+  ];
+  const services: ServiceSeed[] = busLines.flatMap((line, index) => [0, 1].map((direction) => ({
+    ...line,
+    key: `university-bus-${index}-${direction}`,
+    placeKey: "university-BUS",
+    mode: "BUS" as const,
+    stopLabel: "Saint-Denis Université",
+    lineTextColor: "#ffffff",
+    destinationLabel: `Terminus ${direction}`,
+    monitoringRef: `university-bus-${direction}`,
+    directionId: String(direction),
+    destinationRef: `university-terminal-${direction}`,
+  })));
+  services.push({
+    key: "university-metro",
+    placeKey: "university-METRO",
+    mode: "METRO",
+    stopLabel: "Saint-Denis Université",
+    lineLabel: "13",
+    lineColor: "#82c8e6",
+    lineTextColor: "#000000",
+    destinationLabel: "Châtillon Montrouge",
+    monitoringRef: "university-metro",
+    lineRef: "native-metro-13",
+    directionId: "0",
+    destinationRef: "metro-terminal",
+  });
+  const catalog = buildCatalog({ places, services });
+  const matches = SqliteCatalogReader.open(catalog.path).searchPlaces("universite");
+  assert.equal(matches.length, 2);
+  assert.equal(matches.every(isPlaceSearchItem), true);
+  assert.deepEqual(matches.find((place) => place.mode === "BUS")?.lines, [
+    { lineLabel: "2", lineColor: "#111111", lineTextColor: "#ffffff" },
+    { lineLabel: "2", lineColor: "#222222", lineTextColor: "#ffffff" },
+    { lineLabel: "2", lineColor: "#111111", lineTextColor: "#ffffff" },
+    { lineLabel: "10", lineColor: "#333333", lineTextColor: "#ffffff" },
+  ]);
+  assert.deepEqual(matches.find((place) => place.mode === "METRO")?.lines, [
+    { lineLabel: "13", lineColor: "#82c8e6", lineTextColor: "#000000" },
+  ]);
+});
+
+test("search rejects conflicting display metadata for one native line", () => {
+  const catalog = buildCatalog({
+    services: [{
+      ...BASE_SERVICES[0]!,
+      key: "bus-other-destination",
+      destinationLabel: "Other terminus",
+      destinationRef: "terminal-bus-other",
+      lineColor: "#654321",
+    }],
+  });
+  assert.throws(() => SqliteCatalogReader.open(catalog.path).searchPlaces("republique"), /inconsistent line metadata/u);
+});
+
 test("service options return every valid direction without applying the place-search bound", () => {
-  const extraServices: ServiceSeed[] = Array.from({ length: 25 }, (_, index) => ({
+  const extraServices: ServiceSeed[] = Array.from({ length: 65 }, (_, index) => ({
     key: `bus-option-${index}`,
     placeKey: "bus",
     mode: "BUS",
@@ -391,6 +459,9 @@ test("service options return every valid direction without applying the place-se
 
   const options = reader.listServices(catalog.placeIds.bus);
   assert.equal(options?.length, extraServices.length + 1);
+  const place = reader.searchPlaces("republique").find((entry) => entry.placeId === catalog.placeIds.bus);
+  assert.equal(isPlaceSearchItem(place), true);
+  assert.deepEqual(place?.lines.map((line) => line.lineLabel), ["96", ...extraServices.map((service) => service.lineLabel)]);
 });
 
 test("reload preserves stable IDs, distinguishes directions, rejects invalid candidates, and removes stale services", () => {

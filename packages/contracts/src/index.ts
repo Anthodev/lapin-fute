@@ -263,11 +263,24 @@ export interface ErrorResult {
   occurredAt: number;
   retryAfterSeconds?: number;
 }
+
+/** Display metadata for one native line. Its mode is the enclosing place's mode. */
+export interface PlaceLine {
+  lineLabel: string;
+  lineColor: string;
+  lineTextColor: string;
+}
+
 export interface PlaceSearchItem {
   placeId: string;
   stopLabel: string;
   localityLabel?: string;
   mode: TransportMode;
+  /**
+   * All serving lines, nonempty and deduplicated by native line identity.
+   * Natural label order, then native identity. Equal display labels remain distinct.
+   */
+  lines: PlaceLine[];
 }
 
 export interface PlaceSearchResult {
@@ -367,7 +380,8 @@ const domainKeys = {
   trafficDetailDisrupted: ["schemaVersion", "requestId", "favoriteId", "state", "checkedAt", "sourceUpdatedAt", "title", "text", "validFrom", "validUntil"],
   error: ["schemaVersion", "requestId", "favoriteId", "code", "occurredAt", "retryAfterSeconds"],
   keyUpdate: ["schemaVersion", "action", "value"],
-  placeSearchItem: ["placeId", "stopLabel", "localityLabel", "mode"],
+  placeLine: ["lineLabel", "lineColor", "lineTextColor"],
+  placeSearchItem: ["placeId", "stopLabel", "localityLabel", "mode", "lines"],
   placeSearchResult: ["schemaVersion", "places"],
   serviceOption: ["serviceId", "stopLabel", "lineLabel", "destinationLabel", "lineMode", "lineColor", "lineTextColor", "routing"],
   serviceOptionsResult: ["schemaVersion", "placeId", "services"],
@@ -645,12 +659,26 @@ export function isErrorResult(value: unknown): value is ErrorResult {
     && optionalUint32(value.retryAfterSeconds);
 }
 
+export function isPlaceLine(value: unknown): value is PlaceLine {
+  return object(value)
+    && exactKeys(value, domainKeys.placeLine)
+    && domainKeys.placeLine.every((field) => Object.hasOwn(value, field))
+    && boundedString(value.lineLabel, LIMITS.labelUtf8Bytes)
+    && isLineColor(value.lineColor)
+    && isLineColor(value.lineTextColor);
+}
+
 export function isPlaceSearchItem(value: unknown): value is PlaceSearchItem {
-  if (!object(value) || !exactKeys(value, domainKeys.placeSearchItem)) return false;
-  return boundedString(value.placeId, LIMITS.idUtf8Bytes)
-    && boundedString(value.stopLabel, LIMITS.labelUtf8Bytes)
-    && optionalBoundedString(value.localityLabel, LIMITS.labelUtf8Bytes)
-    && TRANSPORT_MODE.includes(value.mode as TransportMode);
+  if (!object(value) || !exactKeys(value, domainKeys.placeSearchItem)
+    || !Object.hasOwn(value, "placeId") || !Object.hasOwn(value, "stopLabel")
+    || !Object.hasOwn(value, "mode") || !Object.hasOwn(value, "lines")
+    || !boundedString(value.placeId, LIMITS.idUtf8Bytes)
+    || !boundedString(value.stopLabel, LIMITS.labelUtf8Bytes)
+    || !optionalBoundedString(value.localityLabel, LIMITS.labelUtf8Bytes)
+    || !TRANSPORT_MODE.includes(value.mode as TransportMode)
+    || !Array.isArray(value.lines) || value.lines.length === 0) return false;
+  for (const line of value.lines) if (!isPlaceLine(line)) return false;
+  return true;
 }
 
 export function isPlaceSearchResult(value: unknown): value is PlaceSearchResult {
