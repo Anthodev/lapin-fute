@@ -3,6 +3,7 @@ name: Deploy configuration site to Bunny
 on:
   push:
     branches: [develop]
+    tags: ["preview-*"]
   workflow_dispatch:
 
 permissions:
