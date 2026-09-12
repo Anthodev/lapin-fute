@@ -90,9 +90,11 @@ jobs:
               "$endpoint/$relative_path"
           }
 
-          while IFS= read -r -d '' file; do
-            upload_file "$file"
-          done < <(find var/config-site -type f ! -path 'var/config-site/catalog/manifest.json' -print0)
+          export endpoint BUNNY_STORAGE_PASSWORD
+          export -f upload_file
+          find var/config-site -type f ! -path 'var/config-site/catalog/manifest.json' -print0 \
+            | xargs -0 --no-run-if-empty --max-args=1 --max-procs=32 \
+                bash -c 'upload_file "$1"' _
 
           # Publish the catalog pointer only after every immutable catalog file.
           upload_file var/config-site/catalog/manifest.json
