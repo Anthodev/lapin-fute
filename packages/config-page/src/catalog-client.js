@@ -4,7 +4,11 @@ import {
   isPlaceSearchItem,
   isServiceOption,
 } from "./config-core.js";
-import { catalogSearchBucket, normalizeCatalogSearchText } from "./search-text.js";
+import {
+  catalogSearchBucket,
+  normalizeCatalogSearchQuery,
+  normalizeCatalogSearchText,
+} from "./search-text.js";
 
 export const SEARCH_DEBOUNCE_MS = 300;
 
@@ -197,7 +201,7 @@ export function createCatalogClient({
     const length = Array.from(trimmed).length;
     if (length < LIMITS.catalogQueryMinCharacters) return Promise.resolve([]);
     if (length > LIMITS.catalogQueryMaxCharacters) return Promise.reject(new CatalogClientError("INVALID_QUERY"));
-    const normalized = normalizeCatalogSearchText(trimmed);
+    const normalized = normalizeCatalogSearchQuery(trimmed);
     if (normalized === "") return Promise.reject(new CatalogClientError("INVALID_QUERY"));
     const controller = new AbortController();
     searchController = controller;

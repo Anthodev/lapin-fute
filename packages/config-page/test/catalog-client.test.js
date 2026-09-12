@@ -137,6 +137,24 @@ test("static search uses AND token prefixes, Unicode normalization and one-codep
   await assert.rejects(client.searchPlaces("--"), (error) => error.code === "INVALID_QUERY");
 });
 
+test("search ignores French join words absent from an official stop label", async () => {
+  const mairie = place(1, "Mairie / Pelletier", "Stains");
+  mairie.lines = [
+    { lineLabel: "252", lineColor: "#ff0000", lineTextColor: "#000000" },
+    { lineLabel: "253", lineColor: "#ffbe00", lineTextColor: "#000000" },
+    { lineLabel: "255", lineColor: "#6e6e00", lineTextColor: "#ffffff" },
+    { lineLabel: "N43", lineColor: "#ff5a00", lineTextColor: "#ffffff" },
+  ];
+  const { client, requests } = fixtureClient((url) => url === "catalog/manifest.json" ? response(manifest)
+    : response({ schemaVersion: 1, revision, page: 0, nextPage: null, places: [mairie] }));
+
+  const results = await client.searchPlaces("Mairie de Stains");
+
+  assert.deepEqual(results.map((entry) => entry.placeId), [mairie.placeId]);
+  assert.equal(requests[1], `catalog/${revision}/search/6d_61/0.json`);
+  await assert.rejects(client.searchPlaces("de la"), (error) => error.code === "INVALID_QUERY");
+});
+
 test("missing initial search bucket is empty but a missing continuation is unavailable", async () => {
   const missing = fixtureClient((url) => url === "catalog/manifest.json" ? response(manifest) : response(null, 404));
   assert.deepEqual(await missing.client.searchPlaces("absent"), []);
