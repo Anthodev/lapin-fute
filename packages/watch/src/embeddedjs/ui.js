@@ -157,7 +157,7 @@ function departures(port,r,now) {
     const status=hex(data,31,1), value=countdown(r,data,0,now,true), unit=status!==2 && Math.ceil((hex(data,23,8)*1000-now)/60000)>0;
     const style=value==="-"?2:3, unitWidth=unit?Math.ceil(port.measureString("min",fonts[2]).width):0;
     const gap=unit?4:0, valueWidth=Math.min(width-unitWidth-gap,Math.ceil(port.measureString(value,fonts[style]).width));
-    const left=x+Math.floor((width-valueWidth-unitWidth-gap)/2), bottom=y+height-20;
+    const left=x+Math.floor((width-valueWidth-unitWidth-gap)/2), bottom=y+height-(round?17:14);
     drawBottom(port,value,style,INK,left,bottom,valueWidth);
     if(unit)drawBottom(port,"min",2,INK,left+valueWidth+gap,bottom,unitWidth);
     if(status)draw(port,copy(r.profile,r.language,13+status),1,INK,x,y+height-19,width,18);

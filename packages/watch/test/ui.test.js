@@ -125,6 +125,7 @@ for (const profile of [0, 1]) {
     assert.equal(value.font, "bold 36px Gothic");
     assert.equal(unit.font, "bold 18px Gothic");
     assert.equal(value.y, unit.y);
+    assert.equal(value.y, profile === 1 ? 129 : 108);
   });
 }
 
