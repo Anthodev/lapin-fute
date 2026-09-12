@@ -109,6 +109,20 @@ test("search rows carry precomputed lines without extra requests and reject malf
   }
 });
 
+test("equally relevant stops put rail modes before tram and bus", async () => {
+  const modes = ["BUS", "TRAM", "TRANSILIEN", "RER", "METRO"];
+  const entries = modes.map((mode, index) => ({
+    ...place(index, "Saint-Denis - Université", "Saint-Denis"),
+    mode,
+  }));
+  const { client } = fixtureClient((url) => url === "catalog/manifest.json" ? response(manifest)
+    : response({ schemaVersion: 1, revision, page: 0, nextPage: null, places: entries }));
+
+  const results = await client.searchPlaces("universite saint denis");
+
+  assert.deepEqual(results.map((entry) => entry.mode), ["METRO", "RER", "TRANSILIEN", "TRAM", "BUS"]);
+});
+
 test("static search uses AND token prefixes, Unicode normalization and one-codepoint buckets", async () => {
   const match = place(1, "Rue Saint-Denis Châtelet");
   const noChatelet = place(2, "Saint-Denis");

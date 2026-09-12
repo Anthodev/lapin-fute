@@ -12,6 +12,7 @@ const PLACE_ID = /^plc_[A-Za-z0-9_-]{43}$/u;
 const SERVICE_ID = /^svc_[A-Za-z0-9_-]{43}$/u;
 const REVISION = /^[a-f0-9]{64}$/u;
 const MANIFEST_FIELDS = ["schemaVersion", "revision", "sourceRevision", "createdAt", "attribution"];
+const MODE_RANK = Object.freeze({ METRO: 0, RER: 1, TRANSILIEN: 2, TRAM: 3, BUS: 4 });
 
 export class CatalogClientError extends Error {
   constructor(code) {
@@ -173,7 +174,7 @@ export function createCatalogClient({
         const candidate = {
           place,
           rank: searchText === normalized || stop === normalized ? 0 : searchText.startsWith(normalized) ? 1 : 2,
-          order: [stop, normalizeCatalogSearchText(place.localityLabel ?? ""), place.mode, place.placeId],
+          order: [stop, normalizeCatalogSearchText(place.localityLabel ?? ""), MODE_RANK[place.mode], place.placeId],
         };
         const duplicate = best.findIndex((match) => match.place.placeId === place.placeId);
         if (duplicate !== -1) {

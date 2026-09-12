@@ -918,6 +918,12 @@ test("favorites without presentation fields resolve no official image and use an
   assert.match(controller, /svg\.setAttribute\("aria-label", service\.lineLabel\)/u);
 });
 
+test("search result labels use the available row width and wrap line badges", () => {
+  const css = readFileSync(join(here, "../styles/config-page.css"), "utf8");
+  assert.match(css, /\.choice-labels \{[^}]*flex: 1 1 auto;[^}]*min-width: 0;/u);
+  assert.match(css, /\.choice-lines \{[^}]*flex-wrap: wrap;[^}]*width: 100%;[^}]*min-width: 0;/u);
+});
+
 test("mirrored place search validation matches the canonical lines contract", () => {
   const line = { lineLabel: "13", lineColor: "#82c8e6", lineTextColor: "#000000" };
   const placeId = `plc_${"0".repeat(43)}`;
