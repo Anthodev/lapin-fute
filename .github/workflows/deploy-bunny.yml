@@ -1,0 +1,111 @@
+name: Deploy configuration site to Bunny
+
+on:
+  push:
+    branches: [develop]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-bunny-production
+  # Never interrupt a production upload between its immutable files and the
+  # manifest publication. A later deployment waits for the current one.
+  cancel-in-progress: false
+
+jobs:
+  test:
+    name: Run quality checks
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .node-version
+          cache: npm
+
+      - run: npm ci
+      - run: npm test
+
+  deploy:
+    name: Build and deploy configuration site
+    needs: test
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .node-version
+          cache: npm
+
+      - run: npm ci
+
+      - name: Refresh production catalog
+        env:
+          IDFM_DATASET_TOKEN: ${{ secrets.IDFM_DATASET_TOKEN }}
+        run: npm run catalog:refresh
+
+      - name: Build static configuration site
+        run: npm run build:config-site
+
+      - name: Upload static site to Bunny Storage
+        shell: bash
+        env:
+          BUNNY_STORAGE_ENDPOINT: ${{ vars.BUNNY_STORAGE_ENDPOINT }}
+          BUNNY_STORAGE_PASSWORD: ${{ secrets.BUNNY_STORAGE_PASSWORD }}
+        run: |
+          set -euo pipefail
+
+          test -n "$BUNNY_STORAGE_ENDPOINT"
+          test -n "$BUNNY_STORAGE_PASSWORD"
+          endpoint="${BUNNY_STORAGE_ENDPOINT%/}"
+          case "$endpoint" in
+            https://*) ;;
+            *) echo "BUNNY_STORAGE_ENDPOINT must use HTTPS" >&2; exit 1 ;;
+          esac
+
+          upload_file() {
+            local file="$1"
+            local relative_path="${file#var/config-site/}"
+            local mime_type
+            case "$relative_path" in
+              *[!A-Za-z0-9._/-]* | /* | *../*)
+                echo "Refusing unsafe deployment path: $relative_path" >&2
+                exit 1
+                ;;
+            esac
+            mime_type="$(file --brief --mime-type "$file")"
+            echo "Uploading $relative_path"
+            curl --fail --silent --show-error \
+              --retry 3 --retry-all-errors \
+              --request PUT \
+              --header "AccessKey: $BUNNY_STORAGE_PASSWORD" \
+              --header "Content-Type: $mime_type" \
+              --upload-file "$file" \
+              "$endpoint/$relative_path"
+          }
+
+          while IFS= read -r -d '' file; do
+            upload_file "$file"
+          done < <(find var/config-site -type f ! -path 'var/config-site/catalog/manifest.json' -print0)
+
+          # Publish the catalog pointer only after every immutable catalog file.
+          upload_file var/config-site/catalog/manifest.json
+
+      - name: Purge Bunny CDN cache
+        env:
+          BUNNY_API_KEY: ${{ secrets.BUNNY_API_KEY }}
+          BUNNY_PULL_ZONE_ID: ${{ vars.BUNNY_PULL_ZONE_ID }}
+        run: |
+          set -euo pipefail
+          test -n "$BUNNY_API_KEY"
+          test -n "$BUNNY_PULL_ZONE_ID"
+          curl --fail --silent --show-error \
+            --retry 3 --retry-all-errors \
+            --request POST \
+            --header "AccessKey: $BUNNY_API_KEY" \
+            "https://api.bunny.net/pullzone/$BUNNY_PULL_ZONE_ID/purgeCache"
