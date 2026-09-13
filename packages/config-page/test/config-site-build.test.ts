@@ -131,6 +131,10 @@ test("Bunny releases deploy production tags while preview tags stop after qualit
     new URL("../../../.github/workflows/deploy-bunny.yml", import.meta.url),
     "utf8",
   );
+  const rollbackWorkflow = readFileSync(
+    new URL("../../../.github/workflows/rollback-bunny.yml", import.meta.url),
+    "utf8",
+  );
   assert.doesNotMatch(workflow, /branches:\s*\[develop\]/u);
   assert.match(workflow, /tags:\s*\["v\*", "pre-v\*"\]/u);
   assert.match(workflow, /startsWith\(github\.ref_name, 'v'\)/u);
@@ -155,7 +159,12 @@ test("Bunny releases deploy production tags while preview tags stop after qualit
     /if \[\[ -f var\/config-site\/catalog\/manifest\.json \]\]; then\s+upload_file/u,
   );
   assert.match(workflow, /Back up mutable production files[\s\S]+id: backup/u);
+  assert.match(workflow, /name: bunny-rollback-\$\{\{ github\.run_id \}\}[\s\S]+retention-days: 30/u);
   assert.match(workflow, /Verify served static site[\s\S]+npm run verify:config-site/u);
   assert.match(workflow, /failure\(\) && steps\.backup\.outcome == 'success'/u);
   assert.match(workflow, /Restoring \$relative_path[\s\S]+Removing newly introduced mutable file/u);
+  assert.match(rollbackWorkflow, /deployment_run_id:[\s\S]+type: string/u);
+  assert.match(rollbackWorkflow, /gh run download "\$DEPLOYMENT_RUN_ID"[\s\S]+bunny-rollback-\$DEPLOYMENT_RUN_ID/u);
+  assert.match(rollbackWorkflow, /conclusion="\$\(gh api[\s\S]+test "\$conclusion" = success/u);
+  assert.match(rollbackWorkflow, /Restore previous mutable files[\s\S]+Purge Bunny CDN cache[\s\S]+Verify restored mutable files/u);
 });

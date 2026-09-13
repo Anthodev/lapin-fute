@@ -172,6 +172,14 @@ jobs:
             esac
           done < <(find var/config-site -type f -print0)
 
+      - name: Retain rollback bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: bunny-rollback-${{ github.run_id }}
+          path: var/deploy-backup/
+          if-no-files-found: error
+          retention-days: 30
+
       - name: Upload static site to Bunny Storage
         id: upload
         shell: bash
