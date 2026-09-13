@@ -62,20 +62,62 @@ jobs:
       - run: npm ci
 
       - name: Refresh production catalog
-        if: ${{ github.event_name == 'workflow_dispatch' && inputs.refresh_catalog }}
         env:
           IDFM_DATASET_TOKEN: ${{ secrets.IDFM_DATASET_TOKEN }}
         run: npm run catalog:refresh
 
       - name: Build static configuration site
-        if: ${{ github.event_name == 'workflow_dispatch' && inputs.refresh_catalog }}
         run: npm run build:config-site
 
-      - name: Build configuration page
-        if: ${{ github.event_name != 'workflow_dispatch' || inputs.refresh_catalog != true }}
-        run: npm run build:config-page
+      - name: Back up mutable production files
+        id: backup
+        shell: bash
+        env:
+          BUNNY_STORAGE_ENDPOINT: ${{ vars.BUNNY_STORAGE_ENDPOINT }}
+          BUNNY_STORAGE_PASSWORD: ${{ secrets.BUNNY_STORAGE_PASSWORD }}
+        run: |
+          set -euo pipefail
+
+          test -n "$BUNNY_STORAGE_ENDPOINT"
+          test -n "$BUNNY_STORAGE_PASSWORD"
+          endpoint="${BUNNY_STORAGE_ENDPOINT%/}"
+          mkdir -p var/deploy-backup/files
+          : > var/deploy-backup/missing
+
+          while IFS= read -r -d '' file; do
+            relative_path="${file#var/config-site/}"
+            if [[ "$relative_path" =~ ^catalog/[a-f0-9]{64}/ ]]; then
+              continue
+            fi
+            case "$relative_path" in
+              *[!A-Za-z0-9._/-]* | /* | *../*)
+                echo "Refusing unsafe backup path: $relative_path" >&2
+                exit 1
+                ;;
+            esac
+
+            target="var/deploy-backup/files/$relative_path"
+            mkdir -p "$(dirname "$target")"
+            status="$(curl --silent --show-error \
+              --output "$target" \
+              --write-out '%{http_code}' \
+              --header "AccessKey: $BUNNY_STORAGE_PASSWORD" \
+              "$endpoint/$relative_path")"
+            case "$status" in
+              200) ;;
+              404)
+                rm -f "$target"
+                printf '%s\0' "$relative_path" >> var/deploy-backup/missing
+                ;;
+              *)
+                echo "Could not back up $relative_path: HTTP $status" >&2
+                exit 1
+                ;;
+            esac
+          done < <(find var/config-site -type f -print0)
 
       - name: Upload static site to Bunny Storage
+        id: upload
         shell: bash
         env:
           BUNNY_STORAGE_ENDPOINT: ${{ vars.BUNNY_STORAGE_ENDPOINT }}
@@ -133,6 +175,71 @@ jobs:
           test -n "$BUNNY_PULL_ZONE_ID"
           curl --fail --silent --show-error \
             --retry 3 --retry-all-errors \
+            --request POST \
+            --header "AccessKey: $BUNNY_API_KEY" \
+            "https://api.bunny.net/pullzone/$BUNNY_PULL_ZONE_ID/purgeCache"
+
+      - name: Verify served static site
+        env:
+          CONFIG_SITE_ORIGIN: ${{ vars.CONFIG_SITE_ORIGIN }}
+        run: |
+          for attempt in 1 2 3; do
+            if npm run verify:config-site; then
+              exit 0
+            fi
+            if [[ "$attempt" != 3 ]]; then sleep 10; fi
+          done
+          exit 1
+
+      - name: Restore previous mutable files after failure
+        if: ${{ failure() && steps.backup.outcome == 'success' }}
+        shell: bash
+        env:
+          BUNNY_STORAGE_ENDPOINT: ${{ vars.BUNNY_STORAGE_ENDPOINT }}
+          BUNNY_STORAGE_PASSWORD: ${{ secrets.BUNNY_STORAGE_PASSWORD }}
+          BUNNY_API_KEY: ${{ secrets.BUNNY_API_KEY }}
+          BUNNY_PULL_ZONE_ID: ${{ vars.BUNNY_PULL_ZONE_ID }}
+        run: |
+          set -euo pipefail
+
+          endpoint="${BUNNY_STORAGE_ENDPOINT%/}"
+          restore_file() {
+            local file="$1"
+            local relative_path="${file#var/deploy-backup/files/}"
+            local mime_type
+            mime_type="$(file --brief --mime-type "$file")"
+            echo "Restoring $relative_path"
+            curl --fail --silent --show-error \
+              --request PUT \
+              --header "AccessKey: $BUNNY_STORAGE_PASSWORD" \
+              --header "Content-Type: $mime_type" \
+              --upload-file "$file" \
+              "$endpoint/$relative_path"
+          }
+          export endpoint BUNNY_STORAGE_PASSWORD
+          export -f restore_file
+          find var/deploy-backup/files -type f -print0 \
+            | xargs -0 --no-run-if-empty --max-args=1 --max-procs=16 \
+                bash -c 'restore_file "$1"' _
+
+          while IFS= read -r -d '' relative_path; do
+            echo "Removing newly introduced mutable file $relative_path"
+            status="$(curl --silent --show-error \
+              --request DELETE \
+              --header "AccessKey: $BUNNY_STORAGE_PASSWORD" \
+              --output /dev/null \
+              --write-out '%{http_code}' \
+              "$endpoint/$relative_path")"
+            case "$status" in
+              200 | 201 | 204 | 404) ;;
+              *)
+                echo "Could not remove $relative_path during rollback: HTTP $status" >&2
+                exit 1
+                ;;
+            esac
+          done < var/deploy-backup/missing
+
+          curl --fail --silent --show-error \
             --request POST \
             --header "AccessKey: $BUNNY_API_KEY" \
             "https://api.bunny.net/pullzone/$BUNNY_PULL_ZONE_ID/purgeCache"

@@ -143,10 +143,15 @@ test("Bunny releases deploy production tags while preview tags stop after qualit
   assert.doesNotMatch(workflow, /--generate-notes/u);
   assert.match(workflow, /github\.event_name == 'workflow_dispatch' && inputs\.refresh_catalog/u);
   assert.match(workflow, /refresh_catalog:\s+description:[\s\S]+type: boolean/u);
-  assert.match(workflow, /inputs\.refresh_catalog != true[\s\S]+npm run build:config-page/u);
-  assert.match(workflow, /inputs\.refresh_catalog \}\}[\s\S]+npm run catalog:refresh/u);
+  assert.match(workflow, /Refresh production catalog[\s\S]+npm run catalog:refresh/u);
+  assert.match(workflow, /Build static configuration site[\s\S]+npm run build:config-site/u);
+  assert.doesNotMatch(workflow, /npm run build:config-page/u);
   assert.match(
     workflow,
     /if \[\[ -f var\/config-site\/catalog\/manifest\.json \]\]; then\s+upload_file/u,
   );
+  assert.match(workflow, /Back up mutable production files[\s\S]+id: backup/u);
+  assert.match(workflow, /Verify served static site[\s\S]+npm run verify:config-site/u);
+  assert.match(workflow, /failure\(\) && steps\.backup\.outcome == 'success'/u);
+  assert.match(workflow, /Restoring \$relative_path[\s\S]+Removing newly introduced mutable file/u);
 });
