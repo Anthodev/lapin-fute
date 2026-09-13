@@ -134,12 +134,16 @@ test("Bunny releases deploy production tags while preview tags stop after qualit
   assert.doesNotMatch(workflow, /branches:\s*\[develop\]/u);
   assert.match(workflow, /tags:\s*\["v\*", "pre-v\*"\]/u);
   assert.match(workflow, /startsWith\(github\.ref_name, 'v'\)/u);
-  assert.match(workflow, /publish:\s+name: Publish GitHub release notes[\s\S]+needs: \[test, deploy\]/u);
+  assert.match(workflow, /package:\s+name: Build release PBW[\s\S]+needs: test/u);
+  assert.match(workflow, /pebble-tool==5\.0\.40[\s\S]+pebble sdk install 4\.33\.1/u);
+  assert.match(workflow, /LAPIN_FUTE_CONFIG_URL: \$\{\{ vars\.CONFIG_SITE_ORIGIN \}\}[\s\S]+npm run build/u);
+  assert.match(workflow, /sha256sum "lapin-fute-\$RELEASE_TAG\.pbw" > SHA256SUMS/u);
+  assert.match(workflow, /publish:\s+name: Publish GitHub release notes[\s\S]+needs: \[test, package, deploy\]/u);
   assert.match(workflow, /\["log", "--first-parent", "-z", "--format=%s%x00%h"/u);
   for (const title of ["Features", "Changes", "Fixes", "CI"]) {
     assert.match(workflow, new RegExp(`title: "${title}"`, "u"));
   }
-  assert.match(workflow, /gh release create "\$GITHUB_REF_NAME"[\s\S]+--notes-file release-notes\.md[\s\S]+--verify-tag/u);
+  assert.match(workflow, /gh release create "\$GITHUB_REF_NAME"[\s\S]+--notes-file release-notes\.md[\s\S]+--verify-tag[\s\S]+release-assets\/\*/u);
   assert.doesNotMatch(workflow, /--generate-notes/u);
   assert.match(workflow, /github\.event_name == 'workflow_dispatch' && inputs\.refresh_catalog/u);
   assert.match(workflow, /refresh_catalog:\s+description:[\s\S]+type: boolean/u);

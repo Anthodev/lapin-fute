@@ -45,6 +45,62 @@ jobs:
 
       - run: npm test
 
+  package:
+    name: Build release PBW
+    needs: test
+    if: ${{ startsWith(github.ref_name, 'v') }}
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .node-version
+          cache: npm
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.0
+
+      - uses: astral-sh/setup-uv@v6
+
+      - run: npm ci
+
+      - name: Install pinned Pebble toolchain
+        run: |
+          uv tool install pebble-tool==5.0.40
+          pebble sdk install 4.33.1
+
+      - name: Validate package version
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          PACKAGE_VERSION="$(node -p "require('./packages/watch/package.json').version")"
+          test "$RELEASE_TAG" = "v$PACKAGE_VERSION"
+
+      - name: Build production PBW
+        env:
+          LAPIN_FUTE_CONFIG_URL: ${{ vars.CONFIG_SITE_ORIGIN }}
+        run: npm run build
+
+      - name: Prepare release artifacts
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          mkdir release-assets
+          cp packages/watch/build/watch.pbw "release-assets/lapin-fute-$RELEASE_TAG.pbw"
+          (
+            cd release-assets
+            sha256sum "lapin-fute-$RELEASE_TAG.pbw" > SHA256SUMS
+          )
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: lapin-fute-${{ github.ref_name }}
+          path: release-assets/
+          if-no-files-found: error
+
   deploy:
     name: Build and deploy configuration site
     needs: test
@@ -246,7 +302,7 @@ jobs:
 
   publish:
     name: Publish GitHub release notes
-    needs: [test, deploy]
+    needs: [test, package, deploy]
     if: ${{ startsWith(github.ref_name, 'v') }}
     runs-on: ubuntu-latest
     permissions:
@@ -258,6 +314,12 @@ jobs:
           ref: ${{ github.sha }}
           fetch-depth: 0
           persist-credentials: false
+
+      - name: Download release artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: lapin-fute-${{ github.ref_name }}
+          path: release-assets
 
       - name: Generate categorized release notes
         shell: bash
@@ -324,4 +386,5 @@ jobs:
             --repo "$GITHUB_REPOSITORY" \
             --title "Lapin Futé $GITHUB_REF_NAME" \
             --notes-file release-notes.md \
-            --verify-tag
+            --verify-tag \
+            release-assets/*
