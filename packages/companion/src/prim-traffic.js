@@ -286,12 +286,17 @@ function trafficForLine(envelope, lineId, evaluatedAtMilliseconds, checkedAtMill
     checkedAt: Math.floor(checkedAtMilliseconds / 1000)
   };
   if (!contracts.uint32(result.checkedAt)) fail();
-  if (typeof line === "undefined") return result;
+  if (typeof line === "undefined") {
+    // The bulk endpoint lists impacted lines only. A valid catalog line omitted
+    // from a successfully normalized response therefore has normal traffic.
+    if (typeof lineId === "string" && exactMatch(CANONICAL_LINE, lineId) !== null) result.state = "NORMAL";
+    return result;
+  }
   for (index = 0; index < line.length; index += 1) {
     disruption = envelope.disruptions[line[index]];
     if (!active(disruption, localNow) || disruption.severity === "INFORMATION") continue;
-    priority = disruption.severity === "PERTURBEE"
-      && typeof disruption.title !== "undefined" && typeof disruption.text !== "undefined" ? 1 : 2;
+    if (typeof disruption.title === "undefined" || typeof disruption.text === "undefined") priority = 2;
+    else priority = disruption.severity === "BLOQUANTE" ? 3 : 1;
     if (typeof best === "undefined" || priority > bestPriority
         || (priority === bestPriority && disruption.id < best.id)) {
       best = disruption;
@@ -301,6 +306,10 @@ function trafficForLine(envelope, lineId, evaluatedAtMilliseconds, checkedAtMill
   if (typeof best === "undefined") result.state = "NORMAL";
   else if (bestPriority === 1) {
     result.state = "DELAYED";
+    result.title = best.title;
+    result.text = best.text;
+  } else if (bestPriority === 3) {
+    result.state = "STOPPED";
     result.title = best.title;
     result.text = best.text;
   }

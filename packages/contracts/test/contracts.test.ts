@@ -19,6 +19,7 @@ import {
   SCHEMA_VERSION,
   TRAFFIC_STATE,
   TRANSPORT_MODE,
+  USEFUL_STALE_SECONDS,
   cstringBytes,
   dictionaryBytes,
   isApiKeyUpdate,
@@ -428,6 +429,8 @@ test("catalog contracts freeze transport modes, error codes, and limits", () => 
   assert.equal(LIMITS.catalogQueryMinCharacters, 2);
   assert.equal(LIMITS.catalogQueryMaxCharacters, 100);
   assert.equal(LIMITS.catalogSearchResults, 20);
+  assert.equal(USEFUL_STALE_SECONDS, 15 * 60);
+  assert.equal(companion.USEFUL_STALE_SECONDS, USEFUL_STALE_SECONDS);
 });
 
 test("place lines require complete display metadata within the existing label and color bounds", () => {

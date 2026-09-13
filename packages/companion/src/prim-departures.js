@@ -127,6 +127,7 @@ function normalizePrimDepartureResponse(value, routing, fetchedAt) {
   var recordedAt;
   var matched = [];
   var departures = [];
+  var visitCount = 0;
   var realtimeCount = 0;
   var departure;
   var interval;
@@ -155,6 +156,7 @@ function normalizePrimDepartureResponse(value, routing, fetchedAt) {
     for (offset = 0; offset < visits.length; offset += 1) {
       visit = visits[offset];
       if (!contracts.isObject(visit)) fail();
+      visitCount += 1;
       recordedAt = epochSeconds(visit.RecordedAtTime);
       journey = matchedJourney(visit, routing);
       if (typeof journey === "undefined") continue;
@@ -162,7 +164,7 @@ function normalizePrimDepartureResponse(value, routing, fetchedAt) {
       insertBounded(matched, parseMatchedVisit(journey));
     }
   }
-  if (matched.length === 0) fail();
+  if (matched.length === 0 && visitCount > 0) fail();
   for (index = 0; index < matched.length; index += 1) {
     visit = matched[index];
     if (visit.hasExpected) realtimeCount += 1;
@@ -185,7 +187,8 @@ function normalizePrimDepartureResponse(value, routing, fetchedAt) {
   }
   result = {
     fetchedAt: fetchedAt,
-    freshness: realtimeCount === matched.length ? "REALTIME" : realtimeCount === 0 ? "SCHEDULED" : "MIXED",
+    freshness: matched.length === 0 ? "SCHEDULED"
+      : realtimeCount === matched.length ? "REALTIME" : realtimeCount === 0 ? "SCHEDULED" : "MIXED",
     departures: Object.freeze(departures)
   };
   if (typeof sourceUpdatedAt !== "undefined") result.sourceUpdatedAt = sourceUpdatedAt;

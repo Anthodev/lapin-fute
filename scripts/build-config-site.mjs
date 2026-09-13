@@ -17,54 +17,73 @@ const OUTPUT_PATH = join(PROJECT_ROOT, "var/config-site");
 const PAGE_ENTRIES = ["index.html", "src", "styles", "assets"];
 
 function fail(message) {
-  console.error(`build:config-site failed: ${message}`);
-  process.exit(1);
+  throw new Error(`build:config-site failed: ${message}`);
 }
 
-function copyCatalog() {
-  const manifest = join(STATIC_PATH, "manifest.json");
+function copyCatalog(staticPath, outputPath) {
+  const manifest = join(staticPath, "manifest.json");
   if (!existsSync(manifest)) {
-    fail(`no published static catalog at ${STATIC_PATH} (manifest.json missing). Run "npm run catalog:refresh" first.`);
+    fail(`no published static catalog at ${staticPath} (manifest.json missing). Run "npm run catalog:refresh" first.`);
   }
 
-  const catalogTarget = join(OUTPUT_PATH, "catalog");
+  const catalogTarget = join(outputPath, "catalog");
   mkdirSync(catalogTarget, { recursive: true });
-  for (const entry of readdirSync(STATIC_PATH)) {
-    cpSync(join(STATIC_PATH, entry), join(catalogTarget, entry), { recursive: true });
+  for (const entry of readdirSync(staticPath)) {
+    cpSync(join(staticPath, entry), join(catalogTarget, entry), { recursive: true });
   }
   if (!existsSync(join(catalogTarget, "manifest.json"))) {
     fail("catalog copy did not produce manifest.json");
   }
 }
 
-function copyPage() {
+function copyPage(pageSource, outputPath) {
   for (const entry of PAGE_ENTRIES) {
-    const source = join(PAGE_SOURCE, entry);
+    const source = join(pageSource, entry);
     if (!existsSync(source)) fail(`missing config page source: ${entry}`);
     if (statSync(source).isDirectory()) {
-      cpSync(source, join(OUTPUT_PATH, entry), { recursive: true });
+      cpSync(source, join(outputPath, entry), { recursive: true });
     } else {
-      cpSync(source, join(OUTPUT_PATH, entry));
+      cpSync(source, join(outputPath, entry));
     }
   }
 }
 
-function build() {
-  if (!existsSync(STATIC_PATH)) {
-    fail(`no published static catalog at ${STATIC_PATH}. Run "npm run catalog:refresh" first.`);
+export function buildConfigSite({
+  pageSource = PAGE_SOURCE,
+  staticPath = STATIC_PATH,
+  outputPath = OUTPUT_PATH,
+  includeCatalog = true,
+} = {}) {
+  if (includeCatalog && !existsSync(staticPath)) {
+    fail(`no published static catalog at ${staticPath}. Run "npm run catalog:refresh" first.`);
   }
 
-  rmSync(OUTPUT_PATH, { recursive: true, force: true });
-  mkdirSync(OUTPUT_PATH, { recursive: true });
+  rmSync(outputPath, { recursive: true, force: true });
+  mkdirSync(outputPath, { recursive: true });
   try {
-    copyPage();
-    copyCatalog();
+    copyPage(pageSource, outputPath);
+    if (includeCatalog) copyCatalog(staticPath, outputPath);
   } catch (error) {
-    rmSync(OUTPUT_PATH, { recursive: true, force: true });
+    rmSync(outputPath, { recursive: true, force: true });
     throw error;
   }
 
-  console.log(`config site ready: ${OUTPUT_PATH} (catalog revision in catalog/manifest.json)`);
+  console.log(includeCatalog
+    ? `config site ready: ${outputPath} (catalog revision in catalog/manifest.json)`
+    : `config page ready: ${outputPath} (existing hosted catalog left unchanged)`);
 }
 
-if (process.argv[1] === fileURLToPath(import.meta.url)) build();
+if (process.argv[1] === fileURLToPath(import.meta.url)) {
+  const arguments_ = process.argv.slice(2);
+  if (arguments_.some((argument) => argument !== "--page-only") || arguments_.length > 1) {
+    console.error('build:config-site failed: the only supported option is "--page-only"');
+    process.exitCode = 1;
+  } else {
+    try {
+      buildConfigSite({ includeCatalog: arguments_[0] !== "--page-only" });
+    } catch (error) {
+      console.error(error instanceof Error ? error.message : error);
+      process.exitCode = 1;
+    }
+  }
+}

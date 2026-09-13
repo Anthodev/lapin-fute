@@ -134,6 +134,62 @@ test("import covers five modes, gates perimeter and unsupported modes, preserves
   assert.equal(busServices.some((entry) => entry.destinationLabel === "Wrong perimeter destination"), false);
 });
 
+test("bus services use their actual terminal to distinguish partial trips with the same headsign", async (t) => {
+  const directory = workspace(t);
+  const candidate = join(directory, "candidate.sqlite");
+  const sources = sourcesFor("fixture-2026-08-a");
+  await buildCatalogCandidateFromRecords({
+    candidatePath: candidate,
+    sourceRevision: "fixture-bus-partial-trip",
+    sources: {
+      ...sources,
+      stops: [
+        ...sources.stops,
+        { stop_id: "IDFM:TERM-BUS-PARTIAL", stop_name: "Porte de Paris", parent_station: "" },
+      ],
+      trips: [
+        ...sources.trips,
+        {
+          route_id: "IDFM:C100",
+          trip_id: "trip-bus-partial",
+          trip_headsign: "Hôpital Européen",
+          direction_id: "0",
+        },
+      ],
+      stopTimes: [
+        ...sources.stopTimes,
+        { trip_id: "trip-bus-partial", stop_id: "IDFM:ART-BUS-1", stop_sequence: "1", pickup_type: "0" },
+        { trip_id: "trip-bus-partial", stop_id: "IDFM:TERM-BUS-PARTIAL", stop_sequence: "2", pickup_type: "1" },
+      ],
+      objectCodes: [
+        ...sources.objectCodes,
+        {
+          object_type: "StopPoint",
+          object_id: "IDFM:TERM-BUS-PARTIAL",
+          object_system: "source",
+          object_code: "DEST:BUS-PARTIAL",
+        },
+      ],
+    },
+  });
+
+  const manager = new CatalogManager();
+  manager.reload(candidate);
+  const bus = place(manager, "gare du nord", "BUS", "Paris");
+  const services = manager.listServices(bus.placeId) ?? [];
+  assert.deepEqual(
+    services.map((entry) => entry.destinationLabel).sort(),
+    ["Hôpital Européen", "Porte de Paris"],
+  );
+  assert.notEqual(services[0]?.serviceId, services[1]?.serviceId);
+  assert.deepEqual(
+    new Set(services.map((entry) => manager.resolveService(entry.serviceId))
+      .filter((entry) => entry.status === "RESOLVED")
+      .map((entry) => entry.destinationRef)),
+    new Set(["STIF:StopPoint:Q:TERM-BUS-1:", "STIF:StopPoint:Q:TERM-BUS-PARTIAL:"]),
+  );
+});
+
 test("GTFS quay and monomodal stops join SIRI perimeter namespaces without rewriting routing references", async (t) => {
   const directory = workspace(t);
   const sources = sourcesFor("fixture-2026-08-a");

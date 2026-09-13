@@ -1,0 +1,220 @@
+name: Deploy configuration site to Bunny
+
+on:
+  push:
+    tags: ["v*", "pre-v*"]
+  workflow_dispatch:
+    inputs:
+      refresh_catalog:
+        description: Rebuild and publish the IDFM catalog
+        required: true
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-bunny-production
+  # Never interrupt a production upload between its immutable files and the
+  # manifest publication. A later deployment waits for the current one.
+  cancel-in-progress: false
+
+jobs:
+  test:
+    name: Run quality checks
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .node-version
+          cache: npm
+
+      - run: npm ci
+
+      - name: Validate release tag
+        if: ${{ github.event_name == 'push' }}
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          production='^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$'
+          preview='^pre-v(0|[1-9][0-9]*)-(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$'
+          [[ "$RELEASE_TAG" =~ $production || "$RELEASE_TAG" =~ $preview ]]
+
+      - run: npm test
+
+  deploy:
+    name: Build and deploy configuration site
+    needs: test
+    if: ${{ startsWith(github.ref_name, 'v') || (github.event_name == 'workflow_dispatch' && inputs.refresh_catalog) }}
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .node-version
+          cache: npm
+
+      - run: npm ci
+
+      - name: Refresh production catalog
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.refresh_catalog }}
+        env:
+          IDFM_DATASET_TOKEN: ${{ secrets.IDFM_DATASET_TOKEN }}
+        run: npm run catalog:refresh
+
+      - name: Build static configuration site
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.refresh_catalog }}
+        run: npm run build:config-site
+
+      - name: Build configuration page
+        if: ${{ github.event_name != 'workflow_dispatch' || inputs.refresh_catalog != true }}
+        run: npm run build:config-page
+
+      - name: Upload static site to Bunny Storage
+        shell: bash
+        env:
+          BUNNY_STORAGE_ENDPOINT: ${{ vars.BUNNY_STORAGE_ENDPOINT }}
+          BUNNY_STORAGE_PASSWORD: ${{ secrets.BUNNY_STORAGE_PASSWORD }}
+        run: |
+          set -euo pipefail
+
+          test -n "$BUNNY_STORAGE_ENDPOINT"
+          test -n "$BUNNY_STORAGE_PASSWORD"
+          endpoint="${BUNNY_STORAGE_ENDPOINT%/}"
+          case "$endpoint" in
+            https://*) ;;
+            *) echo "BUNNY_STORAGE_ENDPOINT must use HTTPS" >&2; exit 1 ;;
+          esac
+
+          upload_file() {
+            local file="$1"
+            local relative_path="${file#var/config-site/}"
+            local mime_type
+            case "$relative_path" in
+              *[!A-Za-z0-9._/-]* | /* | *../*)
+                echo "Refusing unsafe deployment path: $relative_path" >&2
+                exit 1
+                ;;
+            esac
+            mime_type="$(file --brief --mime-type "$file")"
+            echo "Uploading $relative_path"
+            curl --fail --silent --show-error \
+              --retry 3 --retry-all-errors \
+              --request PUT \
+              --header "AccessKey: $BUNNY_STORAGE_PASSWORD" \
+              --header "Content-Type: $mime_type" \
+              --upload-file "$file" \
+              "$endpoint/$relative_path"
+          }
+
+          export endpoint BUNNY_STORAGE_PASSWORD
+          export -f upload_file
+          find var/config-site -type f ! -path 'var/config-site/catalog/manifest.json' -print0 \
+            | xargs -0 --no-run-if-empty --max-args=1 --max-procs=32 \
+                bash -c 'upload_file "$1"' _
+
+          # Publish the catalog pointer only after every immutable catalog file.
+          if [[ -f var/config-site/catalog/manifest.json ]]; then
+            upload_file var/config-site/catalog/manifest.json
+          fi
+
+      - name: Purge Bunny CDN cache
+        env:
+          BUNNY_API_KEY: ${{ secrets.BUNNY_API_KEY }}
+          BUNNY_PULL_ZONE_ID: ${{ vars.BUNNY_PULL_ZONE_ID }}
+        run: |
+          set -euo pipefail
+          test -n "$BUNNY_API_KEY"
+          test -n "$BUNNY_PULL_ZONE_ID"
+          curl --fail --silent --show-error \
+            --retry 3 --retry-all-errors \
+            --request POST \
+            --header "AccessKey: $BUNNY_API_KEY" \
+            "https://api.bunny.net/pullzone/$BUNNY_PULL_ZONE_ID/purgeCache"
+
+  publish:
+    name: Publish GitHub release notes
+    needs: [test, deploy]
+    if: ${{ startsWith(github.ref_name, 'v') }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Check out tagged commit
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Generate categorized release notes
+        shell: bash
+        run: |
+          set -euo pipefail
+          previous_tag="$(git describe --tags --match 'v[0-9]*' --abbrev=0 "$GITHUB_SHA^" 2>/dev/null || true)"
+
+          if [[ -n "$previous_tag" ]]; then
+            range="$previous_tag..$GITHUB_SHA"
+            changelog_url="https://github.com/$GITHUB_REPOSITORY/compare/$previous_tag...$GITHUB_REF_NAME"
+          else
+            range="$GITHUB_SHA"
+            changelog_url="https://github.com/$GITHUB_REPOSITORY/commits/$GITHUB_REF_NAME"
+          fi
+
+          RANGE="$range" CHANGELOG_URL="$changelog_url" node --input-type=module <<'EOF'
+          import { execFileSync } from "node:child_process";
+          import { writeFileSync } from "node:fs";
+
+          const groups = [
+            { key: "feat", title: "Features", commits: [] },
+            { key: "change", title: "Changes", commits: [] },
+            { key: "fix", title: "Fixes", commits: [] },
+            { key: "ci", title: "CI", commits: [] },
+          ];
+          const byKey = new Map(groups.map((group) => [group.key, group]));
+          const fields = execFileSync(
+            "git",
+            ["log", "--first-parent", "-z", "--format=%s%x00%h", process.env.RANGE],
+            { encoding: "utf8" },
+          ).split("\0").filter(Boolean);
+
+          for (let index = 0; index < fields.length; index += 2) {
+            const subject = fields[index].trim();
+            const hash = fields[index + 1].trim();
+            const type = subject.match(/^([a-z]+)(?:\([^)]*\))?!?:\s+/i)?.[1].toLowerCase();
+            const key = type === "feat"
+              ? "feat"
+              : type === "fix"
+                ? "fix"
+                : type === "ci"
+                  ? "ci"
+                  : "change";
+
+            byKey.get(key).commits.push(`- ${subject} (\`${hash}\`)`);
+          }
+
+          const notes = [];
+          for (const group of groups) {
+            if (group.commits.length === 0) continue;
+            notes.push(`## ${group.title}`, "", ...group.commits, "");
+          }
+          notes.push(`**Full changelog**: ${process.env.CHANGELOG_URL}`, "");
+          writeFileSync("release-notes.md", notes.join("\n"));
+          EOF
+
+      - name: Create release with categorized notes
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh release create "$GITHUB_REF_NAME" \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "Lapin Futé $GITHUB_REF_NAME" \
+            --notes-file release-notes.md \
+            --verify-tag

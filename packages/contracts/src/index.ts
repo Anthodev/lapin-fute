@@ -17,6 +17,9 @@ export const LIMITS = {
 
 export const PRIM_ORIGIN = "https://prim.iledefrance-mobilites.fr" as const;
 export const CACHE_FRESH_SECONDS = 60 as const;
+// A complete departure result may bridge a short source outage, but after
+// fifteen minutes its times are no longer useful enough to show as data.
+export const USEFUL_STALE_SECONDS = 15 * 60;
 export const FAVORITE_SETTLE_MS = 500 as const;
 export const APP_MESSAGE_INBOX_BYTES = 768 as const;
 export const APP_MESSAGE_OUTBOX_BYTES = 192 as const;

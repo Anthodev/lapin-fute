@@ -124,6 +124,13 @@ test("delays, cancelled visits and scheduled-only visits retain their distinct s
   ]));
 });
 
+test("a valid response without visits reports no scheduled departures", function () {
+  var payload = fixture("metro");
+  payload.Siri.ServiceDelivery.StopMonitoringDelivery[0].MonitoredStopVisit = [];
+  assert.deepEqual(departures.normalizePrimDepartureResponse(payload, routing(2001), FETCHED_AT),
+    snapshot("SCHEDULED", []));
+});
+
 test("foreign stop, line and destination visits do not contaminate departures or source freshness", function () {
   var payload = fixture("partial");
   var list = visits(payload);
@@ -223,8 +230,8 @@ test("upstream routing may exceed watch ID lengths without leaking into the snap
 test("traffic distinguishes observed normal, useful disruption and source uncertainty", function () {
   var payload = trafficFixture();
   var expected = {
-    C100: "NORMAL", C200: "DELAYED", C300: "UNKNOWN", C400: "UNKNOWN",
-    C500: "NORMAL", C600: "NORMAL", C999: "UNKNOWN"
+    C100: "NORMAL", C200: "DELAYED", C300: "STOPPED", C400: "STOPPED",
+    C500: "NORMAL", C600: "NORMAL", C999: "NORMAL"
   };
   Object.keys(expected).forEach(function (line) {
     var result = trafficDetail(payload, "IDFM:" + line);
@@ -241,13 +248,28 @@ test("traffic distinguishes observed normal, useful disruption and source uncert
   });
 });
 
-test("BLOQUANTE never invents STOPPED and outranks usable PERTURBEE details", function () {
+test("lines omitted from the disruption-only bulk feed have normal traffic", function () {
   var payload = trafficFixture();
-  payload.disruptions[2].severity.effect = "NO_SERVICE";
-  payload.lines[1].impactedObjects[0].disruptionIds = ["delay-active", "stopped-active"];
-  assert.equal(trafficDetail(payload, "IDFM:C200").state, "UNKNOWN");
+  payload.lines = payload.lines.filter(function (line) { return line.id !== "line:IDFM:C100"; });
+  assert.equal(trafficDetail(payload, "IDFM:C100").state, "NORMAL");
+  assert.equal(trafficDetail(payload, "invalid-line").state, "UNKNOWN");
+});
+
+test("BLOQUANTE produces STOPPED and outranks usable PERTURBEE details", function () {
+  var payload = trafficFixture();
+  payload.lines[1].impactedObjects[0].disruptionIds = ["delay-active", "blocking-unclassified"];
+  assert.deepEqual(trafficDetail(payload, "IDFM:C200"), {
+    schemaVersion: 1, state: "STOPPED", checkedAt: TRAFFIC_MS / 1000,
+    title: "Tram T3 : incident", text: "Une perturbation est en cours."
+  });
   payload.lines[1].impactedObjects[0].disruptionIds.reverse();
-  assert.equal(trafficDetail(payload, "IDFM:C200").state, "UNKNOWN");
+  assert.equal(trafficDetail(payload, "IDFM:C200").state, "STOPPED");
+});
+
+test("an active disruption without complete details remains UNKNOWN", function () {
+  var payload = trafficFixture();
+  delete payload.disruptions[3].message;
+  assert.equal(trafficDetail(payload, "IDFM:C400").state, "UNKNOWN");
 });
 
 test("Paris periods are inclusive at start and exclusive at end, including summer time", function () {

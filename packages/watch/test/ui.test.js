@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { nativeHost } from "./native-host.js";
 import { watchModule } from "./xs-host.js";
 import {
@@ -8,6 +9,9 @@ import {
 } from "./d2-records.js";
 
 const { field } = await watchModule("packed");
+const supportedFonts = new Set(JSON.parse(readFileSync(
+  new URL("../../companion/src/display-font-metrics.json", import.meta.url)
+)).roles);
 
 async function renderHarness(t, profile = 0) {
   nativeHost(t, profile);
@@ -104,6 +108,38 @@ for (const profile of [0, 1]) {
     assert.equal(h.out.length, beforeBack, "Back neither sends requests nor double-consumes a press");
   });
 }
+
+for (const profile of [0, 1]) {
+  test(`profile ${profile}: detail emphasizes the destination and aligns the primary countdown`, async (t) => {
+    const h = await renderHarness(t, profile);
+    configure(h, appearances(2, "fav", { profile }));
+    data(h, 0, [departure(), departure()]);
+    h.runtime.button("select");
+    data(h, 1, [departure()]);
+    const rows = h.show();
+    const destination = rows.find((row) => row.text === "Vers 0");
+    const value = rows.find((row) => row.text === "5");
+    const unit = rows.find((row) => row.text === "min");
+    assert(rows.every((row) => supportedFonts.has(row.font)));
+    assert.equal(destination.font, "bold 14px Gothic");
+    assert.equal(value.font, "bold 36px Gothic");
+    assert.equal(unit.font, "bold 18px Gothic");
+    assert.equal(value.y, unit.y);
+    assert.equal(value.y, profile === 1 ? 129 : 108);
+  });
+}
+
+test("rectangular overview fills the first three rows", async (t) => {
+  const h = await renderHarness(t);
+  configure(h, appearances(2));
+  data(h, 0, [departure(), departure()]);
+  const firstRows = h.show();
+  assert(firstRows.some((row) => row.text === "Tout actualiser"), JSON.stringify(firstRows));
+
+  configure(h, appearances(3, "next"));
+  data(h, 0, [departure(), departure(), departure()]);
+  assert(h.show().some((row) => row.text === "Arrêt 2"));
+});
 
 test("retained credential failures outrank traffic loading until matching success", async (t) => {
   const h = await renderHarness(t);

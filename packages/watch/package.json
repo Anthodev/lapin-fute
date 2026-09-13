@@ -46,7 +46,14 @@
       "DISPLAY_EPOCH": 45
     },
     "resources": {
-      "media": []
+      "media": [
+        {
+          "menuIcon": true,
+          "type": "png",
+          "name": "IMAGE_MENU_ICON",
+          "file": "images/menu-icon.png"
+        }
+      ]
     }
   }
 }

@@ -11,6 +11,7 @@
   },
   "scripts": {
     "build": "node scripts/build.mjs",
+    "build:config-page": "node scripts/build-config-site.mjs --page-only",
     "build:config-site": "node scripts/build-config-site.mjs",
     "catalog:probe": "node scripts/probe-catalog.mjs",
     "catalog:refresh": "node scripts/refresh-catalog.mjs",

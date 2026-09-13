@@ -199,6 +199,21 @@ function closeWith(target, action, favorites, value, forceFull) {
   if (forceFull) update.forceFullSync = true;
   target.Pebble.emit("webviewclosed", { response: "pebblejs://close#" + encodeURIComponent(JSON.stringify(update)) });
 }
+
+test("Core Android decoded close responses preserve favorites with line colors", function () {
+  var target = harness({ storage: configuredStorage([]) });
+  var update = {
+    schemaVersion: 1,
+    favorites: [Object.assign({}, FIRST, { sortOrder: 0 })],
+    apiKeyUpdate: { schemaVersion: 1, action: "KEEP" }
+  };
+
+  target.Pebble.emit("webviewclosed", { response: JSON.stringify(update) });
+
+  assert.deepEqual(configuration.loadConfiguration(target.storage).favorites, update.favorites);
+  target.companion.stop();
+});
+
 function serviceRow(favorite) {
   return { serviceId: favorite.serviceId, stopLabel: favorite.stopLabel, lineLabel: favorite.lineLabel,
     destinationLabel: favorite.destinationLabel, lineMode: favorite.lineMode,
@@ -341,6 +356,95 @@ test("overview and detail CACHE_ONLY finish misses and stale hits without PRIM o
   sendDetail(target, "explicit-refresh", FIRST, contracts.REQUEST_TRIGGER.MANUAL_SELECT);
   assert.equal(requests(target, "departures").length, 2);
   target.companion.stop();
+});
+
+test("complete cached results are stale only before the fifteen-minute useful boundary", function () {
+  var boundary = contracts.USEFUL_STALE_SECONDS * 1000;
+  [
+    { age: boundary - 1, hasData: true, error: 0 },
+    { age: boundary, hasData: false, error: 6 },
+    { age: boundary + 1, hasData: false, error: 6 }
+  ].forEach(function (expected) {
+    var clock = new fakes.FakeClock();
+    var storage = configuredStorage();
+    seedOverview(storage, [FIRST], clock);
+    clock.advance(expected.age);
+    var target = harness({ storage: storage, clock: clock });
+    ready(target);
+    sendDetail(target, "cached", FIRST, contracts.REQUEST_TRIGGER.CACHE_ONLY);
+    drain(target);
+    var cached = rows(target, "cached")[0];
+    assert.equal(cached.hasData, expected.hasData);
+    assert.equal(cached.stale, true);
+    assert.equal(cached.error, expected.error);
+    assert.equal(requests(target, "departures").length, 0);
+    assert.equal(requests(target, "traffic").length, 0);
+  });
+});
+
+test("429 is terminal for one event, preserves useful stale data, and increments only a safe counter", function () {
+  var clock = new fakes.FakeClock();
+  var storage = configuredStorage();
+  seedOverview(storage, [FIRST], clock);
+  clock.advance(contracts.CACHE_FRESH_SECONDS * 1000);
+  var target = harness({ storage: storage, clock: clock });
+  ready(target);
+  sendDetail(target, "quota", FIRST, contracts.REQUEST_TRIGGER.MANUAL_SELECT);
+  var departure = requests(target, "departures")[0];
+  departure.respond(429, "", { "Retry-After": "17" });
+  target.clock.advance(0);
+  resolveProduction(target, [FIRST]);
+  drain(target);
+  var quota = rows(target, "quota").at(-1);
+  assert.equal(quota.hasData, true);
+  assert.equal(quota.stale, true);
+  assert.equal(quota.error, 5);
+  assert.equal(target.companion.metrics().rateLimitedResponses, 1);
+  assert.doesNotMatch(JSON.stringify(target.companion.metrics()), /test-personal|favorite|IDFM|apikey|Authorization/);
+  target.clock.advance(contracts.LIMITS.httpTimeoutMs * 2);
+  assert.equal(requests(target, "departures").length, 1);
+  assert.equal(requests(target, "traffic").length, 1);
+});
+
+test("the failure table deterministically projects unconfigured, stale, or unavailable", function () {
+  [
+    { name: "missing key", keyStatus: contracts.KEY_STATUS.MISSING, error: 1, state: "UNCONFIGURED" },
+    { name: "invalid key", keyStatus: contracts.KEY_STATUS.INVALID, error: 3, state: "UNCONFIGURED" },
+    { name: "revoked key", status: 401, error: 3, state: "UNCONFIGURED" },
+    { name: "disconnect", status: 0, error: 7, state: "STALE" },
+    { name: "source failure", status: 503, error: 7, state: "STALE" },
+    { name: "rate limit", status: 429, error: 5, state: "STALE" },
+    { name: "malformed response", status: 200, body: {}, error: 7, state: "STALE" },
+    { name: "partial response", status: 200, body: { Siri: {} }, error: 7, state: "STALE" },
+    { name: "timeout without cache", timeout: true, noCache: true, error: 7, state: "UNAVAILABLE" }
+  ].forEach(function (failure) {
+    var clock = new fakes.FakeClock();
+    var storage;
+    if (failure.keyStatus === contracts.KEY_STATUS.MISSING) {
+      storage = new fakes.FakeStorage();
+      assert.equal(configuration.saveConfiguration(storage, {
+        schemaVersion: 1, favorites: [FIRST], primApiKey: null, keyStatus: contracts.KEY_STATUS.MISSING
+      }), true);
+    } else storage = configuredStorage([FIRST], failure.keyStatus);
+    if (!failure.noCache) seedOverview(storage, [FIRST], clock);
+    clock.advance(contracts.CACHE_FRESH_SECONDS * 1000);
+    var target = harness({ storage: storage, clock: clock });
+    ready(target);
+    sendDetail(target, failure.name, FIRST, contracts.REQUEST_TRIGGER.MANUAL_SELECT);
+    if (typeof failure.status === "number" || failure.timeout) {
+      respond(target, requests(target, "traffic")[0], 200, trafficBody([FIRST]));
+      if (failure.timeout) target.clock.advance(contracts.LIMITS.httpTimeoutMs);
+      else respond(target, requests(target, "departures")[0], failure.status,
+        typeof failure.body === "undefined" ? "" : failure.body);
+    }
+    drain(target);
+    var record = rows(target, failure.name).at(-1);
+    var state = record.error === 1 || record.error === 3
+      ? "UNCONFIGURED" : record.hasData ? "STALE" : "UNAVAILABLE";
+    assert.equal(record.error, failure.error, failure.name);
+    assert.equal(state, failure.state, failure.name);
+    target.companion.stop();
+  });
 });
 
 test("an opening overview completes after cache-only detail entry and local Back", function () {
@@ -669,6 +773,24 @@ test("credential replacement ignores saved callbacks from the canceled lifecycle
   xhr.status = 401; late(); sendOverview(target, "new-key");
   assert.equal(xhr.aborted, true); assert.equal(configuration.loadConfiguration(target.storage).keyStatus, contracts.KEY_STATUS.CONFIGURED);
   assert.equal(requests(target, "departures")[0].headers.apikey, "replacement-key");
+  target.companion.stop();
+});
+
+test("credential removal erases the key, retains favorites, and blocks PRIM until replacement", function () {
+  var storage = configuredStorage([FIRST, SECOND]);
+  var target = harness({ storage: storage });
+  ready(target);
+  closeWith(target, "REMOVE", [FIRST, SECOND]);
+  acknowledgeConfiguration(target, 0);
+  var saved = configuration.loadConfiguration(storage);
+  assert.equal(saved.primApiKey, null);
+  assert.equal(saved.keyStatus, contracts.KEY_STATUS.MISSING);
+  assert.deepEqual(saved.favorites, [FIRST, SECOND]);
+  assert.doesNotMatch(JSON.stringify(storage.values), new RegExp(TEST_KEY));
+  sendDetail(target, "removed-key", FIRST, contracts.REQUEST_TRIGGER.MANUAL_SELECT);
+  assert.equal(rows(target, "removed-key")[0].error, 1);
+  assert.equal(requests(target, "departures").length, 0);
+  assert.equal(requests(target, "traffic").length, 0);
   target.companion.stop();
 });
 

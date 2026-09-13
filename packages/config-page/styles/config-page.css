@@ -238,7 +238,7 @@ button:disabled { cursor: default; opacity: 0.35; }
 .choice-list { gap: 0; margin-top: 0.5rem; }
 .choice { display: flex; align-items: center; justify-content: space-between; gap: 1rem; width: 100%; padding: 0.875rem 0.25rem; border-bottom-color: var(--line); border-radius: 0; background: transparent; color: var(--heading); text-align: left; }
 .choice::after { content: ""; flex: 0 0 0.45rem; width: 0.45rem; height: 0.45rem; margin-right: 0.375rem; border-top: 1.5px solid var(--muted); border-right: 1.5px solid var(--muted); transform: rotate(45deg); }
-.choice-labels { display: grid; gap: 0.25rem; min-width: 0; }
+.choice-labels { display: grid; flex: 1 1 auto; gap: 0.25rem; min-width: 0; }
 .choice-labels strong { font-size: 0.875rem; font-weight: 700; }
 .choice-context { color: var(--muted); font-size: 0.75rem; font-weight: 400; }
 /* Search rows repeat the official badges as a compact wrapping strip; only
@@ -249,7 +249,7 @@ button:disabled { cursor: default; opacity: 0.35; }
  * Official raster pictograms with black lettering sit on a small white plate
  * to stay legible on the dark surface; fallback SVGs keep their official
  * colors and get no plate. */
-.choice-lines { display: flex; flex-wrap: wrap; gap: 0.25rem; min-width: 0; }
+.choice-lines { display: flex; flex-wrap: wrap; gap: 0.25rem; width: 100%; min-width: 0; }
 .choice-lines .line-badge { min-width: 1.75rem; min-height: 1.75rem; }
 .choice-lines .line-badge img, .choice-lines .line-badge svg { height: 1.75rem; max-width: 8rem; }
 .choice-lines .line-badge img { padding: 0.0625rem; border-radius: 0.25rem; background: #ffffff; }

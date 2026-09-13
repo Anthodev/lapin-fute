@@ -863,7 +863,9 @@ test("bilingual About copy exposes the required legal, privacy, attribution, and
     "Publication director:",
     "Directeur de la publication :",
     "Anthodev",
-    "88 Colin P. Kelly Jr. St.",
+    "BunnyWay d.o.o.",
+    "Dunajska cesta 165",
+    "https://bunny.net/privacy/",
     "localStorage",
     "no analytics or telemetry",
     "aucun cookie",
@@ -876,6 +878,9 @@ test("bilingual About copy exposes the required legal, privacy, attribution, and
     "ODbL 1.0",
     "github.com/Anthodev/lapin-fute",
   ]) assert.equal(html.includes(fact), true, fact);
+  assert.doesNotMatch(html, /GitHub Pages|Lapin Futé backend|serveur Lapin Futé/iu);
+  assert.match(html, /phone sends it directly to PRIM over HTTPS/u);
+  assert.match(html, /téléphone l’envoie directement à PRIM en HTTPS/u);
   assert.doesNotMatch(html, /software licen[cs]e|licence du logiciel/iu);
   assert.equal((html.match(/target="_blank"/gu) ?? []).length, (html.match(/rel="noopener noreferrer"/gu) ?? []).length);
   assert.match(controller, /lineBadgeAssetUrl\(service\.lineMode, service\.lineLabel\)/u);
@@ -911,6 +916,12 @@ test("favorites without presentation fields resolve no official image and use an
   assert.match(controller, /const textColor = service\.lineTextColor \?\? NEUTRAL_LINE_TEXT/u);
   assert.match(controller, /svg\.setAttribute\("role", "img"\)/u);
   assert.match(controller, /svg\.setAttribute\("aria-label", service\.lineLabel\)/u);
+});
+
+test("search result labels use the available row width and wrap line badges", () => {
+  const css = readFileSync(join(here, "../styles/config-page.css"), "utf8");
+  assert.match(css, /\.choice-labels \{[^}]*flex: 1 1 auto;[^}]*min-width: 0;/u);
+  assert.match(css, /\.choice-lines \{[^}]*flex-wrap: wrap;[^}]*width: 100%;[^}]*min-width: 0;/u);
 });
 
 test("mirrored place search validation matches the canonical lines contract", () => {

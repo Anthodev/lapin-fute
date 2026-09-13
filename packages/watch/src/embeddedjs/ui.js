@@ -19,6 +19,12 @@ function draw(port, text, style, color, x, y, width, height, align = 0) {
   const left = align < 0 ? x : align > 0 ? x + width - used : x + Math.floor((width-used)/2);
   port.drawString(text, fonts[style], color, left, y + ((height - measure.height) >> 1), used < measure.width ? used : 0);
 }
+function drawBottom(port, text, style, color, x, bottom, width) {
+  if (!text || width <= 0) return;
+  const measure = port.measureString(text, fonts[style]);
+  const used = Math.min(width, Math.ceil(measure.width));
+  port.drawString(text, fonts[style], color, x, bottom-measure.height, used < measure.width ? used : 0);
+}
 function lines(port, text, style, color, x, y, width, height) {
   let start = 0, count = 0;
   while (start <= text.length && text.length) {
@@ -104,7 +110,9 @@ function header(port,r,now,isStale,updating) {
   }
 }
 function overview(port,r,now) {
-  const start = Math.max(0,r.focus-1), end = Math.min(r.records.length,r.focus+1), round = r.profile === 1;
+  const round = r.profile === 1, last = r.records.length;
+  const start = round ? Math.max(0,r.focus-1) : Math.max(0,Math.min(r.focus-1,last-2));
+  const end = round ? Math.min(last,r.focus+1) : Math.min(last,start+2);
   for (let i = start; i <= end; i++) {
     const relative = i-r.focus, compact = round && relative !== 0, focused = relative === 0;
     const x = round ? compact ? 54 : 30 : 6, y = round ? relative<0 ? 54 : relative>0 ? 176 : 92 : 34+(i-start)*62;
@@ -138,8 +146,8 @@ function departures(port,r,now) {
   let x=round?46:8,y=round?52:34,width=round?168:184,height=round?40:35;
   chip(port,record,2,x,y+6,44,27);
   draw(port,clipped(record,8),1,INK,x+52,y,width-52,20,-1);
-  draw(port,">",0,MUTED,x+52,y+20,10,18,-1);
-  draw(port,clipped(record,11),0,MUTED,x+62,y+20,width-62,18,-1);
+  draw(port,">",1,MUTED,x+52,y+20,10,18,-1);
+  draw(port,clipped(record,11),1,MUTED,x+62,y+20,width-62,18,-1);
   port.fillColor(RULE,x,y+height-1,width,1);
   x=round?42:8;y=round?92:70;width=round?176:184;height=round?68:66;
   if (!count) {
@@ -147,10 +155,11 @@ function departures(port,r,now) {
     lines(port,text,1,INK,x,y+Math.max(0,Math.floor((height-lineCount(text)*16)/2)),width,16);
   } else {
     const status=hex(data,31,1), value=countdown(r,data,0,now,true), unit=status!==2 && Math.ceil((hex(data,23,8)*1000-now)/60000)>0;
-    const style=value==="-"?2:3, valueWidth=Math.min(width-36,Math.ceil(port.measureString(value,fonts[style]).width));
-    const left=x+Math.floor((width-valueWidth-(unit?34:0))/2);
-    draw(port,value,style,INK,left,y,valueWidth,height-18);
-    if(unit)draw(port,"min",1,INK,left+valueWidth+3,y+20,31,height-30,-1);
+    const style=value==="-"?2:3, unitWidth=unit?Math.ceil(port.measureString("min",fonts[2]).width):0;
+    const gap=unit?4:0, valueWidth=Math.min(width-unitWidth-gap,Math.ceil(port.measureString(value,fonts[style]).width));
+    const left=x+Math.floor((width-valueWidth-unitWidth-gap)/2), bottom=y+height-(round?17:14);
+    drawBottom(port,value,style,INK,left,bottom,valueWidth);
+    if(unit)drawBottom(port,"min",2,INK,left+valueWidth+gap,bottom,unitWidth);
     if(status)draw(port,copy(r.profile,r.language,13+status),1,INK,x,y+height-19,width,18);
   }
   const rows=Math.min(round?2:3,Math.max(0,count-1));
