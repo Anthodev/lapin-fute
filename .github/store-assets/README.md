@@ -12,9 +12,11 @@ These files are prepared for the RePebble app listing:
 | `gabbro_03-traffic.png` | 260 × 260 | Traffic status |
 | `lapin-fute-banner-720x320.png` | 720 × 320 | Optional store banner |
 
-The screenshots are unmodified emulator framebuffer captures made with the
-project's fixture data. They demonstrate the app UI but are not evidence of a
-production-data or physical-watch test.
+The screenshots are emulator framebuffer captures made with the project's
+fixture data. The Emery captures have been normalized from the emulator's
+backlight-off palette to its full-backlight palette; their UI content is
+unchanged. They demonstrate the app UI but are not evidence of a production-data
+or physical-watch test.
 
 The banner is derived from the existing Lapin Futé visual identity and contains
 no screenshot or watch mock-up.
