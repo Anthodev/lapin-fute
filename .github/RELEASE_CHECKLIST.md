@@ -8,7 +8,7 @@ This checklist tracks GitHub issue [#9](https://github.com/Anthodev/lapin-fute/i
 - [x] Select `https://lapin-fute.b-cdn.net/` as the stable, static HTTPS configuration-site origin.
 - [x] Build release PBWs with that exact origin and reject release tags that differ from the watch package version.
 - [x] Package one PBW containing both `emery` and `gabbro`, plus `SHA256SUMS`, as GitHub release assets.
-- [x] Refresh a real IDFM catalog for production releases; no fixture fallback is available.
+- [x] Keep release tags page-only; manual real-IDFM refreshes compare `sourceRevision` with production and upload the catalog only when its inputs changed or an operator forces it.
 - [x] Upload immutable catalog files before the manifest pointer.
 - [x] Compare every built file with its served bytes and validate every current-revision catalog JSON against the manifest schema and revision.
 - [x] Back up mutable hosted files before deployment and restore them automatically when upload, purge, or served-site verification fails.
@@ -30,7 +30,7 @@ This checklist tracks GitHub issue [#9](https://github.com/Anthodev/lapin-fute/i
 ## Deployment and rollback rehearsal
 
 1. Merge the reviewed release branch without tagging it.
-2. Run **Deploy configuration site to Bunny** manually with `refresh_catalog=true`.
+2. Run **Deploy configuration site to Bunny** manually with `refresh_catalog=true`. If the source comparison reports no change, set `force_catalog_upload=true` for this one planned full-deployment rehearsal.
 3. Save the workflow run ID, catalog revision, source revision, file count, and verification result as issue #9 evidence.
 4. Run **Roll back Bunny configuration site** with that deployment run ID. It restores and byte-verifies the retained pre-deployment mutable files; the prior manifest points back to the already verified immutable catalog revision.
 5. Run **Deploy configuration site to Bunny** again with `refresh_catalog=true`, save its verification result, and re-run the production configuration journey.
@@ -39,7 +39,7 @@ The workflow also restores its pre-deployment mutable files automatically on a f
 
 ## Publication gate
 
-Creating and pushing `v1.0.0` deploys the static site, builds the PBW, and creates the public GitHub release. Submitting through the Rebble Developer Portal is a separate public action.
+Creating and pushing `v1.0.0` deploys the configuration page without re-uploading the catalog, builds the PBW, and creates the public GitHub release. Submitting through the Rebble Developer Portal is a separate public action.
 
 Do neither until:
 

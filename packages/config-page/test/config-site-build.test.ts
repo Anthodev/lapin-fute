@@ -4,6 +4,7 @@ import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { buildConfigSite } from "../../../scripts/build-config-site.mjs";
+import { planCatalogUpload } from "../../../scripts/plan-catalog-upload.mjs";
 import { verifyConfigSite } from "../../../scripts/verify-config-site.mjs";
 
 function fixture() {
@@ -20,12 +21,26 @@ function fixture() {
   return { root, pageSource, staticPath, outputPath };
 }
 
-test("page-only configuration build neither requires nor publishes a catalog", () => {
+test("page-only configuration build neither requires nor publishes a catalog", async () => {
   const paths = fixture();
   try {
     buildConfigSite({ ...paths, includeCatalog: false });
     assert.equal(readFileSync(join(paths.outputPath, "index.html"), "utf8"), "<h1>Lapin Futé</h1>");
     assert.equal(existsSync(join(paths.outputPath, "catalog")), false);
+    const result = await verifyConfigSite({
+      sitePath: paths.outputPath,
+      origin: "https://config.example.test/",
+      includeCatalog: false,
+      fetcher: async (url) => {
+        const path = join(paths.outputPath, decodeURIComponent(url.pathname.slice(1)));
+        return existsSync(path)
+          ? new Response(readFileSync(path), { status: 200 })
+          : new Response(null, { status: 404 });
+      },
+    });
+    assert.equal(result.revision, null);
+    assert.equal(result.catalogJsonCount, 0);
+    assert.equal(result.fileCount, 4);
   } finally {
     rmSync(paths.root, { recursive: true, force: true });
   }
@@ -49,6 +64,59 @@ test("full configuration build still requires and copies a published catalog", (
       '{"revision":"fixture"}',
     );
     assert.equal(existsSync(join(paths.outputPath, "catalog", "revision", "0.json")), true);
+  } finally {
+    rmSync(paths.root, { recursive: true, force: true });
+  }
+});
+
+test("catalog upload planning compares source revisions instead of volatile publication revisions", async () => {
+  const paths = fixture();
+  try {
+    const attribution = [{
+      dataset: "arrets",
+      url: "https://data.iledefrance-mobilites.fr/api/explore/v2.1/catalog/datasets/arrets",
+      retrievedAt: "2026-09-13T00:00:00.000Z",
+      license: "Licence Ouverte 2.0",
+    }];
+    const local = {
+      schemaVersion: 1,
+      revision: "a".repeat(64),
+      sourceRevision: "idfm-v1-same-content",
+      createdAt: "2026-09-13T00:00:00.000Z",
+      attribution,
+    };
+    const manifestPath = join(paths.root, "manifest.json");
+    writeFileSync(manifestPath, JSON.stringify(local));
+
+    const sameSource = await planCatalogUpload({
+      manifestPath,
+      origin: "https://config.example.test/",
+      fetcher: async () => new Response(JSON.stringify({
+        ...local,
+        revision: "b".repeat(64),
+        createdAt: "2026-09-12T00:00:00.000Z",
+        attribution: [{ ...attribution[0], retrievedAt: "2026-09-12T00:00:00.000Z" }],
+      }), { status: 200 }),
+    });
+    assert.equal(sameSource.upload, false);
+
+    const changedSource = await planCatalogUpload({
+      manifestPath,
+      origin: "https://config.example.test/",
+      fetcher: async () => new Response(JSON.stringify({
+        ...local,
+        revision: "b".repeat(64),
+        sourceRevision: "idfm-v1-new-content",
+      }), { status: 200 }),
+    });
+    assert.equal(changedSource.upload, true);
+
+    const missing = await planCatalogUpload({
+      manifestPath,
+      origin: "https://config.example.test/",
+      fetcher: async () => new Response(null, { status: 404 }),
+    });
+    assert.equal(missing.upload, true);
   } finally {
     rmSync(paths.root, { recursive: true, force: true });
   }
@@ -193,9 +261,12 @@ test("Bunny releases deploy production tags while preview tags stop after qualit
   assert.doesNotMatch(workflow, /--generate-notes/u);
   assert.match(workflow, /github\.event_name == 'workflow_dispatch' && inputs\.refresh_catalog/u);
   assert.match(workflow, /refresh_catalog:\s+description:[\s\S]+type: boolean/u);
-  assert.match(workflow, /Refresh production catalog[\s\S]+npm run catalog:refresh/u);
-  assert.match(workflow, /Build static configuration site[\s\S]+npm run build:config-site/u);
-  assert.doesNotMatch(workflow, /npm run build:config-page/u);
+  assert.match(workflow, /force_catalog_upload:\s+description:[\s\S]+type: boolean/u);
+  assert.match(workflow, /Refresh production catalog[\s\S]+if: \$\{\{ github\.event_name == 'workflow_dispatch' && inputs\.refresh_catalog \}\}[\s\S]+npm run catalog:refresh/u);
+  assert.match(workflow, /EVENT_NAME[\s\S]+release tags update the configuration page only/u);
+  assert.match(workflow, /include_catalog="\$\(node scripts\/plan-catalog-upload\.mjs\)"/u);
+  assert.match(workflow, /INCLUDE_CATALOG[\s\S]+npm run build:config-site[\s\S]+npm run build:config-page/u);
+  assert.match(workflow, /npm run verify:config-site -- --page-only/u);
   assert.match(
     workflow,
     /if \[\[ -f var\/config-site\/catalog\/manifest\.json \]\]; then\s+upload_file/u,

@@ -10,6 +10,11 @@ on:
         required: true
         default: false
         type: boolean
+      force_catalog_upload:
+        description: Upload a rebuilt catalog even when its IDFM source revision is already hosted
+        required: true
+        default: false
+        type: boolean
 
 permissions:
   contents: read
@@ -118,12 +123,41 @@ jobs:
       - run: npm ci
 
       - name: Refresh production catalog
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.refresh_catalog }}
         env:
           IDFM_DATASET_TOKEN: ${{ secrets.IDFM_DATASET_TOKEN }}
         run: npm run catalog:refresh
 
+      - name: Plan catalog upload
+        id: catalog
+        env:
+          CONFIG_SITE_ORIGIN: ${{ vars.CONFIG_SITE_ORIGIN }}
+          EVENT_NAME: ${{ github.event_name }}
+          FORCE_CATALOG_UPLOAD: ${{ inputs.force_catalog_upload }}
+        run: |
+          set -euo pipefail
+          if [[ "$EVENT_NAME" != workflow_dispatch ]]; then
+            include_catalog=false
+            reason="release tags update the configuration page only"
+          elif [[ "$FORCE_CATALOG_UPLOAD" = true ]]; then
+            include_catalog=true
+            reason="catalog upload was forced"
+          else
+            include_catalog="$(node scripts/plan-catalog-upload.mjs)"
+            reason="catalog source-revision comparison completed"
+          fi
+          echo "include_catalog=$include_catalog" >> "$GITHUB_OUTPUT"
+          echo "$reason: include_catalog=$include_catalog"
+
       - name: Build static configuration site
-        run: npm run build:config-site
+        env:
+          INCLUDE_CATALOG: ${{ steps.catalog.outputs.include_catalog }}
+        run: |
+          if [[ "$INCLUDE_CATALOG" = true ]]; then
+            npm run build:config-site
+          else
+            npm run build:config-page
+          fi
 
       - name: Back up mutable production files
         id: backup
@@ -250,9 +284,15 @@ jobs:
       - name: Verify served static site
         env:
           CONFIG_SITE_ORIGIN: ${{ vars.CONFIG_SITE_ORIGIN }}
+          INCLUDE_CATALOG: ${{ steps.catalog.outputs.include_catalog }}
         run: |
           for attempt in 1 2 3; do
-            if npm run verify:config-site; then
+            if [[ "$INCLUDE_CATALOG" = true ]]; then
+              command=(npm run verify:config-site)
+            else
+              command=(npm run verify:config-site -- --page-only)
+            fi
+            if "${command[@]}"; then
               exit 0
             fi
             if [[ "$attempt" != 3 ]]; then sleep 10; fi
