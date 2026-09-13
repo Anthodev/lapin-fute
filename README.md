@@ -26,14 +26,9 @@
   <img src="https://img.shields.io/badge/status-pre--release-F59E0B" alt="Pre-release status">
 </p>
 
-> [!IMPORTANT]
-> Lapin Futé is experimental and not published yet. Trying it currently requires building the watchapp and hosting its settings page. Live departures require a personal [PRIM](https://prim.iledefrance-mobilites.fr/fr/mes-jetons-authentification) access token. Emulator checks do not replace physical-watch validation, which remains pending. The project is not affiliated with RATP or Île-de-France Mobilités.
-
 ## About
 
 Lapin Futé puts Île-de-France public-transport departures on a Pebble watch. The watch shows a list of favorites with the next departures, a departure board per favorite, and the current service messages for its line. A companion on your phone fetches the data from PRIM, Île-de-France Mobilités' open-data platform, and prepares everything the watch displays; the watch itself never goes online.
-
-The name nods to Bison Futé, the French road-traffic information service, and to Serge, the rabbit from RATP's safety campaigns. On the icon, the rabbit's outline traces an itinerary that ends at two round stops.
 
 ## Features
 
@@ -49,7 +44,7 @@ The name nods to Bison Futé, the French road-traffic information service, and t
 
 | Requirement | Details |
 |---|---|
-| Watches | Pebble Time 2 (emery profile, primary target); the gabbro round profile is experimental |
+| Watches | Pebble Time 2 (emery profile, primary target); the Pebble Round 2 profile is experimental |
 | Firmware | 4.32 or newer |
 | Phone | Pebble mobile app running the companion; internet access needed for fresh data |
 | Building from source | Node.js 24.18.0, Bun, Pebble SDK 4.33.1, pebble-tool 5.0.40 |
@@ -67,12 +62,16 @@ There is no published package yet, so first use means one build and one static h
 
 ## Watch controls
 
-| Screen | Buttons |
-|---|---|
-| Favorites list | Up/Down move through favorites and the Refresh all row; Select opens the highlighted favorite, or refreshes everything from the Refresh all row |
-| Departures | Up/Down switch favorite; Select opens the traffic view; holding Select forces a refresh |
-| Traffic | Up/Down page through messages |
-| Anywhere | Back steps back to the previous screen |
+| Screen | Control | Action |
+|---|---|---|
+| Favorites | **Up / Down** | Move through favorites and the **Refresh all** row |
+| Favorites | **Select** | Open the highlighted favorite |
+| Favorites · Refresh all | **Select** | Refresh every favorite |
+| Departures | **Up / Down** | Switch favorite |
+| Departures | **Select** | Open the traffic view |
+| Departures | **Hold Select** | Force a refresh |
+| Traffic | **Up / Down** | Page through messages |
+| Any screen | **Back** | Return to the previous screen |
 
 Countdowns and the clock keep updating on the watch every minute; only the actions above trigger network requests.
 
