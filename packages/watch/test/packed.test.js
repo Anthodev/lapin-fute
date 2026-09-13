@@ -7,6 +7,8 @@ const {
   trafficError, pages, stale
 } = await watchModule("packed");
 import { NOW, appearance, departure, trafficDocument, scalars } from "./d2-records.js";
+import layout from "../../companion/src/display-layout.js";
+const { prepareAppearance } = layout;
 
 test("appearance records round trip and validate", () => {
   const record = appearance({ id: "home:rer:a" });
@@ -59,6 +61,63 @@ test("clipped honours scalar endpoints and the ellipsis mask", () => {
   assert.equal(clipped(record, 4), stop);
   const shortened = appearance({ id: "clip:id", line, stop, ends, mask: 0 });
   assert(!appearanceValid(shortened, 0, "fr"), "shortened ends without mask bits reject");
+});
+
+// Regression: the phone derives one display label (metro/tram prefixes, metro
+// "bis" contraction) that must reach both the cut slots and the serialized
+// field the watch validates, with the favorite left untouched.
+test("prepared appearances prefix metro and tram labels consistently", () => {
+  const favorite = (id, line, mode) => ({
+    id, lineLabel: line, stopLabel: "Saint-Lazare", destinationLabel: "Montfermeil",
+    ...(mode ? { lineMode: mode, lineColor: "#d9ebde", lineTextColor: "#174d31" } : {})
+  });
+  const cases = [
+    [favorite("pfx:metro", "13", "METRO"), "M13"],
+    [favorite("pfx:tram", "11", "TRAM"), "T11"],
+    [favorite("pfx:tram-prefixed", "T11", "TRAM"), "T11"],
+    [favorite("pfx:metro-prefixed", "M13", "METRO"), "M13"],
+    [favorite("pfx:tram-suffix", "T3b", "TRAM"), "T3b"],
+    [favorite("pfx:bus", "13", "BUS"), "13"],
+    [favorite("pfx:rer", "A", "RER"), "A"],
+    [favorite("pfx:transilien", "L", "TRANSILIEN"), "L"],
+    [favorite("pfx:untyped", "13", undefined), "13"]
+  ];
+  for (const profile of [0, 1]) for (const [fav, label] of cases) {
+    const snapshot = structuredClone(fav);
+    const record = prepareAppearance(fav, profile, "fr");
+    assert(appearanceValid(record, profile, "fr"), `${fav.id} profile ${profile}`);
+    assert.equal(field(record, 2), label, `${fav.id} serialized line field`);
+    for (const slot of [0, 1, 2, 3]) assert.equal(clipped(record, slot), label, `${fav.id} slot ${slot}`);
+    assert.deepEqual(fav, snapshot);
+  }
+});
+
+test("prepared appearances contract metro bis lines without clipping", () => {
+  const favorite = (id, line, mode) => ({
+    id, lineLabel: line, stopLabel: "Saint-Lazare", destinationLabel: "Montfermeil",
+    lineMode: mode, lineColor: "#d9ebde", lineTextColor: "#174d31"
+  });
+  const cases = [
+    [favorite("bis:plain", "3bis", "METRO"), "M3b"],
+    [favorite("bis:seven", "7bis", "METRO"), "M7b"],
+    [favorite("bis:spaced", "3 bis", "METRO"), "M3b"],
+    [favorite("bis:prefixed", "M3bis", "METRO"), "M3b"],
+    [favorite("bis:short", "M3b", "METRO"), "M3b"],
+    // The contraction is metro-only: a bus named 3bis keeps its exact label.
+    [favorite("bis:bus", "3bis", "BUS"), "3bis"]
+  ];
+  for (const profile of [0, 1]) for (const [fav, label] of cases) {
+    const snapshot = structuredClone(fav);
+    const record = prepareAppearance(fav, profile, "fr");
+    assert(appearanceValid(record, profile, "fr"), `${fav.id} profile ${profile}`);
+    assert.equal(field(record, 2), label, `${fav.id} serialized line field`);
+    for (const slot of [0, 1, 2, 3]) {
+      const shown = clipped(record, slot);
+      assert.equal(shown, label, `${fav.id} slot ${slot}`);
+      assert(!shown.includes("…"), `${fav.id} slot ${slot} must not truncate`);
+    }
+    assert.deepEqual(fav, snapshot);
+  }
 });
 
 test("departure records validate bounds and pairing", () => {
