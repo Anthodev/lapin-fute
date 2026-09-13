@@ -231,7 +231,7 @@ test("traffic distinguishes observed normal, useful disruption and source uncert
   var payload = trafficFixture();
   var expected = {
     C100: "NORMAL", C200: "DELAYED", C300: "STOPPED", C400: "STOPPED",
-    C500: "NORMAL", C600: "NORMAL", C999: "UNKNOWN"
+    C500: "NORMAL", C600: "NORMAL", C999: "NORMAL"
   };
   Object.keys(expected).forEach(function (line) {
     var result = trafficDetail(payload, "IDFM:" + line);
@@ -246,6 +246,13 @@ test("traffic distinguishes observed normal, useful disruption and source uncert
   ["STIF:Line:C100:", "line:IDFM:C100", "IDFM:C100\n", ""].forEach(function (ref) {
     assert.equal(traffic.canonicalCatalogLineRef(ref), undefined);
   });
+});
+
+test("lines omitted from the disruption-only bulk feed have normal traffic", function () {
+  var payload = trafficFixture();
+  payload.lines = payload.lines.filter(function (line) { return line.id !== "line:IDFM:C100"; });
+  assert.equal(trafficDetail(payload, "IDFM:C100").state, "NORMAL");
+  assert.equal(trafficDetail(payload, "invalid-line").state, "UNKNOWN");
 });
 
 test("BLOQUANTE produces STOPPED and outranks usable PERTURBEE details", function () {

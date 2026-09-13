@@ -286,7 +286,12 @@ function trafficForLine(envelope, lineId, evaluatedAtMilliseconds, checkedAtMill
     checkedAt: Math.floor(checkedAtMilliseconds / 1000)
   };
   if (!contracts.uint32(result.checkedAt)) fail();
-  if (typeof line === "undefined") return result;
+  if (typeof line === "undefined") {
+    // The bulk endpoint lists impacted lines only. A valid catalog line omitted
+    // from a successfully normalized response therefore has normal traffic.
+    if (typeof lineId === "string" && exactMatch(CANONICAL_LINE, lineId) !== null) result.state = "NORMAL";
+    return result;
+  }
   for (index = 0; index < line.length; index += 1) {
     disruption = envelope.disruptions[line[index]];
     if (!active(disruption, localNow) || disruption.severity === "INFORMATION") continue;
