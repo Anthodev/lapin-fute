@@ -11,7 +11,8 @@
 </p>
 
 <p align="center">
-  <a href="#features">Features</a>
+  <a href="https://apps.repebble.com/6d6aa01b7ecb4cfea469a183">Get Lapin Futé</a>
+  · <a href="#features">Features</a>
   · <a href="#compatibility">Compatibility</a>
   · <a href="#getting-started">Getting started</a>
   · <a href="#watch-controls">Watch controls</a>
@@ -23,7 +24,7 @@
   <img src="https://img.shields.io/badge/Pebble-emery%20%7C%20gabbro-00A5E0" alt="Pebble emery and gabbro">
   <img src="https://img.shields.io/badge/Modes-M%C3%A9tro%C2%B7RER%C2%B7Transilien%C2%B7Tram%C2%B7Bus-00A5E0" alt="Métro, RER, Transilien, Tram and Bus">
   <img src="https://img.shields.io/badge/Language-EN%20%7C%20FR-00A5E0" alt="English and French">
-  <img src="https://img.shields.io/badge/status-pre--release-F59E0B" alt="Pre-release status">
+  <a href="https://apps.repebble.com/6d6aa01b7ecb4cfea469a183"><img src="https://img.shields.io/badge/RePebble-v1.0.0-FF4938" alt="Lapin Futé 1.0.0 on RePebble"></a>
 </p>
 
 ## About
@@ -51,14 +52,12 @@ Lapin Futé puts Île-de-France public-transport departures on a Pebble watch. T
 
 ## Getting started
 
-There is no published package yet, so first use means one build and one static host:
+1. Install [Lapin Futé from RePebble](https://apps.repebble.com/6d6aa01b7ecb4cfea469a183).
+2. In the Pebble mobile app, open Lapin Futé's settings. Under PRIM access, paste a personal access token generated on the [PRIM portal](https://prim.iledefrance-mobilites.fr/fr/mes-jetons-authentification).
+3. Add up to six favorites by searching the bundled station catalog; searching and adding work without a token. Save, and your settings sync to the watch.
+4. Open Lapin Futé on the watch. Departures refresh whenever the app opens, you change favorite, or you hold Select; the phone needs to be connected for fresh data.
 
-1. Build the watchapp from source (see [Build from source](#build-from-source)); the built package is written under `packages/watch/build/`.
-2. Generate the station catalog and build the settings page using the commands below. `npm run build:config-site` assembles the site in `var/config-site`. Publish that folder on a static HTTPS host, then build the watchapp with `LAPIN_FUTE_CONFIG_URL=https://your-host/` so the phone opens your settings page.
-3. Install the built package on your watch with the Pebble tooling, or try it first in the emery or gabbro emulator.
-4. In the Pebble mobile app, open Lapin Futé's settings. Under PRIM access, paste a personal access token generated on the [PRIM portal](https://prim.iledefrance-mobilites.fr/fr/mes-jetons-authentification).
-5. Add up to six favorites by searching the bundled station catalog; searching and adding work without a token. Save, and your settings sync to the watch.
-6. Open Lapin Futé on the watch. Departures refresh whenever the app opens, you change favorite, or you hold Select; the phone needs to be connected for fresh data.
+Developers can also build and install the app locally using the instructions in [Build from source](#build-from-source).
 
 ## Watch controls
 

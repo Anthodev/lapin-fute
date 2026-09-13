@@ -15,13 +15,13 @@ This checklist tracks GitHub issue [#9](https://github.com/Anthodev/lapin-fute/i
 - [x] Retain each pre-deployment rollback bundle for 30 days and provide a serialized manual rollback workflow.
 - [x] Record current publication and license research in [`RELEASE_REQUIREMENTS_RESEARCH.md`](RELEASE_REQUIREMENTS_RESEARCH.md).
 
-## Blocking evidence before publication
+## Publication evidence
 
 - [ ] Obtain written IDFM clarification for the contradictory next-departures license labels and for the generated catalog's derivative-database obligations. See [research gaps](RELEASE_REQUIREMENTS_RESEARCH.md#gaps-that-need-direct-confirmation).
 - [ ] Update the bilingual data notice only after that clarification. Name and link every source and applicable license, include the source update date, and do not imply IDFM endorsement.
-- [ ] Check the authenticated Rebble Developer Portal for currently enforced dimensions, formats, file-size limits, description limits, localization support, and review behavior.
-- [ ] Prepare the required portal material: category, description, release notes, banner, large icon, small icon, and at least one unframed screenshot for each of `emery` and `gabbro`. The project additionally requires French and English captures.
-- [ ] Verify that the portal accepts the single `1.0.0` PBW with both target platforms. Do not make the listing public during this check.
+- [x] Confirm the authenticated RePebble portal accepts the submitted description, release notes, banner, icons, and platform-specific screenshots. The retained assets are in [`store-assets`](store-assets/).
+- [ ] Add French store screenshots; the published listing currently uses the English emulator captures.
+- [x] Verify that the portal accepts the single `1.0.0` PBW with both target platforms. The public [RePebble listing](https://apps.repebble.com/6d6aa01b7ecb4cfea469a183) identifies version `1.0.0` for Time 2 and Round 2.
 - [ ] Run the clean-install, six-favorite, edit, disconnect/recovery, key replace/revoke/remove, all-mode, and traffic journeys against production on both emulators and a Pebble Time 2.
 - [ ] Run the frozen 24-hour physical A/B battery scenario on the release build with Pebble firmware 4.32 or newer.
 - [ ] Attach the inherited issue #8 evidence and new production/physical evidence to issue #9, preserving its stated coverage limits.
@@ -41,8 +41,6 @@ The workflow also restores its pre-deployment mutable files automatically on a f
 
 Creating and pushing `v1.0.0` deploys the configuration page without re-uploading the catalog, builds the PBW, and creates the public GitHub release. Submitting through the Rebble Developer Portal is a separate public action.
 
-Do neither until:
+The repository owner approved publication, and version `1.0.0` is now public on [RePebble](https://apps.repebble.com/6d6aa01b7ecb4cfea469a183). The unchecked evidence above remains follow-up work and must not be represented as completed.
 
-- every blocking item above has durable evidence;
-- issue #9 contains links to the evidence and release material;
-- the repository owner explicitly approves both the `v1.0.0` tag and the Rebble publication.
+Pushing `v1.0.0` records the matching source release and runs the automated configuration-site deployment and GitHub release workflow.
