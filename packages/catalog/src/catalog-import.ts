@@ -1062,7 +1062,7 @@ function deriveCandidates(database: DatabaseSync): void {
       zone.zdaname AS stop_label, zone.zdatown AS locality_label,
       line_mode.id_line AS id_line, line_mode.line_label AS line_label,
       line_mode.line_color AS line_color, line_mode.line_text_color AS line_text_color,
-      CASE WHEN line_mode.mode IN ('RER', 'TRANSILIEN') THEN trip.terminal_stop_name
+      CASE WHEN line_mode.mode IN ('BUS', 'RER', 'TRANSILIEN') THEN trip.terminal_stop_name
         ELSE coalesce(nullif(trim(trip.trip_headsign), ''), trip.terminal_stop_name)
       END AS destination_label,
       CASE WHEN line_mode.mode IN ('RER', 'TRANSILIEN')
