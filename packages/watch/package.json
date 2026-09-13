@@ -2,6 +2,7 @@
   "name": "lapin-fute-watch",
   "author": "Anthodev",
   "version": "1.0.0",
+  "license": "MIT",
   "keywords": [
     "pebble-app"
   ],

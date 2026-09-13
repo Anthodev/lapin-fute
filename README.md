@@ -18,6 +18,7 @@
   · <a href="#watch-controls">Watch controls</a>
   · <a href="#privacy">Privacy</a>
   · <a href="#build-from-source">Build from source</a>
+  · <a href="LICENSE">MIT License</a>
 </p>
 
 <p align="center">
