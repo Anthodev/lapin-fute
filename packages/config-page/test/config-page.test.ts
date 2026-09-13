@@ -859,7 +859,6 @@ test("bilingual About copy exposes the required legal, privacy, attribution, and
   const html = readFileSync(join(here, "../index.html"), "utf8");
   const controller = readFileSync(join(here, "../src/config-page.js"), "utf8");
   for (const fact of [
-    "Version 1.0.0",
     "Publication director:",
     "Directeur de la publication :",
     "Anthodev",

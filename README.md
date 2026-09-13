@@ -24,7 +24,7 @@
 <p align="center">
   <img src="https://img.shields.io/badge/Pebble-emery%20%7C%20gabbro-00A5E0" alt="Pebble emery and gabbro">
   <img src="https://img.shields.io/badge/Language-EN%20%7C%20FR-00A5E0" alt="English and French">
-  <a href="https://apps.repebble.com/6d6aa01b7ecb4cfea469a183"><img src="https://img.shields.io/badge/RePebble-v1.0.0-FF4938" alt="Lapin Futé 1.0.0 on RePebble"></a>
+  <a href="https://apps.repebble.com/6d6aa01b7ecb4cfea469a183"><img src="https://img.shields.io/badge/RePebble-v1.0.1-FF4938" alt="Lapin Futé 1.0.1 on RePebble"></a>
 </p>
 
 ## About
@@ -101,6 +101,18 @@ npm run build:config-site                          # assemble var/config-site; f
 ```
 
 `node --env-file=.env scripts/probe-catalog.mjs` runs a small live check against PRIM, one request per transport mode, and needs a `PRIM_API_KEY`. Operator tokens live only in `.env` and are never printed or embedded in build output.
+
+## Store publishing
+
+Pushing a stable version tag (`v1.2.3`) publishes the GitHub release first; once it succeeds, `scripts/publish-pebble-store.mjs` uploads the exact validated PBW to the RePebble store. Preview tags (`pre-v`) and manual dispatches never reach the store job, which runs in the `pebble-store` environment with read-only repository access.
+
+One-time setup in the repository settings:
+
+- **Create the `pebble-store` environment with real protections.** Add required reviewers and a tag rule limited to `v*` under Settings, Environments. Referencing the environment in the workflow alone protects nothing; the reviewers and the tag rule are what gate a release.
+- **Add `PEBBLE_FIREBASE_REFRESH_TOKEN` as an environment secret.** Run `pebble login` yourself and take the refresh token from the tool's local credential file (`firebase_oauth_storage.json` in the pebble-tool configuration directory). Never paste credentials into issues, pull requests, or chats.
+- **Plan for rotation.** A refresh token can be revoked or rotated, and a rotated token returned during a run never updates the GitHub secret. If a run fails authentication, run `pebble login` again and update the secret.
+
+An approved run performs one authenticated upload of the already checksum-verified archive bytes. Nothing is rebuilt, screenshots are left unchanged, and publication is immediate. The job refuses versions that are not newer than the published version on either platform, but hidden drafts are invisible to that preflight; before rerunning an uncertain upload, inspect the developer dashboard, since the job offers no overwrite guarantee there.
 
 ## Icon
 
