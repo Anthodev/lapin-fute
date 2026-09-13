@@ -11,7 +11,8 @@
 </p>
 
 <p align="center">
-  <a href="#features">Features</a>
+  <a href="https://apps.repebble.com/6d6aa01b7ecb4cfea469a183">Get Lapin Futé</a>
+  · <a href="#features">Features</a>
   · <a href="#compatibility">Compatibility</a>
   · <a href="#getting-started">Getting started</a>
   · <a href="#watch-controls">Watch controls</a>
@@ -23,17 +24,12 @@
   <img src="https://img.shields.io/badge/Pebble-emery%20%7C%20gabbro-00A5E0" alt="Pebble emery and gabbro">
   <img src="https://img.shields.io/badge/Modes-M%C3%A9tro%C2%B7RER%C2%B7Transilien%C2%B7Tram%C2%B7Bus-00A5E0" alt="Métro, RER, Transilien, Tram and Bus">
   <img src="https://img.shields.io/badge/Language-EN%20%7C%20FR-00A5E0" alt="English and French">
-  <img src="https://img.shields.io/badge/status-pre--release-F59E0B" alt="Pre-release status">
+  <a href="https://apps.repebble.com/6d6aa01b7ecb4cfea469a183"><img src="https://img.shields.io/badge/RePebble-v1.0.0-FF4938" alt="Lapin Futé 1.0.0 on RePebble"></a>
 </p>
-
-> [!IMPORTANT]
-> Lapin Futé is experimental and not published yet. Trying it currently requires building the watchapp and hosting its settings page. Live departures require a personal [PRIM](https://prim.iledefrance-mobilites.fr/fr/mes-jetons-authentification) access token. Emulator checks do not replace physical-watch validation, which remains pending. The project is not affiliated with RATP or Île-de-France Mobilités.
 
 ## About
 
 Lapin Futé puts Île-de-France public-transport departures on a Pebble watch. The watch shows a list of favorites with the next departures, a departure board per favorite, and the current service messages for its line. A companion on your phone fetches the data from PRIM, Île-de-France Mobilités' open-data platform, and prepares everything the watch displays; the watch itself never goes online.
-
-The name nods to Bison Futé, the French road-traffic information service, and to Serge, the rabbit from RATP's safety campaigns. On the icon, the rabbit's outline traces an itinerary that ends at two round stops.
 
 ## Features
 
@@ -49,30 +45,32 @@ The name nods to Bison Futé, the French road-traffic information service, and t
 
 | Requirement | Details |
 |---|---|
-| Watches | Pebble Time 2 (emery profile, primary target); the gabbro round profile is experimental |
+| Watches | Pebble Time 2 (emery profile, primary target); the Pebble Round 2 profile is experimental |
 | Firmware | 4.32 or newer |
 | Phone | Pebble mobile app running the companion; internet access needed for fresh data |
 | Building from source | Node.js 24.18.0, Bun, Pebble SDK 4.33.1, pebble-tool 5.0.40 |
 
 ## Getting started
 
-There is no published package yet, so first use means one build and one static host:
+1. Install [Lapin Futé from RePebble](https://apps.repebble.com/6d6aa01b7ecb4cfea469a183).
+2. In the Pebble mobile app, open Lapin Futé's settings. Under PRIM access, paste a personal access token generated on the [PRIM portal](https://prim.iledefrance-mobilites.fr/fr/mes-jetons-authentification).
+3. Add up to six favorites by searching the bundled station catalog; searching and adding work without a token. Save, and your settings sync to the watch.
+4. Open Lapin Futé on the watch. Departures refresh whenever the app opens, you change favorite, or you hold Select; the phone needs to be connected for fresh data.
 
-1. Build the watchapp from source (see [Build from source](#build-from-source)); the built package is written under `packages/watch/build/`.
-2. Generate the station catalog and build the settings page using the commands below. `npm run build:config-site` assembles the site in `var/config-site`. Publish that folder on a static HTTPS host, then build the watchapp with `LAPIN_FUTE_CONFIG_URL=https://your-host/` so the phone opens your settings page.
-3. Install the built package on your watch with the Pebble tooling, or try it first in the emery or gabbro emulator.
-4. In the Pebble mobile app, open Lapin Futé's settings. Under PRIM access, paste a personal access token generated on the [PRIM portal](https://prim.iledefrance-mobilites.fr/fr/mes-jetons-authentification).
-5. Add up to six favorites by searching the bundled station catalog; searching and adding work without a token. Save, and your settings sync to the watch.
-6. Open Lapin Futé on the watch. Departures refresh whenever the app opens, you change favorite, or you hold Select; the phone needs to be connected for fresh data.
+Developers can also build and install the app locally using the instructions in [Build from source](#build-from-source).
 
 ## Watch controls
 
-| Screen | Buttons |
-|---|---|
-| Favorites list | Up/Down move through favorites and the Refresh all row; Select opens the highlighted favorite, or refreshes everything from the Refresh all row |
-| Departures | Up/Down switch favorite; Select opens the traffic view; holding Select forces a refresh |
-| Traffic | Up/Down page through messages |
-| Anywhere | Back steps back to the previous screen |
+| Screen | Control | Action |
+|---|---|---|
+| Favorites | **Up / Down** | Move through favorites and the **Refresh all** row |
+| Favorites | **Select** | Open the highlighted favorite |
+| Favorites · Refresh all | **Select** | Refresh every favorite |
+| Departures | **Up / Down** | Switch favorite |
+| Departures | **Select** | Open the traffic view |
+| Departures | **Hold Select** | Force a refresh |
+| Traffic | **Up / Down** | Page through messages |
+| Any screen | **Back** | Return to the previous screen |
 
 Countdowns and the clock keep updating on the watch every minute; only the actions above trigger network requests.
 

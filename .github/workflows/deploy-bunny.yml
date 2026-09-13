@@ -10,6 +10,11 @@ on:
         required: true
         default: false
         type: boolean
+      force_catalog_upload:
+        description: Upload a rebuilt catalog even when its IDFM source revision is already hosted
+        required: true
+        default: false
+        type: boolean
 
 permissions:
   contents: read
@@ -45,6 +50,62 @@ jobs:
 
       - run: npm test
 
+  package:
+    name: Build release PBW
+    needs: test
+    if: ${{ startsWith(github.ref_name, 'v') }}
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .node-version
+          cache: npm
+
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: 1.4.0
+
+      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6.8.0
+
+      - run: npm ci
+
+      - name: Install pinned Pebble toolchain
+        run: |
+          uv tool install pebble-tool==5.0.40
+          pebble sdk install 4.33.1
+
+      - name: Validate package version
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          PACKAGE_VERSION="$(node -p "require('./packages/watch/package.json').version")"
+          test "$RELEASE_TAG" = "v$PACKAGE_VERSION"
+
+      - name: Build production PBW
+        env:
+          LAPIN_FUTE_CONFIG_URL: ${{ vars.CONFIG_SITE_ORIGIN }}
+        run: npm run build
+
+      - name: Prepare release artifacts
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          mkdir release-assets
+          cp packages/watch/build/watch.pbw "release-assets/lapin-fute-$RELEASE_TAG.pbw"
+          (
+            cd release-assets
+            sha256sum "lapin-fute-$RELEASE_TAG.pbw" > SHA256SUMS
+          )
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: lapin-fute-${{ github.ref_name }}
+          path: release-assets/
+          if-no-files-found: error
+
   deploy:
     name: Build and deploy configuration site
     needs: test
@@ -67,15 +128,98 @@ jobs:
           IDFM_DATASET_TOKEN: ${{ secrets.IDFM_DATASET_TOKEN }}
         run: npm run catalog:refresh
 
-      - name: Build static configuration site
-        if: ${{ github.event_name == 'workflow_dispatch' && inputs.refresh_catalog }}
-        run: npm run build:config-site
+      - name: Plan catalog upload
+        id: catalog
+        env:
+          CONFIG_SITE_ORIGIN: ${{ vars.CONFIG_SITE_ORIGIN }}
+          EVENT_NAME: ${{ github.event_name }}
+          FORCE_CATALOG_UPLOAD: ${{ inputs.force_catalog_upload }}
+        run: |
+          set -euo pipefail
+          if [[ "$EVENT_NAME" != workflow_dispatch ]]; then
+            include_catalog=false
+            reason="release tags update the configuration page only"
+          elif [[ "$FORCE_CATALOG_UPLOAD" = true ]]; then
+            include_catalog=true
+            reason="catalog upload was forced"
+          else
+            include_catalog="$(node scripts/plan-catalog-upload.mjs)"
+            reason="catalog source-revision comparison completed"
+          fi
+          echo "include_catalog=$include_catalog" >> "$GITHUB_OUTPUT"
+          echo "$reason: include_catalog=$include_catalog"
 
-      - name: Build configuration page
-        if: ${{ github.event_name != 'workflow_dispatch' || inputs.refresh_catalog != true }}
-        run: npm run build:config-page
+      - name: Build static configuration site
+        env:
+          INCLUDE_CATALOG: ${{ steps.catalog.outputs.include_catalog }}
+        run: |
+          if [[ "$INCLUDE_CATALOG" = true ]]; then
+            npm run build:config-site
+          else
+            npm run build:config-page
+          fi
+
+      - name: Back up mutable production files
+        id: backup
+        shell: bash
+        env:
+          BUNNY_STORAGE_ENDPOINT: ${{ vars.BUNNY_STORAGE_ENDPOINT }}
+          BUNNY_STORAGE_PASSWORD: ${{ secrets.BUNNY_STORAGE_PASSWORD }}
+        run: |
+          set -euo pipefail
+
+          test -n "$BUNNY_STORAGE_ENDPOINT"
+          test -n "$BUNNY_STORAGE_PASSWORD"
+          endpoint="${BUNNY_STORAGE_ENDPOINT%/}"
+          case "$endpoint" in
+            https://*) ;;
+            *) echo "BUNNY_STORAGE_ENDPOINT must use HTTPS" >&2; exit 1 ;;
+          esac
+          mkdir -p var/deploy-backup/files
+          : > var/deploy-backup/missing
+
+          while IFS= read -r -d '' file; do
+            relative_path="${file#var/config-site/}"
+            if [[ "$relative_path" =~ ^catalog/[a-f0-9]{64}/ ]]; then
+              continue
+            fi
+            case "$relative_path" in
+              *[!A-Za-z0-9._/-]* | /* | *../*)
+                echo "Refusing unsafe backup path: $relative_path" >&2
+                exit 1
+                ;;
+            esac
+
+            target="var/deploy-backup/files/$relative_path"
+            mkdir -p "$(dirname "$target")"
+            status="$(curl --silent --show-error \
+              --output "$target" \
+              --write-out '%{http_code}' \
+              --header "AccessKey: $BUNNY_STORAGE_PASSWORD" \
+              "$endpoint/$relative_path")"
+            case "$status" in
+              200) ;;
+              404)
+                rm -f "$target"
+                printf '%s\0' "$relative_path" >> var/deploy-backup/missing
+                ;;
+              *)
+                echo "Could not back up $relative_path: HTTP $status" >&2
+                exit 1
+                ;;
+            esac
+          done < <(find var/config-site -type f -print0)
+
+      - name: Retain rollback bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: bunny-rollback-${{ github.run_id }}
+          path: var/deploy-backup/
+          if-no-files-found: error
+          retention-days: 30
 
       - name: Upload static site to Bunny Storage
+        id: upload
         shell: bash
         env:
           BUNNY_STORAGE_ENDPOINT: ${{ vars.BUNNY_STORAGE_ENDPOINT }}
@@ -137,9 +281,84 @@ jobs:
             --header "AccessKey: $BUNNY_API_KEY" \
             "https://api.bunny.net/pullzone/$BUNNY_PULL_ZONE_ID/purgeCache"
 
+      - name: Verify served static site
+        env:
+          CONFIG_SITE_ORIGIN: ${{ vars.CONFIG_SITE_ORIGIN }}
+          INCLUDE_CATALOG: ${{ steps.catalog.outputs.include_catalog }}
+        run: |
+          for attempt in 1 2 3; do
+            if [[ "$INCLUDE_CATALOG" = true ]]; then
+              command=(npm run verify:config-site)
+            else
+              command=(npm run verify:config-site -- --page-only)
+            fi
+            if "${command[@]}"; then
+              exit 0
+            fi
+            if [[ "$attempt" != 3 ]]; then sleep 10; fi
+          done
+          exit 1
+
+      - name: Restore previous mutable files after failure
+        if: ${{ failure() && steps.backup.outcome == 'success' }}
+        shell: bash
+        env:
+          BUNNY_STORAGE_ENDPOINT: ${{ vars.BUNNY_STORAGE_ENDPOINT }}
+          BUNNY_STORAGE_PASSWORD: ${{ secrets.BUNNY_STORAGE_PASSWORD }}
+          BUNNY_API_KEY: ${{ secrets.BUNNY_API_KEY }}
+          BUNNY_PULL_ZONE_ID: ${{ vars.BUNNY_PULL_ZONE_ID }}
+        run: |
+          set -euo pipefail
+
+          endpoint="${BUNNY_STORAGE_ENDPOINT%/}"
+          case "$endpoint" in
+            https://*) ;;
+            *) echo "BUNNY_STORAGE_ENDPOINT must use HTTPS" >&2; exit 1 ;;
+          esac
+          restore_file() {
+            local file="$1"
+            local relative_path="${file#var/deploy-backup/files/}"
+            local mime_type
+            mime_type="$(file --brief --mime-type "$file")"
+            echo "Restoring $relative_path"
+            curl --fail --silent --show-error \
+              --request PUT \
+              --header "AccessKey: $BUNNY_STORAGE_PASSWORD" \
+              --header "Content-Type: $mime_type" \
+              --upload-file "$file" \
+              "$endpoint/$relative_path"
+          }
+          export endpoint BUNNY_STORAGE_PASSWORD
+          export -f restore_file
+          find var/deploy-backup/files -type f -print0 \
+            | xargs -0 --no-run-if-empty --max-args=1 --max-procs=16 \
+                bash -c 'restore_file "$1"' _
+
+          while IFS= read -r -d '' relative_path; do
+            echo "Removing newly introduced mutable file $relative_path"
+            status="$(curl --silent --show-error \
+              --request DELETE \
+              --header "AccessKey: $BUNNY_STORAGE_PASSWORD" \
+              --output /dev/null \
+              --write-out '%{http_code}' \
+              "$endpoint/$relative_path")"
+            case "$status" in
+              200 | 201 | 204 | 404) ;;
+              *)
+                echo "Could not remove $relative_path during rollback: HTTP $status" >&2
+                exit 1
+                ;;
+            esac
+          done < var/deploy-backup/missing
+
+          curl --fail --silent --show-error \
+            --request POST \
+            --header "AccessKey: $BUNNY_API_KEY" \
+            "https://api.bunny.net/pullzone/$BUNNY_PULL_ZONE_ID/purgeCache"
+
   publish:
     name: Publish GitHub release notes
-    needs: [test, deploy]
+    needs: [test, package, deploy]
     if: ${{ startsWith(github.ref_name, 'v') }}
     runs-on: ubuntu-latest
     permissions:
@@ -151,6 +370,12 @@ jobs:
           ref: ${{ github.sha }}
           fetch-depth: 0
           persist-credentials: false
+
+      - name: Download release artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: lapin-fute-${{ github.ref_name }}
+          path: release-assets
 
       - name: Generate categorized release notes
         shell: bash
@@ -217,4 +442,5 @@ jobs:
             --repo "$GITHUB_REPOSITORY" \
             --title "Lapin Futé $GITHUB_REF_NAME" \
             --notes-file release-notes.md \
-            --verify-tag
+            --verify-tag \
+            release-assets/*

@@ -1,0 +1,169 @@
+name: Roll back Bunny configuration site
+
+on:
+  workflow_dispatch:
+    inputs:
+      deployment_run_id:
+        description: Successful deployment run whose pre-deployment bundle must be restored
+        required: true
+        type: string
+
+permissions:
+  actions: read
+  contents: read
+
+concurrency:
+  group: deploy-bunny-production
+  cancel-in-progress: false
+
+jobs:
+  rollback:
+    name: Restore retained mutable files
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - name: Validate deployment run
+        id: source
+        env:
+          DEPLOYMENT_RUN_ID: ${{ inputs.deployment_run_id }}
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          [[ "$DEPLOYMENT_RUN_ID" =~ ^[1-9][0-9]*$ ]]
+          metadata="$(gh api "repos/$GH_REPO/actions/runs/$DEPLOYMENT_RUN_ID" \
+            --jq '[.status, .path, .event, .head_repository.full_name] | @tsv')"
+          IFS=$'\t' read -r status workflow_path event head_repository <<< "$metadata"
+          test "$status" = completed
+          test "$workflow_path" = ".github/workflows/deploy-bunny.yml"
+          test "$head_repository" = "$GH_REPO"
+          [[ "$event" = push || "$event" = workflow_dispatch ]]
+
+      - name: Download retained rollback bundle
+        env:
+          DEPLOYMENT_RUN_ID: ${{ inputs.deployment_run_id }}
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          gh run download "$DEPLOYMENT_RUN_ID" \
+            --repo "$GH_REPO" \
+            --name "bunny-rollback-$DEPLOYMENT_RUN_ID" \
+            --dir var/deploy-backup
+          test -d var/deploy-backup/files
+          test -f var/deploy-backup/missing
+
+      - name: Restore previous mutable files
+        env:
+          BUNNY_STORAGE_ENDPOINT: ${{ vars.BUNNY_STORAGE_ENDPOINT }}
+          BUNNY_STORAGE_PASSWORD: ${{ secrets.BUNNY_STORAGE_PASSWORD }}
+        run: |
+          set -euo pipefail
+          test -n "$BUNNY_STORAGE_ENDPOINT"
+          test -n "$BUNNY_STORAGE_PASSWORD"
+          endpoint="${BUNNY_STORAGE_ENDPOINT%/}"
+          case "$endpoint" in
+            https://*) ;;
+            *) echo "BUNNY_STORAGE_ENDPOINT must use HTTPS" >&2; exit 1 ;;
+          esac
+
+          restore_file() {
+            local file="$1"
+            local relative_path="${file#var/deploy-backup/files/}"
+            local mime_type
+            case "$relative_path" in
+              *[!A-Za-z0-9._/-]* | /* | *../*)
+                echo "Refusing unsafe rollback path: $relative_path" >&2
+                exit 1
+                ;;
+            esac
+            mime_type="$(file --brief --mime-type "$file")"
+            echo "Restoring $relative_path"
+            curl --fail --silent --show-error \
+              --retry 3 --retry-all-errors \
+              --request PUT \
+              --header "AccessKey: $BUNNY_STORAGE_PASSWORD" \
+              --header "Content-Type: $mime_type" \
+              --upload-file "$file" \
+              "$endpoint/$relative_path"
+          }
+          export endpoint BUNNY_STORAGE_PASSWORD
+          export -f restore_file
+          find var/deploy-backup/files -type f -print0 \
+            | xargs -0 --no-run-if-empty --max-args=1 --max-procs=16 \
+                bash -c 'restore_file "$1"' _
+
+          while IFS= read -r -d '' relative_path; do
+            case "$relative_path" in
+              *[!A-Za-z0-9._/-]* | /* | *../*)
+                echo "Refusing unsafe rollback deletion: $relative_path" >&2
+                exit 1
+                ;;
+            esac
+            status="$(curl --silent --show-error \
+              --request DELETE \
+              --header "AccessKey: $BUNNY_STORAGE_PASSWORD" \
+              --output /dev/null \
+              --write-out '%{http_code}' \
+              "$endpoint/$relative_path")"
+            case "$status" in
+              200 | 201 | 204 | 404) ;;
+              *)
+                echo "Could not remove $relative_path during rollback: HTTP $status" >&2
+                exit 1
+                ;;
+            esac
+          done < var/deploy-backup/missing
+
+      - name: Purge Bunny CDN cache
+        env:
+          BUNNY_API_KEY: ${{ secrets.BUNNY_API_KEY }}
+          BUNNY_PULL_ZONE_ID: ${{ vars.BUNNY_PULL_ZONE_ID }}
+        run: |
+          set -euo pipefail
+          test -n "$BUNNY_API_KEY"
+          test -n "$BUNNY_PULL_ZONE_ID"
+          curl --fail --silent --show-error \
+            --retry 3 --retry-all-errors \
+            --request POST \
+            --header "AccessKey: $BUNNY_API_KEY" \
+            "https://api.bunny.net/pullzone/$BUNNY_PULL_ZONE_ID/purgeCache"
+
+      - name: Verify restored mutable files
+        env:
+          CONFIG_SITE_ORIGIN: ${{ vars.CONFIG_SITE_ORIGIN }}
+        run: |
+          set -euo pipefail
+          test -n "$CONFIG_SITE_ORIGIN"
+          origin="${CONFIG_SITE_ORIGIN%/}"
+          case "$origin" in
+            https://*) ;;
+            *) echo "CONFIG_SITE_ORIGIN must use HTTPS" >&2; exit 1 ;;
+          esac
+
+          for attempt in 1 2 3; do
+            failed=0
+            while IFS= read -r -d '' file; do
+              relative_path="${file#var/deploy-backup/files/}"
+              if ! curl --fail --silent --show-error \
+                --header "Cache-Control: no-cache" \
+                "$origin/$relative_path" \
+                | cmp --silent "$file" -; then
+                echo "Restored bytes differ for $relative_path" >&2
+                failed=1
+              fi
+            done < <(find var/deploy-backup/files -type f -print0)
+            while IFS= read -r -d '' relative_path; do
+              status="$(curl --silent --show-error \
+                --header "Cache-Control: no-cache" \
+                --output /dev/null \
+                --write-out '%{http_code}' \
+                "$origin/$relative_path")"
+              if [[ "$status" != 404 ]]; then
+                echo "New mutable file remains after rollback: $relative_path (HTTP $status)" >&2
+                failed=1
+              fi
+            done < var/deploy-backup/missing
+            if [[ "$failed" = 0 ]]; then exit 0; fi
+            if [[ "$attempt" != 3 ]]; then sleep 10; fi
+          done
+          exit 1

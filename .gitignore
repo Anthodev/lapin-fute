@@ -4,6 +4,7 @@ node_modules/
 !.env.example
 var/
 packages/watch/build/
+packages/watch/.lock-waf_*
 packages/watch/src/pkjs/
 packages/watch/src/generated/
 docs/

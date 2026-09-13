@@ -36,7 +36,7 @@ function exactFields(value, fields) {
     && fields.every((field) => Object.hasOwn(value, field));
 }
 
-function isManifest(value) {
+export function isCatalogManifest(value) {
   return exactFields(value, MANIFEST_FIELDS)
     && value.schemaVersion === SCHEMA_VERSION
     && typeof value.revision === "string" && REVISION.test(value.revision)
@@ -63,6 +63,39 @@ function isPage(value, revision, page, field, placeId) {
     && value.page === page && (placeId === undefined || value.placeId === placeId)
     && (value.nextPage === null || (Number.isSafeInteger(value.nextPage) && value.nextPage === page + 1))
     && Array.isArray(value[field]) && (value.nextPage === null || value[field].length > 0);
+}
+
+function isSearchPlace(value) {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
+  const { searchText, ...place } = value;
+  return isPlaceSearchItem(place) && PLACE_ID.test(place.placeId)
+    && typeof searchText === "string" && searchText !== ""
+    && normalizeCatalogSearchText(searchText) === searchText;
+}
+
+export function isCatalogSearchPage(value, revision, page) {
+  return isPage(value, revision, page, "places")
+    && value.places.every(isSearchPlace);
+}
+
+export function isCatalogServicesPage(value, revision, placeId, page) {
+  if (!PLACE_ID.test(placeId) || !isPage(value, revision, page, "services", placeId)) return false;
+  const identifiers = new Set();
+  return value.services.every((service) => {
+    if (!isServiceOption(service) || !SERVICE_ID.test(service.serviceId)
+        || identifiers.has(service.serviceId)) return false;
+    identifiers.add(service.serviceId);
+    return true;
+  });
+}
+
+export function isCatalogServiceDocument(value, revision, serviceId) {
+  return SERVICE_ID.test(serviceId)
+    && exactFields(value, ["schemaVersion", "revision", "service"])
+    && value.schemaVersion === SCHEMA_VERSION
+    && value.revision === revision
+    && isServiceOption(value.service)
+    && value.service.serviceId === serviceId;
 }
 
 function compareMatches(left, right) {
@@ -133,7 +166,7 @@ export function createCatalogClient({
     if (signal?.aborted) throw abortError();
     if (manifest !== null) return manifest;
     const body = await json("manifest.json", signal, "BACKEND_UNAVAILABLE", true);
-    if (!isManifest(body)) throw new CatalogClientError("BACKEND_UNAVAILABLE");
+    if (!isCatalogManifest(body)) throw new CatalogClientError("BACKEND_UNAVAILABLE");
     if (signal?.aborted) throw abortError();
     // Concurrent first operations use the first successfully loaded revision.
     manifest ??= body;
@@ -165,13 +198,9 @@ export function createCatalogClient({
       const body = await json(`${pinned.revision}/search/${bucket}/${page}.json`, signal,
         page === 0 ? null : "BACKEND_UNAVAILABLE");
       if (body === null) return [];
-      if (!isPage(body, pinned.revision, page, "places")) throw new CatalogClientError("BACKEND_UNAVAILABLE");
+      if (!isCatalogSearchPage(body, pinned.revision, page)) throw new CatalogClientError("BACKEND_UNAVAILABLE");
       for (const entry of body.places) {
-        if (typeof entry !== "object" || entry === null || Array.isArray(entry)) throw new CatalogClientError("BACKEND_UNAVAILABLE");
         const { searchText, ...place } = entry;
-        if (!isPlaceSearchItem(place) || !PLACE_ID.test(place.placeId)
-          || typeof searchText !== "string" || searchText === ""
-          || normalizeCatalogSearchText(searchText) !== searchText) throw new CatalogClientError("BACKEND_UNAVAILABLE");
         const words = searchText.split(" ");
         if (!tokens.every((token) => words.some((word) => word.startsWith(token)))) continue;
         const stop = normalizeCatalogSearchText(place.stopLabel);
@@ -231,9 +260,11 @@ export function createCatalogClient({
     while (true) {
       const body = await json(`${pinned.revision}/places/${placeId}/${page}.json`, signal,
         page === 0 ? "INVALID_SERVICE" : "BACKEND_UNAVAILABLE");
-      if (!isPage(body, pinned.revision, page, "services", placeId)) throw new CatalogClientError("BACKEND_UNAVAILABLE");
+      if (!isCatalogServicesPage(body, pinned.revision, placeId, page)) {
+        throw new CatalogClientError("BACKEND_UNAVAILABLE");
+      }
       for (const service of body.services) {
-        if (!isServiceOption(service) || !SERVICE_ID.test(service.serviceId) || seen.has(service.serviceId)) {
+        if (seen.has(service.serviceId)) {
           throw new CatalogClientError("INVALID_SERVICE");
         }
         seen.add(service.serviceId);
@@ -250,9 +281,9 @@ export function createCatalogClient({
     const pinned = await pinnedManifest(signal);
     const body = await json(`${pinned.revision}/services/${serviceId}.json`, signal, null);
     if (body === null) return null;
-    if (!exactFields(body, ["schemaVersion", "revision", "service"])
-      || body.schemaVersion !== SCHEMA_VERSION || body.revision !== pinned.revision
-      || !isServiceOption(body.service) || body.service.serviceId !== serviceId) throw new CatalogClientError("INVALID_SERVICE");
+    if (!isCatalogServiceDocument(body, pinned.revision, serviceId)) {
+      throw new CatalogClientError("INVALID_SERVICE");
+    }
     return body.service;
   }
 
