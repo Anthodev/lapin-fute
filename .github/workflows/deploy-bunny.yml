@@ -440,7 +440,7 @@ jobs:
           set -euo pipefail
           gh release create "$GITHUB_REF_NAME" \
             --repo "$GITHUB_REPOSITORY" \
-            --title "Lapin Futé $GITHUB_REF_NAME" \
+            --title "$GITHUB_REF_NAME" \
             --notes-file release-notes.md \
             --verify-tag \
             release-assets/*
