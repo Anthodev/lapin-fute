@@ -162,6 +162,15 @@ function prepareAppearance(favorite, profile, language) {
   for (const key of ["id", "lineLabel", "stopLabel", "destinationLabel"]) {
     if (sourceBytes(favorite[key], key === "id" ? 64 : 96) === 0) throw new TypeError("Empty appearance label");
   }
+  // Display label shared by the line slots and the serialized field: metro and
+  // tram digit lines gain their mode prefix, and metro "bis" contracts to "b".
+  let lineLabel = favorite.lineLabel;
+  if (favorite.lineMode === "METRO") {
+    const bis = /^M?([0-9]+)\s*bis$/i.exec(lineLabel);
+    lineLabel = bis ? "M" + bis[1] + "b" : /^[0-9]/.test(lineLabel) ? "M" + lineLabel : lineLabel;
+  } else if (favorite.lineMode === "TRAM" && /^[0-9]/.test(lineLabel)) {
+    lineLabel = "T" + lineLabel;
+  }
   const hasBackground = favorite.lineColor !== undefined, hasForeground = favorite.lineTextColor !== undefined;
   if (hasBackground !== hasForeground || (hasBackground && (!/^#[0-9a-f]{6}$/.test(favorite.lineColor)
       || !/^#[0-9a-f]{6}$/.test(favorite.lineTextColor)))) throw new TypeError("Invalid appearance colors");
@@ -169,13 +178,13 @@ function prepareAppearance(favorite, profile, language) {
     profile ? 67 : 84, profile ? 54 : 71, profile ? 116 : 132, profile ? 86 : 74, profile ? 73 : 61, profile ? 106 : 122];
   let ends = "", mask = 0;
   for (let slot = 0; slot < 12; slot++) {
-    const label = slot < 4 ? favorite.lineLabel : slot < 9 ? favorite.stopLabel : favorite.destinationLabel;
+    const label = slot < 4 ? lineLabel : slot < 9 ? favorite.stopLabel : favorite.destinationLabel;
     const fit = clip(label, slot === 3 || slot >= 9 ? 0 : 1, widths[slot]);
     ends += fixed(scalarLength(label.slice(0, fit.end)), 2);
     if (fit.ellipsis) mask |= 1 << slot;
   }
   const id = lp3(favorite.id);
-  const content = lp3(favorite.lineLabel) + lp3(favorite.stopLabel) + lp3(favorite.destinationLabel)
+  const content = lp3(lineLabel) + lp3(favorite.stopLabel) + lp3(favorite.destinationLabel)
     + (hasBackground ? favorite.lineColor.slice(1) : "52616f")
     + (hasForeground ? favorite.lineTextColor.slice(1) : "ffffff") + ends + fixed(mask, 3);
   const hashInput = "D2" + profile + language + id + content;
