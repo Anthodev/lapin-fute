@@ -143,12 +143,12 @@ function overview(port,r,now) {
 }
 function departures(port,r,now) {
   const round=r.profile===1, record=r.records[r.active], data=source(r), count=data?hex(data,22,1):0;
-  let x=round?46:8,y=round?52:34,width=round?168:184,height=round?40:35;
+  let x=round?46:8,y=round?52:31,width=round?168:184,height=round?40:44;
   chip(port,record,2,x,y+6,44,27);
   draw(port,clipped(record,8),1,INK,x+52,y,width-52,20,-1);
   draw(port,">",1,MUTED,x+52,y+20,10,18,-1);
   draw(port,clipped(record,11),1,MUTED,x+62,y+20,width-62,18,-1);
-  port.fillColor(RULE,x,y+height-1,width,1);
+  port.fillColor(RULE,round?46:0,y+height-1,round?168:200,1);
   x=round?42:8;y=round?92:70;width=round?176:184;height=round?68:66;
   if (!count) {
     const text=copy(r.profile,r.language,11,5);
@@ -157,7 +157,7 @@ function departures(port,r,now) {
     const status=hex(data,31,1), value=countdown(r,data,0,now,true), unit=status!==2 && Math.ceil((hex(data,23,8)*1000-now)/60000)>0;
     const style=value==="-"?2:3, unitWidth=unit?Math.ceil(port.measureString("min",fonts[2]).width):0;
     const gap=unit?4:0, valueWidth=Math.min(width-unitWidth-gap,Math.ceil(port.measureString(value,fonts[style]).width));
-    const left=x+Math.floor((width-valueWidth-unitWidth-gap)/2), bottom=y+height-(round?17:14);
+    const left=x+Math.floor((width-valueWidth-unitWidth-gap)/2), bottom=y+height-(status?(round?17:15):(round?10:5));
     drawBottom(port,value,style,INK,left,bottom,valueWidth);
     if(unit)drawBottom(port,"min",2,INK,left+valueWidth+gap,bottom,unitWidth);
     if(status)draw(port,copy(r.profile,r.language,13+status),1,INK,x,y+height-19,width,18);
