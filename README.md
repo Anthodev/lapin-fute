@@ -23,7 +23,6 @@
 
 <p align="center">
   <img src="https://img.shields.io/badge/Pebble-emery%20%7C%20gabbro-00A5E0" alt="Pebble emery and gabbro">
-  <img src="https://img.shields.io/badge/Modes-M%C3%A9tro%C2%B7RER%C2%B7Transilien%C2%B7Tram%C2%B7Bus-00A5E0" alt="Métro, RER, Transilien, Tram and Bus">
   <img src="https://img.shields.io/badge/Language-EN%20%7C%20FR-00A5E0" alt="English and French">
   <a href="https://apps.repebble.com/6d6aa01b7ecb4cfea469a183"><img src="https://img.shields.io/badge/RePebble-v1.0.0-FF4938" alt="Lapin Futé 1.0.0 on RePebble"></a>
 </p>
