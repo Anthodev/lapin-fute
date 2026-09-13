@@ -290,8 +290,8 @@ function trafficForLine(envelope, lineId, evaluatedAtMilliseconds, checkedAtMill
   for (index = 0; index < line.length; index += 1) {
     disruption = envelope.disruptions[line[index]];
     if (!active(disruption, localNow) || disruption.severity === "INFORMATION") continue;
-    priority = disruption.severity === "PERTURBEE"
-      && typeof disruption.title !== "undefined" && typeof disruption.text !== "undefined" ? 1 : 2;
+    if (typeof disruption.title === "undefined" || typeof disruption.text === "undefined") priority = 2;
+    else priority = disruption.severity === "BLOQUANTE" ? 3 : 1;
     if (typeof best === "undefined" || priority > bestPriority
         || (priority === bestPriority && disruption.id < best.id)) {
       best = disruption;
@@ -301,6 +301,10 @@ function trafficForLine(envelope, lineId, evaluatedAtMilliseconds, checkedAtMill
   if (typeof best === "undefined") result.state = "NORMAL";
   else if (bestPriority === 1) {
     result.state = "DELAYED";
+    result.title = best.title;
+    result.text = best.text;
+  } else if (bestPriority === 3) {
+    result.state = "STOPPED";
     result.title = best.title;
     result.text = best.text;
   }

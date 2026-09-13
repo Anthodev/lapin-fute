@@ -230,7 +230,7 @@ test("upstream routing may exceed watch ID lengths without leaking into the snap
 test("traffic distinguishes observed normal, useful disruption and source uncertainty", function () {
   var payload = trafficFixture();
   var expected = {
-    C100: "NORMAL", C200: "DELAYED", C300: "UNKNOWN", C400: "UNKNOWN",
+    C100: "NORMAL", C200: "DELAYED", C300: "STOPPED", C400: "STOPPED",
     C500: "NORMAL", C600: "NORMAL", C999: "UNKNOWN"
   };
   Object.keys(expected).forEach(function (line) {
@@ -248,13 +248,21 @@ test("traffic distinguishes observed normal, useful disruption and source uncert
   });
 });
 
-test("BLOQUANTE never invents STOPPED and outranks usable PERTURBEE details", function () {
+test("BLOQUANTE produces STOPPED and outranks usable PERTURBEE details", function () {
   var payload = trafficFixture();
-  payload.disruptions[2].severity.effect = "NO_SERVICE";
-  payload.lines[1].impactedObjects[0].disruptionIds = ["delay-active", "stopped-active"];
-  assert.equal(trafficDetail(payload, "IDFM:C200").state, "UNKNOWN");
+  payload.lines[1].impactedObjects[0].disruptionIds = ["delay-active", "blocking-unclassified"];
+  assert.deepEqual(trafficDetail(payload, "IDFM:C200"), {
+    schemaVersion: 1, state: "STOPPED", checkedAt: TRAFFIC_MS / 1000,
+    title: "Tram T3 : incident", text: "Une perturbation est en cours."
+  });
   payload.lines[1].impactedObjects[0].disruptionIds.reverse();
-  assert.equal(trafficDetail(payload, "IDFM:C200").state, "UNKNOWN");
+  assert.equal(trafficDetail(payload, "IDFM:C200").state, "STOPPED");
+});
+
+test("an active disruption without complete details remains UNKNOWN", function () {
+  var payload = trafficFixture();
+  delete payload.disruptions[3].message;
+  assert.equal(trafficDetail(payload, "IDFM:C400").state, "UNKNOWN");
 });
 
 test("Paris periods are inclusive at start and exclusive at end, including summer time", function () {

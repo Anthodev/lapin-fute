@@ -411,7 +411,7 @@ test("transport errors and malformed traffic are unavailable, not successful UNK
   h.transport.instances[1].respond(503, {});
   h.clock.advance(0);
   assertError(result.values[1], "SOURCE_UNAVAILABLE", TRAFFIC_MS);
-  requestTraffic(h, "IDFM:C300", result);
+  requestTraffic(h, "IDFM:C999", result);
   h.transport.instances[2].respond(200, trafficFixture());
   h.clock.advance(0);
   assert.deepEqual(result.values[2], { status: "AVAILABLE", data: { schemaVersion: 1, state: "UNKNOWN", checkedAt: TRAFFIC_MS / 1000 } });
