@@ -102,28 +102,6 @@ npm run build:config-site                          # assemble var/config-site; f
 
 `node --env-file=.env scripts/probe-catalog.mjs` runs a small live check against PRIM, one request per transport mode, and needs a `PRIM_API_KEY`. Operator tokens live only in `.env` and are never printed or embedded in build output.
 
-## Store publishing
-
-Pushing a stable version tag (`v1.2.3`) publishes the GitHub release first; once it succeeds, `scripts/publish-pebble-store.mjs` uploads the exact validated PBW to the RePebble store. Preview tags (`pre-v`) and manual dispatches never reach the store job, which runs in the `pebble-store` environment with read-only repository access.
-
-One-time setup in the repository settings:
-
-- **Create the `pebble-store` environment with real protections.** Add required reviewers and a tag rule limited to `v*` under Settings, Environments. Referencing the environment in the workflow alone protects nothing; the reviewers and the tag rule are what gate a release.
-- **Add `PEBBLE_FIREBASE_REFRESH_TOKEN` as an environment secret.** Run `pebble login` yourself and take the refresh token from the tool's local credential file (`firebase_oauth_storage.json` in the pebble-tool configuration directory). Never paste credentials into issues, pull requests, or chats.
-- **Plan for rotation.** A refresh token can be revoked or rotated, and a rotated token returned during a run never updates the GitHub secret. If a run fails authentication, run `pebble login` again and update the secret.
-
-An approved run performs one authenticated upload of the already checksum-verified archive bytes. Nothing is rebuilt, screenshots are left unchanged, and publication is immediate. The job refuses versions that are not newer than the published version on either platform, but hidden drafts are invisible to that preflight; before rerunning an uncertain upload, inspect the developer dashboard, since the job offers no overwrite guarantee there.
-
-## Icon
-
-The icon is a rounded red ticket (`#fa4a36`) whose cut-out route traces the rabbit down to two round stops. All files live under `packages/config-page/assets/`:
-
-| File | Format | Background |
-|---|---|---|
-| [`lapin-fute.svg`](packages/config-page/assets/lapin-fute.svg) | Vector source | Transparent |
-| [`lapin-fute-1024.png`](packages/config-page/assets/lapin-fute-1024.png) | PNG, 1024 × 1024 | Transparent |
-| [`lapin-fute-1024.jpg`](packages/config-page/assets/lapin-fute-1024.jpg) | JPEG, 1024 × 1024 | White |
-
 ## Contributing
 
 Bug reports are welcome on the [issue tracker](https://github.com/Anthodev/lapin-fute/issues). A useful report includes the watch model and firmware, the phone setup, the steps to reproduce, and whether the data shown was live or cached. Never paste your PRIM token or other personal data in an issue.
