@@ -58,6 +58,30 @@ test("configuration-site verification checks every local and served file on the 
   const paths = fixture();
   try {
     const revision = "a".repeat(64);
+    const placeId = `plc_${"a".repeat(43)}`;
+    const serviceId = `svc_${"b".repeat(43)}`;
+    const place = {
+      placeId,
+      stopLabel: "Gare du Nord",
+      localityLabel: "Paris",
+      mode: "BUS",
+      lines: [{ lineLabel: "42", lineColor: "#e86a10", lineTextColor: "#ffffff" }],
+      searchText: "gare du nord paris",
+    };
+    const service = {
+      serviceId,
+      stopLabel: "Gare du Nord",
+      lineLabel: "42",
+      destinationLabel: "Hôpital Européen",
+      lineMode: "BUS",
+      lineColor: "#e86a10",
+      lineTextColor: "#ffffff",
+      routing: {
+        monitoringRef: "fixture-monitoring",
+        lineRef: "fixture-line",
+        destinationRef: "fixture-destination",
+      },
+    };
     const manifest = {
       schemaVersion: 1,
       revision,
@@ -74,13 +98,13 @@ test("configuration-site verification checks every local and served file on the 
       ["index.html", "<h1>Lapin Futé</h1>"],
       ["catalog/manifest.json", JSON.stringify(manifest)],
       [`catalog/${revision}/search/a/0.json`, JSON.stringify({
-        schemaVersion: 1, revision, page: 0, nextPage: null, places: [],
+        schemaVersion: 1, revision, page: 0, nextPage: null, places: [place],
       })],
-      [`catalog/${revision}/places/plc_${"a".repeat(43)}/0.json`, JSON.stringify({
-        schemaVersion: 1, revision, placeId: `plc_${"a".repeat(43)}`, page: 0, nextPage: null, services: [],
+      [`catalog/${revision}/places/${placeId}/0.json`, JSON.stringify({
+        schemaVersion: 1, revision, placeId, page: 0, nextPage: null, services: [service],
       })],
-      [`catalog/${revision}/services/svc_${"b".repeat(43)}.json`, JSON.stringify({
-        schemaVersion: 1, revision, service: {},
+      [`catalog/${revision}/services/${serviceId}.json`, JSON.stringify({
+        schemaVersion: 1, revision, service,
       })],
     ]);
     for (const [relativePath, body] of files) {
@@ -110,7 +134,23 @@ test("configuration-site verification checks every local and served file on the 
       .map((path) => `https://config.example.test/lapin-fute/${path}`)
       .sort());
 
-    files.set(`catalog/${revision}/services/svc_${"b".repeat(43)}.json`, "{}");
+    const servicePath = `catalog/${revision}/services/${serviceId}.json`;
+    writeFileSync(join(paths.outputPath, servicePath), JSON.stringify({
+      schemaVersion: 1,
+      revision,
+      service: {},
+    }));
+    await assert.rejects(
+      verifyConfigSite({
+        sitePath: paths.outputPath,
+        origin: "https://config.example.test/lapin-fute/",
+        fetcher: async () => new Response(null, { status: 404 }),
+      }),
+      /does not satisfy the static catalog contract/u,
+    );
+    writeFileSync(join(paths.outputPath, servicePath), files.get(servicePath));
+
+    files.set(servicePath, "{}");
     await assert.rejects(
       verifyConfigSite({
         sitePath: paths.outputPath,
@@ -139,6 +179,8 @@ test("Bunny releases deploy production tags while preview tags stop after qualit
   assert.match(workflow, /tags:\s*\["v\*", "pre-v\*"\]/u);
   assert.match(workflow, /startsWith\(github\.ref_name, 'v'\)/u);
   assert.match(workflow, /package:\s+name: Build release PBW[\s\S]+needs: test/u);
+  assert.match(workflow, /oven-sh\/setup-bun@[a-f0-9]{40} # v2\.2\.0/u);
+  assert.match(workflow, /astral-sh\/setup-uv@[a-f0-9]{40} # v6\.8\.0/u);
   assert.match(workflow, /pebble-tool==5\.0\.40[\s\S]+pebble sdk install 4\.33\.1/u);
   assert.match(workflow, /LAPIN_FUTE_CONFIG_URL: \$\{\{ vars\.CONFIG_SITE_ORIGIN \}\}[\s\S]+npm run build/u);
   assert.match(workflow, /sha256sum "lapin-fute-\$RELEASE_TAG\.pbw" > SHA256SUMS/u);
@@ -165,6 +207,8 @@ test("Bunny releases deploy production tags while preview tags stop after qualit
   assert.match(workflow, /Restoring \$relative_path[\s\S]+Removing newly introduced mutable file/u);
   assert.match(rollbackWorkflow, /deployment_run_id:[\s\S]+type: string/u);
   assert.match(rollbackWorkflow, /gh run download "\$DEPLOYMENT_RUN_ID"[\s\S]+bunny-rollback-\$DEPLOYMENT_RUN_ID/u);
-  assert.match(rollbackWorkflow, /conclusion="\$\(gh api[\s\S]+test "\$conclusion" = success/u);
+  assert.match(rollbackWorkflow, /test "\$status" = completed[\s\S]+workflow_path" = "\.github\/workflows\/deploy-bunny\.yml"/u);
+  assert.match(rollbackWorkflow, /head_repository" = "\$GH_REPO"[\s\S]+event" = workflow_dispatch/u);
   assert.match(rollbackWorkflow, /Restore previous mutable files[\s\S]+Purge Bunny CDN cache[\s\S]+Verify restored mutable files/u);
+  assert.match(rollbackWorkflow, /CONFIG_SITE_ORIGIN must use HTTPS/u);
 });

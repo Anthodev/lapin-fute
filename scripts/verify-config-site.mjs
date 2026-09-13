@@ -1,12 +1,18 @@
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { dirname, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
-import { isCatalogManifest } from "../packages/config-page/src/catalog-client.js";
+import {
+  isCatalogManifest,
+  isCatalogSearchPage,
+  isCatalogServiceDocument,
+  isCatalogServicesPage,
+} from "../packages/config-page/src/catalog-client.js";
 
 const PROJECT_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const DEFAULT_SITE_PATH = join(PROJECT_ROOT, "var/config-site");
 const REQUIRED_CATALOG_GROUPS = ["search", "places", "services"];
 const REMOTE_CONCURRENCY = 16;
+const REMOTE_TIMEOUT_MS = 30_000;
 
 function fail(message) {
   throw new Error(`verify:config-site failed: ${message}`);
@@ -79,9 +85,21 @@ function verifyLocalSite(sitePath) {
     if (groupFiles.length === 0) fail(`current catalog has no ${group} JSON`);
     for (const path of groupFiles) {
       const document = parseJson(path, relative(root, path));
-      if (document?.schemaVersion !== manifest.schemaVersion || document?.revision !== manifest.revision) {
-        fail(`${relative(root, path)} does not match the current schema and revision`);
-      }
+      const catalogPath = relative(revisionRoot, path).split(sep);
+      const page = catalogPath.at(-1)?.match(/^([0-9]+)\.json$/u);
+      const valid = group === "search"
+        ? catalogPath.length === 3 && page !== undefined && page !== null
+          && isCatalogSearchPage(document, manifest.revision, Number(page[1]))
+        : group === "places"
+          ? catalogPath.length === 3 && page !== undefined && page !== null
+            && isCatalogServicesPage(document, manifest.revision, catalogPath[1], Number(page[1]))
+          : catalogPath.length === 2
+            && isCatalogServiceDocument(
+              document,
+              manifest.revision,
+              catalogPath[1].replace(/\.json$/u, ""),
+            );
+      if (!valid) fail(`${relative(root, path)} does not satisfy the static catalog contract`);
       catalogJsonCount += 1;
     }
   }
@@ -109,19 +127,44 @@ async function verifyServedFiles(local, origin, fetcher) {
       const path = local.files[next];
       next += 1;
       const url = remoteUrl(origin, local.root, path);
-      let response;
+      const expected = readFileSync(path);
       try {
-        response = await fetcher(url, {
+        const response = await fetcher(url, {
           headers: { Accept: "*/*", "Cache-Control": "no-cache" },
           redirect: "error",
+          signal: AbortSignal.timeout(REMOTE_TIMEOUT_MS),
         });
-      } catch {
-        fail(`could not fetch ${url.href}`);
+        if (!response.ok) fail(`${url.href} returned HTTP ${response.status}`);
+        const declaredLength = Number(response.headers.get("content-length"));
+        if (Number.isFinite(declaredLength) && declaredLength > expected.length) {
+          fail(`served response is too large for ${url.href}`);
+        }
+        if (response.body === null) fail(`served response has no body for ${url.href}`);
+        const reader = response.body.getReader();
+        const chunks = [];
+        let bytes = 0;
+        let finished = false;
+        try {
+          while (true) {
+            const { done, value } = await reader.read();
+            if (done) {
+              finished = true;
+              break;
+            }
+            bytes += value.byteLength;
+            if (bytes > expected.length) fail(`served response is too large for ${url.href}`);
+            chunks.push(value);
+          }
+        } finally {
+          if (!finished) await reader.cancel();
+          reader.releaseLock();
+        }
+        const actual = Buffer.concat(chunks.map((chunk) => Buffer.from(chunk)), bytes);
+        if (!actual.equals(expected)) fail(`served bytes differ for ${url.href}`);
+      } catch (error) {
+        if (error instanceof Error && error.message.startsWith("verify:config-site failed:")) throw error;
+        fail(`could not fetch or validate ${url.href}`);
       }
-      if (!response.ok) fail(`${url.href} returned HTTP ${response.status}`);
-      const expected = readFileSync(path);
-      const actual = Buffer.from(await response.arrayBuffer());
-      if (!actual.equals(expected)) fail(`served bytes differ for ${url.href}`);
     }
   }
   await Promise.all(Array.from(

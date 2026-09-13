@@ -31,8 +31,13 @@ jobs:
         run: |
           set -euo pipefail
           [[ "$DEPLOYMENT_RUN_ID" =~ ^[1-9][0-9]*$ ]]
-          conclusion="$(gh api "repos/$GH_REPO/actions/runs/$DEPLOYMENT_RUN_ID" --jq .conclusion)"
-          test "$conclusion" = success
+          metadata="$(gh api "repos/$GH_REPO/actions/runs/$DEPLOYMENT_RUN_ID" \
+            --jq '[.status, .path, .event, .head_repository.full_name] | @tsv')"
+          IFS=$'\t' read -r status workflow_path event head_repository <<< "$metadata"
+          test "$status" = completed
+          test "$workflow_path" = ".github/workflows/deploy-bunny.yml"
+          test "$head_repository" = "$GH_REPO"
+          [[ "$event" = push || "$event" = workflow_dispatch ]]
 
       - name: Download retained rollback bundle
         env:
@@ -130,6 +135,10 @@ jobs:
           set -euo pipefail
           test -n "$CONFIG_SITE_ORIGIN"
           origin="${CONFIG_SITE_ORIGIN%/}"
+          case "$origin" in
+            https://*) ;;
+            *) echo "CONFIG_SITE_ORIGIN must use HTTPS" >&2; exit 1 ;;
+          esac
 
           for attempt in 1 2 3; do
             failed=0
