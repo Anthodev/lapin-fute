@@ -4,6 +4,7 @@ import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { buildConfigSite } from "../../../scripts/build-config-site.mjs";
+import { verifyConfigSite } from "../../../scripts/verify-config-site.mjs";
 
 function fixture() {
   const root = mkdtempSync(join(tmpdir(), "lapin-fute-config-site-"));
@@ -48,6 +49,78 @@ test("full configuration build still requires and copies a published catalog", (
       '{"revision":"fixture"}',
     );
     assert.equal(existsSync(join(paths.outputPath, "catalog", "revision", "0.json")), true);
+  } finally {
+    rmSync(paths.root, { recursive: true, force: true });
+  }
+});
+
+test("configuration-site verification checks every local and served file on the current catalog revision", async () => {
+  const paths = fixture();
+  try {
+    const revision = "a".repeat(64);
+    const manifest = {
+      schemaVersion: 1,
+      revision,
+      sourceRevision: "idfm-v1-fixture",
+      createdAt: "2026-09-13T00:00:00.000Z",
+      attribution: [{
+        dataset: "fixture",
+        url: "https://data.iledefrance-mobilites.fr/api/explore/v2.1/catalog/datasets/fixture",
+        retrievedAt: "2026-09-13T00:00:00.000Z",
+        license: "Licence fixture",
+      }],
+    };
+    const files = new Map([
+      ["index.html", "<h1>Lapin Futé</h1>"],
+      ["catalog/manifest.json", JSON.stringify(manifest)],
+      [`catalog/${revision}/search/a/0.json`, JSON.stringify({
+        schemaVersion: 1, revision, page: 0, nextPage: null, places: [],
+      })],
+      [`catalog/${revision}/places/plc_${"a".repeat(43)}/0.json`, JSON.stringify({
+        schemaVersion: 1, revision, placeId: `plc_${"a".repeat(43)}`, page: 0, nextPage: null, services: [],
+      })],
+      [`catalog/${revision}/services/svc_${"b".repeat(43)}.json`, JSON.stringify({
+        schemaVersion: 1, revision, service: {},
+      })],
+    ]);
+    for (const [relativePath, body] of files) {
+      const path = join(paths.outputPath, relativePath);
+      mkdirSync(join(path, ".."), { recursive: true });
+      writeFileSync(path, body);
+    }
+
+    const requested = [];
+    const result = await verifyConfigSite({
+      sitePath: paths.outputPath,
+      origin: "https://config.example.test/lapin-fute/",
+      fetcher: async (url) => {
+        requested.push(url.href);
+        const relativePath = decodeURIComponent(url.pathname.slice("/lapin-fute/".length));
+        const body = files.get(relativePath);
+        return body === undefined
+          ? new Response(null, { status: 404 })
+          : new Response(body, { status: 200 });
+      },
+    });
+
+    assert.equal(result.revision, revision);
+    assert.equal(result.fileCount, files.size);
+    assert.equal(result.catalogJsonCount, 3);
+    assert.deepEqual(requested.sort(), [...files.keys()]
+      .map((path) => `https://config.example.test/lapin-fute/${path}`)
+      .sort());
+
+    files.set(`catalog/${revision}/services/svc_${"b".repeat(43)}.json`, "{}");
+    await assert.rejects(
+      verifyConfigSite({
+        sitePath: paths.outputPath,
+        origin: "https://config.example.test/lapin-fute/",
+        fetcher: async (url) => new Response(files.get(
+          decodeURIComponent(url.pathname.slice("/lapin-fute/".length)),
+        ), { status: 200 }),
+      }),
+      /served bytes differ/u,
+    );
   } finally {
     rmSync(paths.root, { recursive: true, force: true });
   }

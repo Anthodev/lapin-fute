@@ -36,7 +36,7 @@ function exactFields(value, fields) {
     && fields.every((field) => Object.hasOwn(value, field));
 }
 
-function isManifest(value) {
+export function isCatalogManifest(value) {
   return exactFields(value, MANIFEST_FIELDS)
     && value.schemaVersion === SCHEMA_VERSION
     && typeof value.revision === "string" && REVISION.test(value.revision)
@@ -133,7 +133,7 @@ export function createCatalogClient({
     if (signal?.aborted) throw abortError();
     if (manifest !== null) return manifest;
     const body = await json("manifest.json", signal, "BACKEND_UNAVAILABLE", true);
-    if (!isManifest(body)) throw new CatalogClientError("BACKEND_UNAVAILABLE");
+    if (!isCatalogManifest(body)) throw new CatalogClientError("BACKEND_UNAVAILABLE");
     if (signal?.aborted) throw abortError();
     // Concurrent first operations use the first successfully loaded revision.
     manifest ??= body;

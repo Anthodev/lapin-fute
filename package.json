@@ -19,6 +19,7 @@
     "measure:radio": "node scripts/measure-radio.mjs",
     "measure:catalog": "node scripts/measure-catalog.mjs",
     "measure:config-page": "node scripts/measure-config-page.mjs",
+    "verify:config-site": "node scripts/verify-config-site.mjs",
     "test": "node scripts/test.mjs",
     "test:contracts": "node --test packages/contracts/test/contracts.test.ts",
     "test:watch": "node scripts/generate-display-copy.mjs && node --test packages/watch/test/*.test.js",
