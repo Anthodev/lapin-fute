@@ -56,13 +56,13 @@
   },
   {
     "token": "noDepartures",
-    "en": "No departures planned",
-    "fr": "Aucun départ prévu"
+    "en": "No arrivals planned",
+    "fr": "Aucun passage prévu"
   },
   {
     "token": "departed",
-    "en": "Departed",
-    "fr": "Parti"
+    "en": "Arrived",
+    "fr": "Arrivé"
   },
   {
     "token": "now",
@@ -71,13 +71,13 @@
   },
   {
     "token": "departureDelayed",
-    "en": "Departure delayed",
-    "fr": "Départ retardé"
+    "en": "Arrival delayed",
+    "fr": "Passage retardé"
   },
   {
     "token": "departureCancelled",
-    "en": "Departure cancelled",
-    "fr": "Départ annulé"
+    "en": "Arrival cancelled",
+    "fr": "Passage annulé"
   },
   {
     "token": "departureUnknown",
@@ -121,7 +121,7 @@
   },
   {
     "token": "trafficUnknownMessage",
-    "en": "The current line status cannot be confirmed. Departure times remain separate.",
+    "en": "The current line status cannot be confirmed. Arrival times remain separate.",
     "fr": "Impossible de confirmer l'état actuel de la ligne. Les horaires restent affichés séparément."
   },
   {
@@ -146,8 +146,8 @@
   },
   {
     "token": "loadingBody",
-    "en": "First load of favorites and their next departures.",
-    "fr": "Premier chargement des favoris et de leurs prochains départs."
+    "en": "First load of favorites and their next arrivals.",
+    "fr": "Premier chargement des favoris et de leurs prochains passages."
   },
   {
     "token": "backExit",
@@ -201,8 +201,8 @@
   },
   {
     "token": "departuresUnavailableTitle",
-    "en": "Departures unavailable",
-    "fr": "Départs indisponibles"
+    "en": "Arrivals unavailable",
+    "fr": "Passages indisponibles"
   },
   {
     "token": "departuresUnavailableBody",
@@ -211,7 +211,7 @@
   },
   {
     "token": "noCachedDataTitle",
-    "en": "No cached departures",
+    "en": "No cached arrivals",
     "fr": "Aucune donnée en mémoire"
   },
   {
@@ -226,8 +226,8 @@
   },
   {
     "token": "backDepartures",
-    "en": "Back: departures.",
-    "fr": "Retour : prochains départs."
+    "en": "Back: arrivals.",
+    "fr": "Retour : prochains passages."
   },
   {
     "token": "retry",
