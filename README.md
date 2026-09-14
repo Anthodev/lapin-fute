@@ -5,7 +5,7 @@
 <h1 align="center">Lapin Futé</h1>
 
 <p align="center">
-  <strong>Next departures and line traffic at a glance, on your Pebble.</strong>
+  <strong>Next arrivals and line traffic at a glance, on your Pebble.</strong>
   <br>
   Keep six favorite stops across Île-de-France and check them without reaching for your phone.
 </p>
@@ -29,15 +29,15 @@
 
 ## About
 
-Lapin Futé puts Île-de-France public-transport departures on a Pebble watch. The watch shows a list of favorites with the next departures, a departure board per favorite, and the current service messages for its line. A companion on your phone fetches the data from PRIM, Île-de-France Mobilités' open-data platform, and prepares everything the watch displays; the watch itself never goes online.
+Lapin Futé puts Île-de-France public-transport arrivals on a Pebble watch. The watch shows a list of favorite stops with their next arrivals, an arrival board for each, and the current service messages for its line. A companion on your phone fetches the data from PRIM, Île-de-France Mobilités' open-data platform, and prepares everything the watch displays; the watch itself never goes online.
 
 ## Features
 
-- **Six favorites, five transport modes.** Choose any stop, line, and direction across Métro, RER, Transilien, Tram, and Bus. Favorites are renamed and reordered on the phone page, which shows official line badges and colors.
-- **Departures at a glance.** The favorites list already shows the next departures for each stop; Select opens a full board for one favorite. Countdowns keep ticking on the watch between refreshes.
-- **Traffic view.** Select again on a departure board to page through the current service messages for that line.
-- **Refresh when needed.** Open the app, switch favorite, choose Refresh all, or hold Select to request departures. Recent results are reused for 60 seconds; after a failed refresh, the last complete result remains visibly stale for at most 15 minutes. There is no periodic network polling.
-- **Clear data states.** The app distinguishes real-time departures, mixed real-time and scheduled results, updates in progress, and missing cached data.
+- **Six favorite stops, five transport modes.** Choose any stop, line, and direction across Métro, RER, Transilien, Tram, and Bus. Favorite stops are renamed and reordered on the phone page, which shows official line badges and colors.
+- **Arrivals at a glance.** The favorites list already shows the next arrivals for each stop; Select opens a full arrival board for one favorite. Countdowns keep ticking on the watch between refreshes.
+- **Traffic view.** Select again on an arrival board to page through the current service messages for that line.
+- **Refresh when needed.** Open the app, switch favorite, choose Refresh all, or hold Select to request arrivals. Recent results are reused for 60 seconds; after a failed refresh, the last complete result remains visibly stale for at most 15 minutes. There is no periodic network polling.
+- **Clear data states.** The app distinguishes real-time arrivals, mixed real-time and scheduled results, updates in progress, and missing cached data.
 - **English and French.** The watch interface and the settings page are both bilingual.
 - **Settings that fit your phone.** Light and dark themes follow your system preference. Collapsible sections keep favorite editing, PRIM access, and watch synchronization easy to reach.
 
@@ -54,8 +54,8 @@ Lapin Futé puts Île-de-France public-transport departures on a Pebble watch. T
 
 1. Install [Lapin Futé from RePebble](https://apps.repebble.com/6d6aa01b7ecb4cfea469a183).
 2. In the Pebble mobile app, open Lapin Futé's settings. Under PRIM access, paste a personal access token generated on the [PRIM portal](https://prim.iledefrance-mobilites.fr/fr/mes-jetons-authentification).
-3. Add up to six favorites by searching the bundled station catalog; searching and adding work without a token. Save, and your settings sync to the watch.
-4. Open Lapin Futé on the watch. Departures refresh whenever the app opens, you change favorite, or you hold Select; the phone needs to be connected for fresh data.
+3. Add up to six favorite stops by searching the bundled station catalog; searching and adding work without a token. Save, and your settings sync to the watch.
+4. Open Lapin Futé on the watch. Arrivals refresh whenever the app opens, you change favorite, or you hold Select; the phone needs to be connected for fresh data.
 
 Developers can also build and install the app locally using the instructions in [Build from source](#build-from-source).
 
@@ -66,9 +66,9 @@ Developers can also build and install the app locally using the instructions in 
 | Favorites | **Up / Down** | Move through favorites and the **Refresh all** row |
 | Favorites | **Select** | Open the highlighted favorite |
 | Favorites · Refresh all | **Select** | Refresh every favorite |
-| Departures | **Up / Down** | Switch favorite |
-| Departures | **Select** | Open the traffic view |
-| Departures | **Hold Select** | Force a refresh |
+| Arrivals | **Up / Down** | Switch favorite |
+| Arrivals | **Select** | Open the traffic view |
+| Arrivals | **Hold Select** | Force a refresh |
 | Traffic | **Up / Down** | Page through messages |
 | Any screen | **Back** | Return to the previous screen |
 
