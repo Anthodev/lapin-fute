@@ -367,11 +367,11 @@
   <main class="page">
     <section class="brief" aria-labelledby="page-title">
       <span class="prototype-label">Prototype · non production</span>
-      <h1 id="page-title">Aperçu → Départs → État de la ligne</h1>
+      <h1 id="page-title">Aperçu → Passages → État de la ligne</h1>
       <p class="lede">Une lecture progressive : l'essentiel pour tous les favoris, le détail d'un trajet, puis le message trafic complet.</p>
       <ol class="flow-map">
-        <li><div><strong>Aperçu semi-riche</strong><span>Un prochain départ par favori, avec un signal uniquement si l'état de la ligne mérite l'attention.</span></div></li>
-        <li><div><strong>Détail des départs</strong><span>Le prochain passage domine. La bande basse résume l'état de la ligne et ouvre le niveau suivant.</span></div></li>
+        <li><div><strong>Aperçu semi-riche</strong><span>Un prochain passage par favori, avec un signal uniquement si l'état de la ligne mérite l'attention.</span></div></li>
+        <li><div><strong>Détail des passages</strong><span>Le prochain passage domine. La bande basse résume l'état de la ligne et ouvre le niveau suivant.</span></div></li>
         <li><div><strong>État de la ligne</strong><span>Confirmation normale ou message IDFM paginé, sans réduire le texte jusqu'à l'illisibilité.</span></div></li>
       </ol>
       <aside class="decision">
@@ -392,7 +392,7 @@
         </div></fieldset>
         <fieldset><legend>Écran</legend><div class="button-group">
           <button class="control" data-group="screen" data-value="overview" aria-pressed="true">APERÇU</button>
-          <button class="control" data-group="screen" data-value="detail" aria-pressed="false">DÉPARTS</button>
+          <button class="control" data-group="screen" data-value="detail" aria-pressed="false">PASSAGES</button>
           <button class="control" data-group="screen" data-value="traffic" aria-pressed="false">TRAFIC</button>
         </div></fieldset>
         <fieldset><legend>Données</legend><div class="button-group">
@@ -436,7 +436,7 @@
             <li>état de ligne autoritatif, fraîcheur et message borné ;</li>
             <li>Select et Retour deviennent de la navigation contextuelle.</li>
           </ul></section>
-          <section class="note"><h2>Source trafic envisagée</h2><p>L'API PRIM <a href="https://prim.iledefrance-mobilites.fr/fr/apis/idfm-disruptions_bulk">Messages Info Trafic — Requête globale</a> publie lignes impactées, sévérité, titre, message et périodes. « Normal » n'est valide qu'après une réponse complète et récente ; une erreur donne « inconnu ». Un départ retardé ne suffit jamais à déclarer toute la ligne retardée.</p></section>
+          <section class="note"><h2>Source trafic envisagée</h2><p>L'API PRIM <a href="https://prim.iledefrance-mobilites.fr/fr/apis/idfm-disruptions_bulk">Messages Info Trafic — Requête globale</a> publie lignes impactées, sévérité, titre, message et périodes. « Normal » n'est valide qu'après une réponse complète et récente ; une erreur donne « inconnu ». Un passage retardé ne suffit jamais à déclarer toute la ligne retardée.</p></section>
           <section class="note legal"><h2>Pastilles de ligne</h2><p>Les pastilles affichées sont propres au prototype. Les droits de redistribution et de modification des pictogrammes officiels ne sont pas suffisamment explicites. Le protocole montre actuel ne transporte par ailleurs ni mode ni couleurs de ligne.</p></section>
           <section class="note"><h2>Chargement</h2><p>Le plein écran avec sablier est réservé au démarrage sans aucun résumé utilisable. Avec du cache, l'aperçu reste affiché pendant l'actualisation et les succès partiels restent disponibles.</p></section>
         </div>
@@ -453,15 +453,15 @@
           normal: "Trafic normal", delayed: "Retards sur la ligne", stopped: "Trafic interrompu", unknown: "État du trafic indisponible",
           normalTitle: "Aucune perturbation signalée", normalMessage: "Dernière vérification à 09:42.",
           delayedTitle: "Retards sur la ligne", delayedValidity: "En cours · reprise estimée 10:30",
-          delayedPages: ["Des retards sont constatés sur l'ensemble de la ligne en raison d'un incident d'exploitation.", "Prévoyez un temps de parcours supplémentaire. Vérifiez votre correspondance avant le départ."],
+          delayedPages: ["Des retards sont constatés sur l'ensemble de la ligne en raison d'un incident d'exploitation.", "Prévoyez un temps de parcours supplémentaire. Vérifiez votre correspondance avant de partir."],
           stoppedTitle: "Trafic interrompu", stoppedValidity: "Entre République et Balard · jusqu'à 11:15",
           stoppedPages: ["Le trafic est interrompu entre République et Balard à la suite d'un incident voyageur.", "Une reprise progressive est estimée à 11:15. Empruntez les itinéraires alternatifs indiqués en station."],
           unknownTitle: "Information trafic indisponible", unknownMessage: "Impossible de confirmer l'état actuel de la ligne. Les horaires restent affichés séparément.",
-          loadingTitle: "Rafraîchissement des informations en cours", loadingBody: "Premier chargement des favoris et de leurs prochains départs.",
+          loadingTitle: "Rafraîchissement des informations en cours", loadingBody: "Premier chargement des favoris et de leurs prochains passages.",
           unconfiguredTitle: "Configuration requise", unconfiguredBody: "Ajoutez votre clé PRIM et au moins un favori dans les options du téléphone.",
-          unavailableTitle: "Départs indisponibles", unavailableBody: "La connexion n'a pas permis de récupérer les informations.",
+          unavailableTitle: "Passages indisponibles", unavailableBody: "La connexion n'a pas permis de récupérer les informations.",
           backExit: "Retour quitte l'application.", retry: "Select · Réessayer", automatic: "La configuration sera détectée automatiquement.",
-          departedDelayed: "Départ retardé", positions: "favoris"
+          departedDelayed: "Passage retardé", positions: "favoris"
         },
         en: {
           time: "09:42", ready: "up to date", refreshing: "updating", stale: "old data",
@@ -472,12 +472,12 @@
           delayedPages: ["Delays are affecting the whole line because of an operating incident.", "Allow extra journey time. Check your connection before leaving."],
           stoppedTitle: "Service interrupted", stoppedValidity: "Between République and Balard · until 11:15",
           stoppedPages: ["Service is interrupted between République and Balard following a passenger incident.", "Progressive recovery is estimated at 11:15. Use the alternatives shown in stations."],
-          unknownTitle: "Traffic information unavailable", unknownMessage: "The current line status cannot be confirmed. Departure times remain separate.",
-          loadingTitle: "Refreshing information", loadingBody: "First load of favorites and their next departures.",
+          unknownTitle: "Traffic information unavailable", unknownMessage: "The current line status cannot be confirmed. Arrival times remain separate.",
+          loadingTitle: "Refreshing information", loadingBody: "First load of favorites and their next arrivals.",
           unconfiguredTitle: "Configuration required", unconfiguredBody: "Add your PRIM key and at least one favorite in phone options.",
-          unavailableTitle: "Departures unavailable", unavailableBody: "The connection could not retrieve the information.",
+          unavailableTitle: "Arrivals unavailable", unavailableBody: "The connection could not retrieve the information.",
           backExit: "Back exits the app.", retry: "Select · Retry", automatic: "Configuration will be detected automatically.",
-          departedDelayed: "Departure delayed", positions: "favorites"
+          departedDelayed: "Arrival delayed", positions: "favorites"
         }
       };
 
@@ -615,8 +615,8 @@
           keys[0].textContent = state.language === "fr" ? "Page précédente" : "Previous page";
           keys[1].textContent = state.language === "fr" ? "Aucune action" : "No action";
           keys[2].textContent = state.language === "fr" ? "Page suivante" : "Next page";
-          keys[3].textContent = state.language === "fr" ? "Départs" : "Departures";
-          interactionNote.textContent = state.language === "fr" ? "Haut/Bas pagine un message long. Select reste sans action. Retour revient aux départs." : "Up/Down pages long messages. Select has no action. Back returns to departures.";
+          keys[3].textContent = state.language === "fr" ? "Passages" : "Arrivals";
+          interactionNote.textContent = state.language === "fr" ? "Haut/Bas pagine un message long. Select reste sans action. Retour revient aux passages." : "Up/Down pages long messages. Select has no action. Back returns to arrivals.";
         }
       }
 
