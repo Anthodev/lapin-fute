@@ -24,12 +24,20 @@
 <p align="center">
   <img src="https://img.shields.io/badge/Pebble-emery%20%7C%20gabbro-00A5E0" alt="Pebble emery and gabbro">
   <img src="https://img.shields.io/badge/Language-EN%20%7C%20FR-00A5E0" alt="English and French">
-  <a href="https://apps.repebble.com/6d6aa01b7ecb4cfea469a183"><img src="https://img.shields.io/badge/RePebble-v1.0.1-FF4938" alt="Lapin Futé 1.0.1 on RePebble"></a>
 </p>
 
 ## About
 
 Lapin Futé puts Île-de-France public-transport arrivals on a Pebble watch. The watch shows a list of favorite stops with their next arrivals, an arrival board for each, and the current service messages for its line. A companion on your phone fetches the data from PRIM, Île-de-France Mobilités' open-data platform, and prepares everything the watch displays; the watch itself never goes online.
+
+<p align="center">
+  <img src="assets/emery_01-favorites.png" alt="Lapin Futé favorites on Pebble Time 2" width="45%">
+  <img src="assets/gabbro_01-favorites.png" alt="Lapin Futé favorites on Pebble Round 2" width="45%">
+</p>
+<p align="center">
+  <img src="assets/emery_02-departures.png" alt="Lapin Futé arrival board on Pebble Time 2" width="45%">
+  <img src="assets/gabbro_02-departures.png" alt="Lapin Futé arrival board on Pebble Round 2" width="45%">
+</p>
 
 ## Features
 

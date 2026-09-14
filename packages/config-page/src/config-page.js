@@ -229,6 +229,12 @@ function renderFavorites() {
   const available = LIMITS.favorites - used;
   setText(elements.favorites_count,
     `${used} ${used === 1 ? copy.favoriteUsed : copy.favoritesUsed} · ${available} ${available === 1 ? copy.favoriteAvailable : copy.favoritesAvailable}`);
+  const sharedQuays = new Map();
+  state.favorites.forEach((favorite) => {
+    if (!Object.hasOwn(favorite, "routing")) return;
+    const quay = favorite.routing.monitoringRef;
+    sharedQuays.set(quay, (sharedQuays.get(quay) ?? 0) + 1);
+  });
 
   state.favorites.forEach((favorite, index) => {
     const item = document.createElement("li");
@@ -252,6 +258,12 @@ function renderFavorites() {
       unresolved.className = "unresolved";
       unresolved.textContent = copy.favoriteUnresolved;
       labels.append(unresolved);
+    }
+    if (Object.hasOwn(favorite, "routing") && sharedQuays.get(favorite.routing.monitoringRef) > 1) {
+      const sibling = document.createElement("span");
+      sibling.className = "favorite-sibling";
+      sibling.textContent = copy.siblingQuay;
+      labels.append(sibling);
     }
     const routeRow = document.createElement("div");
     routeRow.className = "favorite-route";

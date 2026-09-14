@@ -45,6 +45,23 @@ function snapshot(freshness, entries, sourceUpdatedAt) {
   };
 }
 
+function quayPayload(visitList) {
+  return { Siri: { ServiceDelivery: { ResponseTimestamp: "2026-01-15T08:30:00Z",
+    StopMonitoringDelivery: [{ ResponseTimestamp: "2026-01-15T08:30:00Z", MonitoredStopVisit: visitList }] } } };
+}
+
+function quayVisit(monitoringRef, lineRef, destinationRef, expectedIso) {
+  return {
+    RecordedAtTime: "2026-01-15T08:29:00Z",
+    MonitoringRef: { value: monitoringRef },
+    MonitoredVehicleJourney: {
+      LineRef: { value: lineRef },
+      DestinationRef: { value: destinationRef },
+      MonitoredCall: { ExpectedDepartureTime: expectedIso, DepartureStatus: "ontime" }
+    }
+  };
+}
+
 function visits(payload) {
   return payload.Siri.ServiceDelivery.StopMonitoringDelivery[0].MonitoredStopVisit;
 }
@@ -171,12 +188,55 @@ test("exact terminal routing ignores Retour, blank and absent SIRI direction lab
   opposite.MonitoredVehicleJourney.DestinationRef = { value: "STIF:StopPoint:Q:99999:" };
   opposite.MonitoredVehicleJourney.MonitoredCall.ExpectedDepartureTime = "2026-01-15T08:31:00Z";
   visits(payload).push(opposite);
+  // Quay refs pool sibling destinations after the exact matches.
   assert.deepEqual(departures.normalizePrimDepartureResponse(payload, refs, FETCHED_AT),
-    snapshot("REALTIME", [departure("08:34:00", 4, "ON_TIME", "08:33:00")]));
+    snapshot("REALTIME", [departure("08:34:00", 4, "ON_TIME", "08:33:00"), departure("08:31:00", 1, "ON_TIME", "08:33:00")],
+      Date.parse("2026-01-15T12:00:00Z") / 1000));
   journey.DestinationRef = opposite.MonitoredVehicleJourney.DestinationRef;
-  assert.throws(function () { departures.normalizePrimDepartureResponse(payload, refs, FETCHED_AT); });
+  // Zero exact matches at a quay ref still pools instead of failing.
+  assert.deepEqual(departures.normalizePrimDepartureResponse(payload, refs, FETCHED_AT),
+    snapshot("REALTIME", [departure("08:31:00", 1, "ON_TIME", "08:33:00", 3), departure("08:34:00", 4, "ON_TIME", "08:33:00")],
+      Date.parse("2026-01-15T12:00:00Z") / 1000));
   delete journey.DestinationRef;
   assert.throws(function () { departures.normalizePrimDepartureResponse(payload, refs, FETCHED_AT); });
+});
+
+test("quay monitoring pools sibling destinations after exact matches", function () {
+  var quay = "STIF:StopPoint:Q:25433:";
+  var line = "STIF:Line::C01246:";
+  var refs = {
+    monitoringRef: quay,
+    lineRef: line,
+    destinationRef: "STIF:StopPoint:Q:493344:"
+  };
+  var payload = quayPayload([
+    quayVisit(quay, line, "STIF:StopPoint:Q:2181:", "2026-01-15T08:42:00Z"),
+    quayVisit(quay, line, "STIF:StopPoint:Q:2181:", "2026-01-15T08:50:00Z"),
+    quayVisit(quay, line, refs.destinationRef, "2026-01-15T08:35:00Z"),
+    quayVisit(quay, line, refs.destinationRef, "2026-01-15T09:00:00Z"),
+    quayVisit("STIF:StopPoint:Q:99999:", line, refs.destinationRef, "2026-01-15T08:36:00Z")
+  ]);
+  assert.deepEqual(departures.normalizePrimDepartureResponse(payload, refs, FETCHED_AT),
+    snapshot("REALTIME", [
+      departure("08:35:00", 5, "ON_TIME", undefined, 25),
+      departure("09:00:00", 30, "ON_TIME"),
+      departure("08:42:00", 12, "ON_TIME", undefined, 8),
+      departure("08:50:00", 20, "ON_TIME")
+    ]));
+});
+
+test("area monitoring stays strict and yields an empty snapshot instead of failing", function () {
+  var refs = {
+    monitoringRef: "STIF:StopArea:SP:4001:",
+    lineRef: "STIF:Line::C005:",
+    destinationRef: "STIF:StopArea:SP:43219:"
+  };
+  var payload = quayPayload([
+    quayVisit(refs.monitoringRef, refs.lineRef, "STIF:StopArea:SP:99999:", "2026-01-15T08:36:00Z"),
+    quayVisit(refs.monitoringRef, refs.lineRef, "STIF:StopArea:SP:98888:", "2026-01-15T08:40:00Z")
+  ]);
+  assert.deepEqual(departures.normalizePrimDepartureResponse(payload, refs, FETCHED_AT),
+    snapshot("SCHEDULED", []));
 });
 
 test("explicit offsets are independent of local timezone and malformed timestamps fail closed", function () {

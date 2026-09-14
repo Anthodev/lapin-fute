@@ -4,6 +4,7 @@ var contracts = require("./contracts");
 var RFC3339_EXPLICIT_OFFSET = /^([0-9]{4})-([0-9]{2})-([0-9]{2})T([0-9]{2}):([0-9]{2}):([0-9]{2})(?:\.[0-9]+)?(Z|([+-])([0-9]{2}):([0-9]{2}))$/;
 var RETRY_AFTER_DELTA = /^[0-9]+$/;
 var STOP_MONITORING_URL = "https://prim.iledefrance-mobilites.fr/marketplace/stop-monitoring";
+var QUAY_MONITORING_PREFIX = "STIF:StopPoint:Q:";
 
 function fail() {
   throw new Error("Invalid PRIM stop-monitoring response");
@@ -75,7 +76,7 @@ function sourceStatus(value) {
   return "UNKNOWN";
 }
 
-function matchedJourney(visit, routing) {
+function matchTier(visit, routing) {
   var monitoringRef = requiredRef(visit.MonitoringRef);
   var journey = visit.MonitoredVehicleJourney;
   var lineRef;
@@ -85,10 +86,14 @@ function matchedJourney(visit, routing) {
   if (!contracts.isObject(journey.MonitoredCall)) fail();
   if (monitoringRef !== routing.monitoringRef || lineRef !== routing.lineRef) return undefined;
   // SIRI DirectionRef is an operator label, not the catalog's GTFS direction_id.
-  // Only an exact terminal reference establishes the selected service.
+  // A StopPoint:Q monitoring ref is a physical one-way quay, and PRIM labels
+  // partial (short-turn) trips with the full-line terminal quay, so a differing
+  // destination pools at tier 1 after the exact matches. StopArea refs (rail)
+  // span both directions and keep the exact destination requirement.
   destinationRef = requiredRef(journey.DestinationRef);
-  if (destinationRef !== routing.destinationRef) return undefined;
-  return journey;
+  if (destinationRef === routing.destinationRef) return 0;
+  if (routing.monitoringRef.indexOf(QUAY_MONITORING_PREFIX) === 0) return 1;
+  return undefined;
 }
 
 function parseMatchedVisit(journey) {
@@ -105,11 +110,14 @@ function parseMatchedVisit(journey) {
   };
 }
 
-// Validate every visit, but retain only the first four in chronological order.
-// Equal timestamps keep source order without relying on an ES5 engine's sort stability.
+// Validate every visit, but retain only the first four, exact-destination
+// matches first and then chronologically. Ties keep source order without
+// relying on an ES5 engine's sort stability.
 function insertBounded(visits, visit) {
   var index = visits.length;
-  while (index > 0 && visits[index - 1].expectedAt > visit.expectedAt) index -= 1;
+  while (index > 0 &&
+      (visits[index - 1].tier > visit.tier ||
+        (visits[index - 1].tier === visit.tier && visits[index - 1].expectedAt > visit.expectedAt))) index -= 1;
   if (index >= contracts.LIMITS.departures) return;
   visits.splice(index, 0, visit);
   if (visits.length > contracts.LIMITS.departures) visits.pop();
@@ -123,7 +131,7 @@ function normalizePrimDepartureResponse(value, routing, fetchedAt) {
   var responseTimestamp;
   var visits;
   var visit;
-  var journey;
+  var tier;
   var recordedAt;
   var matched = [];
   var departures = [];
@@ -158,13 +166,14 @@ function normalizePrimDepartureResponse(value, routing, fetchedAt) {
       if (!contracts.isObject(visit)) fail();
       visitCount += 1;
       recordedAt = epochSeconds(visit.RecordedAtTime);
-      journey = matchedJourney(visit, routing);
-      if (typeof journey === "undefined") continue;
+      tier = matchTier(visit, routing);
+      if (typeof tier === "undefined") continue;
       if (typeof sourceUpdatedAt === "undefined" || recordedAt > sourceUpdatedAt) sourceUpdatedAt = recordedAt;
-      insertBounded(matched, parseMatchedVisit(journey));
+      visit = parseMatchedVisit(visit.MonitoredVehicleJourney);
+      visit.tier = tier;
+      insertBounded(matched, visit);
     }
   }
-  if (matched.length === 0 && visitCount > 0) fail();
   for (index = 0; index < matched.length; index += 1) {
     visit = matched[index];
     if (visit.hasExpected) realtimeCount += 1;
