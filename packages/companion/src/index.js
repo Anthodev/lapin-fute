@@ -306,7 +306,7 @@ Companion.prototype._onShowConfiguration = function () {
   var language;
   var url;
   if (!this._configurationValid) return;
-  language = configuration.activeWatchLanguage(this._Pebble);
+  language = configuration.effectiveWatchLanguage(this._Pebble, this._configuration.languagePreference);
   url = configuration.configurationUrl(this._configurationUrl, this._configuration, language);
   if (url !== null && typeof this._Pebble.openURL === "function") this._Pebble.openURL(url);
 };
@@ -328,12 +328,15 @@ Companion.prototype._onWebviewClosed = function (event) {
     if (this._credentialBlocked
         || this._configuration.keyStatus === contracts.KEY_STATUS.INVALID) {
       pending = {
-        schemaVersion: contracts.CONFIGURATION_VERSION,
+        schemaVersion: configuration.CONFIG_SCHEMA_VERSION,
         favorites: next.favorites.map(contracts.copyPhoneFavorite),
         primApiKey: next.primApiKey,
-        keyStatus: contracts.KEY_STATUS.INVALID
+        keyStatus: contracts.KEY_STATUS.INVALID,
+        languagePreference: next.languagePreference
       };
-      if (!configuration.saveInvalidConfiguration(this._storage, pending)) return;
+      // A journal alone cannot persist edited favorites or language. Commit the
+      // INVALID candidate before removing the previous credential's authority.
+      if (!configuration.saveConfiguration(this._storage, pending)) return;
       if (!configuration.clearInvalidKeyStatus(this._storage)
           || !configuration.saveConfiguration(this._storage, next)) next = pending;
     } else if (!configuration.clearInvalidKeyStatus(this._storage)
@@ -349,7 +352,7 @@ Companion.prototype._onWebviewClosed = function (event) {
   nextWatch = next.favorites.map(contracts.copyFavorite);
   wireChanged = JSON.stringify(nextWatch) !== JSON.stringify(this._watchFavorites)
     || next.keyStatus !== this._configuration.keyStatus
-    || configuration.activeWatchLanguage(this._Pebble) !== this._watchLanguage;
+    || configuration.effectiveWatchLanguage(this._Pebble, next.languagePreference) !== this._watchLanguage;
   invalidate = update.apiKeyUpdate.action !== "KEEP"
     || !sameFavoriteContentSet(this._watchFavorites, nextWatch)
     || this._configuration.favorites.some(function (favorite) {
@@ -381,7 +384,7 @@ Companion.prototype._sendConfiguration = function (forceFull) {
   var binding = this._sync.binding();
   if (!this._configurationValid || !binding.epoch
       || !configuration.areFavoritesSecretFree(this._watchFavorites, this._configuration.primApiKey, null)) return;
-  var language = configuration.activeWatchLanguage(this._Pebble);
+  var language = configuration.effectiveWatchLanguage(this._Pebble, this._configuration.languagePreference);
   var records;
   try {
     records = this._configuration.favorites.map(function (favorite) {
@@ -782,10 +785,11 @@ Companion.prototype._hydrateRouting = function (flight, favorites, complete) {
       if (remaining !== 0) return;
       if (Object.keys(recovered).length === 0) { complete(recovered); return; }
       hydrated = {
-        schemaVersion: contracts.CONFIGURATION_VERSION,
+        schemaVersion: configuration.CONFIG_SCHEMA_VERSION,
         favorites: self._configuration.favorites.map(contracts.copyPhoneFavorite),
         primApiKey: self._configuration.primApiKey,
-        keyStatus: self._configuration.keyStatus
+        keyStatus: self._configuration.keyStatus,
+        languagePreference: self._configuration.languagePreference
       };
       hydrated.favorites.forEach(function (favorite) {
         if (!favorite.routing && recovered[favorite.serviceId] && favorites.some(function (captured) {
@@ -800,7 +804,7 @@ Companion.prototype._hydrateRouting = function (flight, favorites, complete) {
         return;
       }
       if (changed && configuration.configurationUrl(
-        self._configurationUrl, hydrated, configuration.activeWatchLanguage(self._Pebble)
+        self._configurationUrl, hydrated, configuration.effectiveWatchLanguage(self._Pebble, hydrated.languagePreference)
       ) !== null && configuration.saveConfiguration(self._storage, hydrated)
           && flight.generation === self._lifecycleGeneration) {
         self._configuration = hydrated;
@@ -1028,9 +1032,10 @@ Companion.prototype._startOverviewFlight = function (request) {
         if (result !== null) {
           groups[serviceId] = result.group;
           var hydrated = {
-            schemaVersion: contracts.CONFIGURATION_VERSION,
+            schemaVersion: configuration.CONFIG_SCHEMA_VERSION,
             favorites: self._configuration.favorites.map(contracts.copyPhoneFavorite),
-            primApiKey: self._configuration.primApiKey, keyStatus: self._configuration.keyStatus
+            primApiKey: self._configuration.primApiKey, keyStatus: self._configuration.keyStatus,
+            languagePreference: self._configuration.languagePreference
           };
           var changed = false;
           hydrated.favorites.forEach(function (favorite) {
@@ -1043,7 +1048,8 @@ Companion.prototype._startOverviewFlight = function (request) {
             changed = true;
           });
           if (changed && configuration.areFavoritesSecretFree(hydrated.favorites, hydrated.primApiKey, null)
-              && configuration.configurationUrl(self._configurationUrl, hydrated, configuration.activeWatchLanguage(self._Pebble)) !== null
+              && configuration.configurationUrl(self._configurationUrl, hydrated,
+                configuration.effectiveWatchLanguage(self._Pebble, hydrated.languagePreference)) !== null
               && configuration.saveConfiguration(self._storage, hydrated) && current()) {
             self._configuration = hydrated;
             self._sync.enrichPhoneFavorites(hydrated.favorites, flight.generation);
@@ -1148,10 +1154,11 @@ Companion.prototype._invalidateCredential = function () {
   if (this._configuration.primApiKey === null
       || this._configuration.keyStatus === contracts.KEY_STATUS.INVALID) return;
   invalid = {
-    schemaVersion: contracts.CONFIGURATION_VERSION,
+    schemaVersion: configuration.CONFIG_SCHEMA_VERSION,
     favorites: this._configuration.favorites.map(contracts.copyPhoneFavorite),
     primApiKey: this._configuration.primApiKey,
-    keyStatus: contracts.KEY_STATUS.INVALID
+    keyStatus: contracts.KEY_STATUS.INVALID,
+    languagePreference: this._configuration.languagePreference
   };
   configuration.saveInvalidConfiguration(this._storage, invalid);
   this._invalidateLifecycle();

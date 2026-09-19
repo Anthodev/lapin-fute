@@ -33,6 +33,8 @@ const elements = Object.fromEntries([
   "force-sync-label", "force-sync", "config-footer", "about-open", "about-view", "about-back",
   "about-title", "about-en", "about-fr",
   "add-caption", "sync-caption",
+  "language-section", "language-title", "language-label", "language-select", "language-hint",
+  "language-unsupported", "language-option-auto", "language-option-french", "language-option-english",
   "arrival-step", "arrivals-label", "arrival-select", "journey-hint", "configuration-upgrade",
 ].map((id) => [id.replaceAll("-", "_"), byId(id)]));
 
@@ -119,6 +121,7 @@ function dispatch(action) {
   state = reduceConfigState(state, action);
   renderKey();
   renderFavorites();
+  renderLanguage();
 }
 
 function applyCopy() {
@@ -142,6 +145,11 @@ function applyCopy() {
     ["syncTitle", elements.sync_title], ["syncHint", elements.sync_hint],
     ["syncCaption", elements.sync_caption],
     ["forceSyncLabel", elements.force_sync_label],
+    ["languageTitle", elements.language_title], ["languageLabel", elements.language_label],
+    ["languageHint", elements.language_hint], ["languageUnsupported", elements.language_unsupported],
+    ["languageOptionAuto", elements.language_option_auto],
+    ["languageOptionFrench", elements.language_option_french],
+    ["languageOptionEnglish", elements.language_option_english],
   ]) setText(element, copy[key]);
   elements.key_input.placeholder = copy.keyPlaceholder;
   elements.place_search.placeholder = copy.searchPlaceholder;
@@ -162,6 +170,19 @@ function renderKey() {
   elements.key_remove.hidden = !state.hasKey;
   setText(elements.key_remove, removing ? copy.keyUndoRemove : copy.keyRemove);
   setText(elements.key_toggle, keyRevealed ? copy.keyHide : copy.keyShow);
+}
+
+// The selector restores the launch-carried preference and is offered only when
+// the launch advertised support and the session is editable: an older phone
+// keeps its stored preference because the close payload then omits the field,
+// and a read-only session can never save. The compatibility note explains the
+// disabled selector only where editing is otherwise possible.
+function renderLanguage() {
+  elements.language_select.value = state.languagePreference;
+  const offered = state.editable === true && state.languagePreferenceSupported === true;
+  elements.language_select.disabled = !offered;
+  elements.language_unsupported.hidden = state.editable !== true
+    || state.languagePreferenceSupported === true;
 }
 
 function actionButton(label, disabled, action, className = "quiet") {
@@ -674,6 +695,10 @@ elements.force_sync.addEventListener("change", () => {
   dispatch({ type: "force-full-sync", value: elements.force_sync.checked });
 });
 
+elements.language_select.addEventListener("change", () => {
+  dispatch({ type: "language-preference", value: elements.language_select.value });
+});
+
 elements.save.addEventListener("click", () => {
   if (!state.editable) return;
   const keyError = apiKeyError(state.keyDraft.value);
@@ -709,7 +734,7 @@ elements.save.addEventListener("click", () => {
 });
 
 // Section open/closed state is the only local persistence on this page:
-// four booleans under one namespaced key, keyed by the stable section IDs.
+// five booleans under one namespaced key, keyed by the stable section IDs.
 // The key draft, favorites, and catalog data never reach storage, and
 // unavailable or corrupt storage (private mode, blocked cookies, cleared
 // origins) leaves the markup defaults in place and the page functional.
@@ -718,6 +743,7 @@ const sectionElements = [
   elements.prim_section,
   elements.favorites_section,
   elements.add_section,
+  elements.language_section,
   elements.sync_section,
 ];
 
@@ -766,6 +792,7 @@ window.addEventListener("pagehide", () => {
 
 applyCopy();
 renderKey();
+renderLanguage();
 renderFavorites();
 elements.configuration_upgrade.hidden = state.editable;
 for (const element of [

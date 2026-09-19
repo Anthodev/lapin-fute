@@ -30,11 +30,12 @@ function withoutRouting(favorite) {
   return copy;
 }
 
-function configuredStorage(favorites, status) {
+function configuredStorage(favorites, status, languagePreference) {
   var storage = new fakes.FakeStorage();
   assert.equal(configuration.saveConfiguration(storage, {
-    schemaVersion: 2, favorites: favorites || [FIRST], primApiKey: TEST_KEY,
-    keyStatus: typeof status === "number" ? status : contracts.KEY_STATUS.CONFIGURED
+    schemaVersion: configuration.CONFIG_SCHEMA_VERSION, favorites: favorites || [FIRST], primApiKey: TEST_KEY,
+    keyStatus: typeof status === "number" ? status : contracts.KEY_STATUS.CONFIGURED,
+    languagePreference: typeof languagePreference === "undefined" ? "auto" : languagePreference
   }), true);
   storage.writes.length = 0;
   return storage;
@@ -208,11 +209,17 @@ function resolveProduction(target, favorites) {
     } else respond(target, xhr, 200, trafficBody(favorites));
   });
 }
-function closeWith(target, action, favorites, value, forceFull) {
+function closeWith(target, action, favorites, value, forceFull, languagePreference) {
   var update = { schemaVersion: 2, favorites: favorites, apiKeyUpdate: { schemaVersion: 1, action: action } };
   if (action === "REPLACE") update.apiKeyUpdate.value = value;
   if (forceFull) update.forceFullSync = true;
+  if (typeof languagePreference !== "undefined") update.languagePreference = languagePreference;
   target.Pebble.emit("webviewclosed", { response: "pebblejs://close#" + encodeURIComponent(JSON.stringify(update)) });
+}
+
+function openConfiguration(target) {
+  target.Pebble.emit("showConfiguration");
+  return JSON.parse(decodeURIComponent(target.Pebble.openedUrls.at(-1).split("#")[1]));
 }
 
 test("Core Android decoded close responses preserve favorites with line colors", function () {
@@ -226,6 +233,108 @@ test("Core Android decoded close responses preserve favorites with line colors",
   target.Pebble.emit("webviewclosed", { response: JSON.stringify(update) });
 
   assert.deepEqual(configuration.loadConfiguration(target.storage).favorites, update.favorites);
+  target.companion.stop();
+});
+
+test("an explicit choice matching the system persists without a sync and returning to Automatic follows fresh locales", function () {
+  var storage = configuredStorage(), target = harness({ storage: storage }), systemLanguage = "fr_FR";
+  target.Pebble.getActiveWatchInfo = function () { return { language: systemLanguage }; };
+  ready(target);
+  assert.equal(target.binding.LANGUAGE, "fr");
+  assert.equal(openConfiguration(target).languagePreference, "auto");
+  var before = messages(target, T.CONFIG_BEGIN).length;
+  closeWith(target, "KEEP", [FIRST], undefined, false, "fr");
+  assert.equal(messages(target, T.CONFIG_BEGIN).length, before);
+  assert.equal(configuration.loadConfiguration(storage).languagePreference, "fr");
+  assert.equal(openConfiguration(target).languagePreference, "fr");
+  assert.equal(target.xhr.instances.length, 0);
+  target.companion.stop();
+
+  systemLanguage = "en_US";
+  target = harness({ storage: storage });
+  target.Pebble.getActiveWatchInfo = function () { return { language: systemLanguage }; };
+  ready(target);
+  assert.equal(target.binding.LANGUAGE, "fr");
+  var opening = openConfiguration(target);
+  assert.equal(opening.language, "fr");
+  assert.equal(opening.languagePreference, "fr");
+  assert.deepEqual(opening.favorites, [FIRST]);
+  assert.equal(target.Pebble.openedUrls.at(-1).includes(TEST_KEY), false);
+  before = messages(target, T.CONFIG_BEGIN).length;
+  closeWith(target, "KEEP", [FIRST]);
+  assert.equal(messages(target, T.CONFIG_BEGIN).length, before);
+  assert.equal(configuration.loadConfiguration(storage).languagePreference, "fr");
+
+  closeWith(target, "KEEP", [FIRST], undefined, false, "auto");
+  acknowledgeConfiguration(target);
+  assert.equal(target.binding.CONFIG_MODE, contracts.CONFIG_MODE.DIFF);
+  assert.equal(target.binding.LANGUAGE, "en");
+  assert.equal(configuration.loadConfiguration(storage).languagePreference, "auto");
+  systemLanguage = "FR-ca";
+  opening = openConfiguration(target);
+  assert.equal(opening.language, "fr");
+  assert.equal(opening.languagePreference, "auto");
+  closeWith(target, "KEEP", [FIRST]);
+  acknowledgeConfiguration(target);
+  assert.equal(target.binding.LANGUAGE, "fr");
+  assert.equal(target.xhr.instances.length, 0);
+  target.companion.stop();
+});
+
+test("language-only saves send rehashed appearance records through DIFF without changing favorites or fetching", function () {
+  var favorite = Object.assign({}, FIRST, { displayName: "Mon trajet", destinationLabel: "Gare d’arrivée" });
+  var target = harness({ storage: configuredStorage([favorite]) });
+  target.Pebble.getActiveWatchInfo = function () { return { language: "en_US" }; };
+  ready(target);
+  var hash = messages(target, T.CONFIG_ENTRY).at(-1).DISPLAY_HASH;
+  var appearance = messages(target, T.FAVORITE).at(-1).DISPLAY_RECORD;
+  closeWith(target, "KEEP", [favorite], undefined, false, "fr");
+  var begin = messages(target, T.CONFIG_BEGIN).at(-1);
+  assert.equal(begin.LANGUAGE, "fr");
+  assert.equal(begin.CONFIG_MODE, contracts.CONFIG_MODE.DIFF);
+  assert.notEqual(messages(target, T.CONFIG_ENTRY).at(-1).DISPLAY_HASH, hash);
+  acknowledgeConfiguration(target);
+  assert.notEqual(messages(target, T.FAVORITE).at(-1).DISPLAY_RECORD, appearance);
+  assert.equal(messages(target, T.CONFIG_COMMIT).at(-1).REQUEST_ID, begin.REQUEST_ID);
+  var saved = configuration.loadConfiguration(target.storage);
+  assert.deepEqual(saved.favorites, [favorite]);
+  assert.equal(saved.primApiKey, TEST_KEY);
+  assert.equal(saved.languagePreference, "fr");
+  assert.equal(openConfiguration(target).language, "fr");
+  assert.equal(target.xhr.instances.length, 0);
+  target.companion.stop();
+});
+
+test("cancelled, invalid and unpersisted language saves leave the prior configuration active", function () {
+  var target = harness({ storage: configuredStorage([FIRST], undefined, "fr") });
+  ready(target);
+  var original = target.storage.getItem(configuration.CONFIG_STORAGE_KEY);
+  var before = messages(target, T.CONFIG_BEGIN).length;
+  ["CANCELLED", "", "pebblejs://close#CANCELLED", "%invalid"].forEach(function (response) {
+    target.Pebble.emit("webviewclosed", { response: response });
+  });
+  target.Pebble.emit("webviewclosed", { response: JSON.stringify({
+    schemaVersion: 2, favorites: [], apiKeyUpdate: { schemaVersion: 1, action: "REMOVE" }, languagePreference: null
+  }) });
+  assert.equal(target.storage.getItem(configuration.CONFIG_STORAGE_KEY), original);
+  assert.equal(messages(target, T.CONFIG_BEGIN).length, before);
+
+  var write = target.storage.setItem, fail = true;
+  target.storage.setItem = function (key, value) {
+    if (key === configuration.CONFIG_STORAGE_KEY && fail) {
+      fail = false;
+      write.call(this, key, "partial write");
+    } else write.call(this, key, value);
+  };
+  closeWith(target, "KEEP", [FIRST], undefined, false, "en");
+  assert.equal(target.storage.getItem(configuration.CONFIG_STORAGE_KEY), original);
+  assert.equal(messages(target, T.CONFIG_BEGIN).length, before);
+  var opening = openConfiguration(target);
+  assert.equal(opening.languagePreference, "fr");
+  assert.equal(opening.language, "fr");
+  assert.deepEqual(opening.favorites, [FIRST]);
+  assert.equal(configuration.loadConfiguration(target.storage).primApiKey, TEST_KEY);
+  assert.equal(target.xhr.instances.length, 0);
   target.companion.stop();
 });
 
@@ -438,7 +547,8 @@ test("the failure table deterministically projects unconfigured, stale, or unava
     if (failure.keyStatus === contracts.KEY_STATUS.MISSING) {
       storage = new fakes.FakeStorage();
       assert.equal(configuration.saveConfiguration(storage, {
-        schemaVersion: 2, favorites: [FIRST], primApiKey: null, keyStatus: contracts.KEY_STATUS.MISSING
+        schemaVersion: configuration.CONFIG_SCHEMA_VERSION, favorites: [FIRST], primApiKey: null,
+        keyStatus: contracts.KEY_STATUS.MISSING, languagePreference: "auto"
       }), true);
     } else storage = configuredStorage([FIRST], failure.keyStatus);
     if (!failure.noCache) seedOverview(storage, [FIRST], clock);
@@ -571,7 +681,7 @@ test("superseded settled selections get terminal data without launching obsolete
   target.companion.stop();
 });
 
-test("traffic completion remains token-bound and its line cache is language-specific", function () {
+test("saved preferences and Automatic use separate traffic caches without refetching a fresh language", function () {
   var favorites = [FIRST, phoneFavorite(2, 1)], storage = configuredStorage(favorites), clock = new fakes.FakeClock();
   seedOverview(storage, favorites, clock);
   var language = "en", target = harness({ storage: storage, clock: clock });
@@ -583,12 +693,64 @@ test("traffic completion remains token-bound and its line cache is language-spec
   sendTraffic(target, "same-line", favorites[1]);
   assert.equal(requests(target, "traffic").length, 1);
   assert.equal(finalTransfer(target, "same-line").favoriteId, favorites[1].id);
-  language = "fr"; closeWith(target, "KEEP", favorites); acknowledgeConfiguration(target);
+  closeWith(target, "KEEP", favorites, undefined, false, "fr"); acknowledgeConfiguration(target);
+  assert.equal(target.binding.LANGUAGE, "fr");
+  assert.equal(requests(target, "traffic").length, 1);
   sendTraffic(target, "translated", FIRST);
   assert.equal(requests(target, "traffic").length, 2);
   assert.equal(requests(target, "traffic")[1].headers["Accept-Language"], undefined);
   resolveProduction(target, favorites);
   assert.notDeepEqual(finalTransfer(target, "translated").records, finalTransfer(target, "old-traffic").records);
+  language = "fr"; closeWith(target, "KEEP", favorites, undefined, false, "auto");
+  language = "en"; closeWith(target, "KEEP", favorites); acknowledgeConfiguration(target);
+  sendTraffic(target, "back-to-english", FIRST);
+  assert.equal(requests(target, "traffic").length, 2);
+  assert.deepEqual(finalTransfer(target, "back-to-english").records, finalTransfer(target, "old-traffic").records);
+  target.companion.stop();
+});
+
+test("an English override keeps in-flight French fallback and both language caches bound through restart", function () {
+  var favorite = phoneFavorite(1, 200), storage = configuredStorage([favorite]);
+  var clock = new fakes.FakeClock(Date.parse("2026-01-15T09:00:00Z"));
+  var target = harness({ storage: storage, clock: clock });
+  target.Pebble.getActiveWatchInfo = function () { return { language: "fr_FR" }; };
+  ready(target);
+  sendTraffic(target, "french", favorite);
+  assert.equal(requests(target, "traffic")[0].headers["Accept-Language"], undefined);
+  closeWith(target, "KEEP", [favorite], undefined, false, "en");
+  assert.equal(requests(target, "traffic").length, 1);
+  acknowledgeConfiguration(target);
+  assert.equal(target.binding.LANGUAGE, "en");
+  sendTraffic(target, "english", favorite);
+  assert.equal(requests(target, "traffic")[1].headers["Accept-Language"], "en");
+  var french = require("../../../fixtures/traffic/global.json");
+  var english = JSON.parse(JSON.stringify(french));
+  english.disruptions[0].title = "English title";
+  delete english.disruptions[0].message;
+  respond(target, requests(target, "traffic")[1], 200, english);
+  assert.equal(requests(target, "traffic").length, 2);
+  assert.equal(transfers(target, "english").length, 0);
+  respond(target, requests(target, "traffic")[0], 200, french);
+  var translated = finalTransfer(target, "english");
+  assert.notEqual(finalTransfer(target, "french").generation, translated.generation);
+  assert.equal(translated.generation, target.binding.DISPLAY_GENERATION);
+  var cache = configuration.loadCache(storage, [favorite]);
+  var en = configuration.findTrafficDetail(cache, favorite.serviceId, "en", "cached-en", favorite.id);
+  var fr = configuration.findTrafficDetail(cache, favorite.serviceId, "fr", "cached-fr", favorite.id);
+  assert.equal(en.result.title, "Métro 2 : ralentissements");
+  assert.equal(en.result.text, "Le trafic est ralenti & les temps d’attente sont allongés.");
+  assert.equal(fr.result.title, en.result.title);
+  assert.equal(fr.result.text, en.result.text);
+  target.companion.stop();
+
+  target = harness({ storage: storage, clock: clock });
+  target.Pebble.getActiveWatchInfo = function () { return { language: "fr_FR" }; };
+  ready(target);
+  assert.equal(target.binding.LANGUAGE, "en");
+  sendTraffic(target, "restored-english", favorite);
+  assert.deepEqual(finalTransfer(target, "restored-english").records, translated.records);
+  assert.equal(target.xhr.instances.length, 0);
+  assert.equal(openConfiguration(target).language, "en");
   target.companion.stop();
 });
 
@@ -629,7 +791,7 @@ test("explicit FULL is one-shot, sends complete inventory, and is not persisted"
 
 test("unresolved routing uses a pinned public revision once per service without metadata resynchronization", function () {
   var unresolved = withoutRouting(FIRST), duplicate = Object.assign({}, unresolved, { id: "unresolved-copy", sortOrder: 1 });
-  var storage = configuredStorage([unresolved, duplicate]), target = harness({ storage: storage });
+  var storage = configuredStorage([unresolved, duplicate], undefined, "fr"), target = harness({ storage: storage });
   ready(target); var before = messages(target, T.CONFIG_BEGIN).length;
   sendOverview(target, "hydrate");
   assert.equal(requests(target, "static").length, 1); assert.equal(requests(target, "departures").length, 0);
@@ -637,6 +799,7 @@ test("unresolved routing uses a pinned public revision once per service without 
   requests(target, "static").forEach(function (xhr) { assert.equal(xhr.headers.apikey, undefined); assert.equal(xhr.headers.Authorization, undefined); });
   assert.equal(requests(target, "departures").length, 1);
   assert.deepEqual(configuration.loadConfiguration(storage).favorites[1].routing, FIRST.routing);
+  assert.equal(openConfiguration(target).languagePreference, "fr");
   assert.equal(storage.writes.filter(function (write) { return write.key === configuration.CONFIG_STORAGE_KEY; }).length, 1);
   assert.equal(messages(target, T.CONFIG_BEGIN).length, before);
   resolveProduction(target, [FIRST]);
@@ -753,11 +916,12 @@ test("catalog revision mismatch cannot hydrate favorites or send credentials to 
 });
 
 test("authentication rejection invalidates credentials durably, cancels network, and completes accepted tokens", function () {
-  var favorites = [FIRST, SECOND], target = harness({ storage: configuredStorage(favorites) });
+  var favorites = [FIRST, SECOND], target = harness({ storage: configuredStorage(favorites, undefined, "fr") });
   ready(target); sendOverview(target, "old-screen"); sendTraffic(target, "current-screen", SECOND);
   respond(target, requests(target, "departures")[0], 401, "");
   assert.equal(configuration.loadConfiguration(target.storage).keyStatus, contracts.KEY_STATUS.INVALID);
   assert.deepEqual(configuration.loadConfiguration(target.storage).favorites[0].routing, FIRST.routing);
+  assert.equal(configuration.loadConfiguration(target.storage).languagePreference, "fr");
   assert.equal(requests(target, "departures")[1].aborted, true); assert.equal(requests(target, "traffic")[0].aborted, true);
   acknowledgeConfiguration(target, 0);
   assert.equal(rows(target, "old-screen")[0].error, 3);
@@ -766,6 +930,7 @@ test("authentication rejection invalidates credentials durably, cancels network,
   sendOverview(target, "blocked"); target.clock.advance(3600000);
   assert.equal(target.xhr.instances.length, before); assert.equal(rows(target, "blocked")[0].error, 3);
   target.companion.stop(); target = harness({ storage: target.storage }); ready(target, 0);
+  assert.equal(target.binding.LANGUAGE, "fr");
   sendOverview(target, "blocked-after-restart"); assert.equal(target.xhr.instances.length, 0);
   assert.equal(rows(target, "blocked-after-restart")[0].error, 3); target.companion.stop();
 });
@@ -778,6 +943,42 @@ test("the invalid-key journal blocks restart even when the primary configuration
   target.companion.stop(); storage.setItem = write; target = harness({ storage: storage }); ready(target, 0);
   sendTraffic(target, "restart"); assert.equal(target.xhr.instances.length, 0);
   assert.deepEqual(finalTransfer(target, "restart").records, ["e03"]); target.companion.stop();
+});
+
+test("marker-only invalidation cannot apply an unpersisted replacement's favorites or language", function () {
+  var storage = configuredStorage([FIRST], undefined, "fr"), write = storage.setItem;
+  var original = storage.getItem(configuration.CONFIG_STORAGE_KEY), target = harness({ storage: storage });
+  ready(target);
+  storage.setItem = function (key, value) {
+    if (key === configuration.CONFIG_STORAGE_KEY) throw new Error("primary storage unavailable");
+    write.call(this, key, value);
+  };
+  sendTraffic(target, "invalid-before-save");
+  respond(target, requests(target, "traffic")[0], 403, "");
+  acknowledgeConfiguration(target, 0);
+  assert.equal(storage.getItem(configuration.CONFIG_STORAGE_KEY), original);
+  assert.equal(configuration.loadConfiguration(storage).keyStatus, contracts.KEY_STATUS.INVALID);
+  var marker = storage.getItem(configuration.INVALID_KEY_STATUS_STORAGE_KEY);
+  var before = messages(target, T.CONFIG_BEGIN).length;
+  closeWith(target, "REPLACE", [Object.assign({}, SECOND, { sortOrder: 0 })], TEST_KEY, false, "en");
+  assert.equal(storage.getItem(configuration.CONFIG_STORAGE_KEY), original);
+  assert.equal(storage.getItem(configuration.INVALID_KEY_STATUS_STORAGE_KEY), marker);
+  assert.equal(messages(target, T.CONFIG_BEGIN).length, before);
+  var opening = openConfiguration(target);
+  assert.equal(opening.languagePreference, "fr");
+  assert.equal(opening.language, "fr");
+  assert.deepEqual(opening.favorites, [FIRST]);
+  target.companion.stop();
+
+  storage.setItem = write;
+  target = harness({ storage: storage }); ready(target, 0);
+  assert.equal(target.binding.LANGUAGE, "fr");
+  assert.equal(configuration.loadConfiguration(storage).keyStatus, contracts.KEY_STATUS.INVALID);
+  assert.deepEqual(openConfiguration(target).favorites, [FIRST]);
+  sendTraffic(target, "still-blocked");
+  assert.deepEqual(finalTransfer(target, "still-blocked").records, ["e03"]);
+  assert.equal(target.xhr.instances.length, 0);
+  target.companion.stop();
 });
 
 test("credential replacement ignores saved callbacks from the canceled lifecycle", function () {
@@ -810,18 +1011,19 @@ test("credential removal erases the key, retains favorites, and blocks PRIM unti
 
 test("interrupted same-key replacement never clears durable invalid-key authority", function () {
   ["marker-removal", "configured-write"].forEach(function (failure) {
-    var storage = configuredStorage(), target = harness({ storage: storage }), write = storage.setItem, remove = storage.removeItem;
+    var storage = configuredStorage([FIRST], undefined, "fr"), target = harness({ storage: storage }), write = storage.setItem, remove = storage.removeItem;
+    storage.removeItem = function (key) {
+      if (failure === "marker-removal" && key === configuration.INVALID_KEY_STATUS_STORAGE_KEY) throw new Error("retained marker");
+      remove.call(this, key);
+    };
     ready(target); sendTraffic(target, "invalid-before-replacement"); respond(target, requests(target, "traffic")[0], 401, "");
     storage.setItem = function (key, value) {
       if (failure === "configured-write" && key === configuration.CONFIG_STORAGE_KEY && JSON.parse(value).keyStatus === contracts.KEY_STATUS.CONFIGURED) throw new Error("interrupted");
       write.call(this, key, value);
     };
-    storage.removeItem = function (key) {
-      if (failure === "marker-removal" && key === configuration.INVALID_KEY_STATUS_STORAGE_KEY) throw new Error("retained marker");
-      remove.call(this, key);
-    };
     closeWith(target, "REPLACE", [FIRST], TEST_KEY); target.companion.stop();
     assert.equal(configuration.loadConfiguration(storage).keyStatus, contracts.KEY_STATUS.INVALID);
+    assert.equal(configuration.loadConfiguration(storage).languagePreference, "fr");
   });
 });
 
@@ -986,7 +1188,7 @@ function finishCaptured(target, call, favorite, seconds) {
 
 test("journey flights migrate a single null arrival through real annexes before PRIM and preserve labels", function () {
   var resolved = journeyFavorite(), favorite = Object.assign({}, resolved, { arrivalPlaceId: null, destinationLabel: "Historic label" });
-  var target = harness({ storage: configuredStorage([favorite]), realCatalog: true });
+  var target = harness({ storage: configuredStorage([favorite], undefined, "fr"), realCatalog: true });
   ready(target);
   var calls = captureDepartures(target);
   sendOverview(target, "cache-only-null", contracts.REQUEST_TRIGGER.CACHE_ONLY);
@@ -1001,6 +1203,7 @@ test("journey flights migrate a single null arrival through real annexes before 
   var saved = configuration.loadConfiguration(target.storage).favorites[0];
   assert.equal(saved.arrivalPlaceId, resolved.arrivalPlaceId);
   assert.equal(saved.destinationLabel, "Historic label");
+  assert.equal(openConfiguration(target).languagePreference, "fr");
   finishCaptured(target, calls[0], resolved, 180);
   respond(target, requests(target, "traffic")[0], 200, trafficBody([resolved]));
   assert.equal(rows(target, "migrated")[0].departures[0].expectedAt, Math.floor(target.clock.now() / 1000) + 180);

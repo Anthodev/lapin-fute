@@ -46,7 +46,7 @@ Lapin Futé puts Île-de-France public-transport arrivals on a Pebble watch. The
 - **Traffic view.** Select again on an arrival board to read the most recently updated active disruption for that line, using PRIM's `lastUpdate` rather than severity. Works are excluded, including works already under way; future and expired disruptions are excluded as well. If the selected English message lacks a usable title or body, the app uses the complete French message for that same incident. This may require one additional French request when no fresh French response is already available.
 - **Refresh when needed.** Open the app, switch favorite, choose Refresh all, or hold Select to request arrivals. Recent results are reused for 60 seconds; after a failed refresh, the last complete result remains visibly stale for at most 15 minutes. There is no periodic network polling.
 - **Clear data states.** The app distinguishes real-time arrivals, mixed real-time and scheduled results, updates in progress, missing cached data, and trips whose route to your arrival is unconfirmed (`?`).
-- **English and French.** The watch interface and the settings page are both bilingual.
+- **English and French.** In settings, choose Automatic to follow the watch system language, or force Français or English for the watch app. Save applies the choice even when favorites are unchanged. The phone remembers it across restarts; reopening settings uses the effective language.
 - **Settings that fit your phone.** Light and dark themes follow your system preference. Collapsible sections keep favorite editing, PRIM access, and watch synchronization easy to reach.
 
 ## Compatibility

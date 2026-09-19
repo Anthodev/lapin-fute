@@ -4,8 +4,8 @@ const contractsModule = { exports: {} };
 "use strict";
 
 var SCHEMA_VERSION = 1;
-// CONFIGURATION_VERSION 2 covers only the stored configuration record and the
-// page open/close envelopes. Domain objects, nested favorites and ApiKeyUpdate
+// CONFIGURATION_VERSION 2 covers the page open/close envelopes. The companion
+// versions its phone-local stored record separately. Domain objects and ApiKeyUpdate
 // keep SCHEMA_VERSION 1. Versioning the envelope also protects an empty
 // backup: a phone that cannot read v2 must never blank the configuration with
 // a v1 close.

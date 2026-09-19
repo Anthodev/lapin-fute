@@ -11,8 +11,8 @@
 //
 // Canonical contract: packages/contracts/src/index.ts. Domain objects, the
 // favorites nested inside every envelope, and ApiKeyUpdate keep
-// SCHEMA_VERSION 1. Only the stored configuration and the page open/close
-// envelopes use CONFIGURATION_VERSION 2; a close fragment on the old version
+// SCHEMA_VERSION 1. Page open/close envelopes use CONFIGURATION_VERSION 2;
+// the phone versions its stored record separately. A close on the old version
 // is always rejected by the phone, so an outdated page can never wipe the
 // stored configuration. The mirrored constants below are asserted equal to
 // the canonical module by test/config-page.test.ts; never change one side
@@ -26,9 +26,16 @@ import { JOURNEY_LIMITS, arrivalLabel } from "./generated/journey-patterns.js";
 
 export const SCHEMA_VERSION = 1;
 
-// Version of the stored configuration and of the opening/closing page
-// envelopes only. Never used for domain objects.
+// Version of the opening/closing page envelopes only. The phone versions its
+// stored record separately. Never used for domain objects.
 export const CONFIGURATION_VERSION = 2;
+
+// Phone-side watch-language preference carried by the page envelopes. "auto"
+// follows the watch system language, "en"/"fr" force the app language. This is
+// distinct from the resolved language ("en"/"fr") that copy and the watch
+// synchronization already use: the preference is the stored intent, the
+// language is what the phone resolves from it.
+export const LANGUAGE_PREFERENCES = ["auto", "en", "fr"];
 
 // Journey place identities are catalog-computed plc_ + SHA-256 base64url;
 // the page only validates their form.
@@ -172,6 +179,13 @@ export const COPY = {
     syncCaption: "Transfer options",
     syncHint: "The watch normally receives only what changed. Tick this to resend everything if the watch shows outdated favorites.",
     forceSyncLabel: "Force a full synchronization at the next save",
+    languageTitle: "Watch app language",
+    languageLabel: "Watch app language",
+    languageOptionAuto: "Automatic",
+    languageOptionFrench: "Français",
+    languageOptionEnglish: "English",
+    languageHint: "Automatic follows the watch system language. The choice applies to the watch app when you save.",
+    languageUnsupported: "Update Lapin Futé on your phone to change the watch app language.",
     saveTooLarge: "These settings are too large to transfer. Remove the favorite with the longest entry and add it again.",
     configurationUpgradeRequired: "Update Lapin Futé on your Pebble to edit these settings.",
   },
@@ -241,6 +255,13 @@ export const COPY = {
     syncCaption: "Options de transfert",
     syncHint: "La montre ne reçoit normalement que les changements. Cochez cette case pour tout renvoyer si la montre affiche des favoris obsolètes.",
     forceSyncLabel: "Forcer une synchronisation complète au prochain enregistrement",
+    languageTitle: "Langue de l’application sur la montre",
+    languageLabel: "Langue de l’application sur la montre",
+    languageOptionAuto: "Automatique",
+    languageOptionFrench: "Français",
+    languageOptionEnglish: "English",
+    languageHint: "Automatique suit la langue système de la montre. Le choix s’applique à l’application lorsque vous enregistrez.",
+    languageUnsupported: "Mettez à jour Lapin Futé sur votre téléphone pour changer la langue de l’application sur la montre.",
     saveTooLarge: "Ces réglages sont trop volumineux pour être transférés. Supprimez le favori comportant l’entrée la plus longue, puis rajoutez-le.",
     configurationUpgradeRequired: "Mettez à jour Lapin Futé sur votre Pebble pour modifier ces réglages.",
   },
@@ -458,6 +479,7 @@ function renumber(favorites) {
 // --- Opening fragment --------------------------------------------------------
 // Expected shapes (all values non-secret):
 //   #<encodeURIComponent(JSON.stringify({ schemaVersion: 2, hasKey, favorites, language }))>
+//   #<encodeURIComponent(JSON.stringify({ schemaVersion: 2, hasKey, favorites, language, languagePreference }))>
 //   #<encodeURIComponent(JSON.stringify({ hasKey, favorites, language }))>   (old phone)
 // hasKey is the only credential-related field; the stored key itself is never
 // present. A complete v2 envelope with only valid favorites opens an editable
@@ -465,21 +487,37 @@ function renumber(favorites) {
 // display only: it is never hydrated, never converted, and never editable —
 // the watch app must be updated. An absent or malformed fragment is likewise
 // non-editable; previews always pass a real v2 envelope.
+//
+// languagePreference is additive and strictly optional: a launch that omits it
+// comes from a phone without preference support, so the page defaults to
+// Automatic, keeps the selector disabled, and its close payload omits the
+// field so the phone preserves the stored preference. A present but invalid
+// value (including null) rejects the whole envelope — it is never coerced.
 
 export const MAX_OPENING_FRAGMENT_LENGTH = 32768;
-const OPENING_FIELDS = ["schemaVersion", "hasKey", "favorites", "language"];
+const OPENING_FIELDS = ["schemaVersion", "hasKey", "favorites", "language", "languagePreference"];
 
 function emptyOpeningState() {
-  return { hasKey: false, language: "en", locale: "en", favorites: [], editable: false };
+  return {
+    hasKey: false,
+    language: "en",
+    locale: "en",
+    favorites: [],
+    editable: false,
+    languagePreference: "auto",
+    languagePreferenceSupported: false,
+  };
 }
 
-function openingState(hasKey, language, favorites, editable) {
+function openingState(hasKey, language, favorites, editable, languagePreference = undefined) {
   return {
     hasKey,
     language,
     locale: selectLocale(language),
     favorites,
     editable,
+    languagePreference: languagePreference === undefined ? "auto" : languagePreference,
+    languagePreferenceSupported: languagePreference !== undefined,
   };
 }
 
@@ -501,6 +539,8 @@ export function parseConfigFragment(hash) {
       || !Array.isArray(parsed.favorites)
       || typeof parsed.language !== "string") return emptyOpeningState();
   if (!Object.keys(parsed).every((field) => OPENING_FIELDS.includes(field))) return emptyOpeningState();
+  if (parsed.languagePreference !== undefined
+      && !LANGUAGE_PREFERENCES.includes(parsed.languagePreference)) return emptyOpeningState();
   if (parsed.schemaVersion === CONFIGURATION_VERSION) {
     // An invalid v2 favorite never yields an editable subset: the session
     // stays read-only, and only entries that are individually valid are
@@ -511,6 +551,7 @@ export function parseConfigFragment(hash) {
         parsed.language,
         parsed.favorites.filter(isPhoneFavorite).map(copyPhoneFavorite),
         false,
+        parsed.languagePreference,
       );
     }
     return openingState(
@@ -518,10 +559,13 @@ export function parseConfigFragment(hash) {
       parsed.language,
       parsed.favorites.map(copyPhoneFavorite),
       true,
+      parsed.languagePreference,
     );
   }
   if (parsed.schemaVersion === undefined || parsed.schemaVersion === SCHEMA_VERSION) {
     // Old or unversioned phone: read-only favorites display, nothing else.
+    // Such a phone never advertises the preference, and its close channel
+    // would reject the field, so it is never adopted here.
     return openingState(
       parsed.hasKey,
       parsed.language,
@@ -545,6 +589,12 @@ export function initialConfigState(query) {
     // Fail closed: only an explicitly editable session (a complete v2
     // opening) may mutate anything or save.
     editable: query.editable === true,
+    // Normalized invariant: always an exact supported value. Strict rejection
+    // of invalid launch values already happened in parseConfigFragment.
+    languagePreference: LANGUAGE_PREFERENCES.includes(query.languagePreference)
+      ? query.languagePreference
+      : "auto",
+    languagePreferenceSupported: query.languagePreferenceSupported === true,
   };
 }
 
@@ -643,6 +693,14 @@ export function reduceConfigState(state, action) {
       if (!favoritesFitCloseBound(candidate)) return state;
       return { ...state, favorites: candidate };
     }
+    case "language-preference": {
+      // Strict: only an advertised, editable session may change the
+      // preference, and only to an exact supported value — never coerced.
+      if (state.editable !== true || state.languagePreferenceSupported !== true) return state;
+      if (!LANGUAGE_PREFERENCES.includes(action.value)) return state;
+      if (action.value === state.languagePreference) return state;
+      return { ...state, languagePreference: action.value };
+    }
     case "force-full-sync":
       if (state.editable !== true) return state;
       return { ...state, forceFullSync: action.value === true };
@@ -694,6 +752,14 @@ export function planConfigResult(state) {
     apiKeyUpdate,
     favorites: state.favorites.map(stampFavorite),
   };
+  // The preference rides along only when this launch advertised support: an
+  // absent field tells the phone to preserve the stored preference, while an
+  // explicit "auto" clears the override. Carrying it unconditionally would
+  // feed an unknown field to an older phone, which rejects the whole update.
+  if (state.languagePreferenceSupported === true
+      && LANGUAGE_PREFERENCES.includes(state.languagePreference)) {
+    payload.languagePreference = state.languagePreference;
+  }
   // One-shot full resync: absent unless explicitly requested on the settings page.
   if (state.forceFullSync === true) payload.forceFullSync = true;
   return { ok: true, payload };
@@ -760,9 +826,9 @@ export function closePayloadFits(payload) {
 // becomes six encoded characters (quotes behave identically; canonical
 // boundedString excludes control characters, and every other byte inflates
 // at most threefold). A 512-byte key of backslashes therefore bounds every
-// key the page can plan; the flag adds only a fixed tail. If this envelope
-// fits, every real save payload fits too; the actual payload is still checked
-// authoritatively at close time.
+// key the page can plan; the preference and the flag add only a fixed tail.
+// If this envelope fits, every real save payload fits too; the actual payload
+// is still checked authoritatively at close time.
 
 function favoritesFitCloseBound(favorites) {
   return closePayloadFits({
@@ -773,6 +839,7 @@ function favoritesFitCloseBound(favorites) {
       value: "\\".repeat(LIMITS.apiKeyUtf8Bytes),
     },
     favorites,
+    languagePreference: "auto",
     forceFullSync: true,
   });
 }
