@@ -41,12 +41,9 @@ Lapin Futé puts Île-de-France public-transport arrivals on a Pebble watch. The
 
 ## Features
 
-> [!NOTE]
-> Departure-to-arrival favorites, the uncertainty flag, and the journey-pattern catalog described below are implemented in this source tree but not published yet. They land together: a rebuilt station catalog, the matching settings page, and a rebuilt watch app are all required. The new on-watch rendering is not natively verified yet; the screenshots above show the currently published release.
-
 - **Six favorite journeys, five transport modes.** A favorite is a departure stop, a line, and a reachable arrival stop, including intermediate stops that no service terminates at. Journeys stay on one line, without connections, across Métro, RER, Transilien, Tram, and Bus. Favorites are renamed and reordered on the phone page, which shows official line badges and colors.
 - **Arrivals at a glance.** The favorites list shows the next arrival for each journey; Select opens its arrival board. Confirmed full-line and short-turn services are combined chronologically. Departures known not to serve the journey are excluded; uncertain departures follow the confirmed ones, marked with `?` and retaining their real times. Conflicting terminal hints can still confirm a journey when every candidate route serves its arrival. Countdowns keep ticking on the watch between refreshes.
-- **Traffic view.** Select again on an arrival board to page through the current service messages for that line.
+- **Traffic view.** Select again on an arrival board to read the most recently updated active disruption for that line, using PRIM's `lastUpdate` rather than severity. Works are excluded, including works already under way; future and expired disruptions are excluded as well. If the selected English message lacks a usable title or body, the app uses the complete French message for that same incident. This may require one additional French request when no fresh French response is already available.
 - **Refresh when needed.** Open the app, switch favorite, choose Refresh all, or hold Select to request arrivals. Recent results are reused for 60 seconds; after a failed refresh, the last complete result remains visibly stale for at most 15 minutes. There is no periodic network polling.
 - **Clear data states.** The app distinguishes real-time arrivals, mixed real-time and scheduled results, updates in progress, missing cached data, and trips whose route to your arrival is unconfirmed (`?`).
 - **English and French.** The watch interface and the settings page are both bilingual.

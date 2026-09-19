@@ -131,6 +131,7 @@ function createPrimClient(options) {
       event.timer = null;
       event.complete = null;
       event.outcome = null;
+      event.resolve = null;
       onCancel = event.onCancel;
       event.onCancel = null;
       if (onCancel) onCancel();
@@ -142,6 +143,7 @@ function createPrimClient(options) {
     if (event.settled || event.scheduled) return;
     event.scheduled = true;
     event.onCancel = null;
+    event.resolve = null;
     event.outcome = outcome;
     event.timer = later(function () {
       var complete;
@@ -265,7 +267,7 @@ function createPrimClient(options) {
       xhr.responseType = "arraybuffer";
       xhr.timeout = contracts.LIMITS.httpTimeoutMs;
       xhr.setRequestHeader("Accept", "application/json");
-      if (request.language !== null) xhr.setRequestHeader("Accept-Language", request.language);
+      if (request.language === "en") xhr.setRequestHeader("Accept-Language", "en");
       xhr.setRequestHeader("apikey", request.apiKey);
       request.apiKey = null;
       xhr.onload = function () { receive(request); };
@@ -342,7 +344,6 @@ function createPrimClient(options) {
     var receivedAt = now();
     var index;
     var event;
-    var result;
     removeFlight(flight);
     flight.subscribers = [];
     flight.handle = null;
@@ -355,61 +356,34 @@ function createPrimClient(options) {
     flight.apiKey = null;
     for (index = 0; index < subscribers.length; index += 1) {
       event = subscribers[index];
-      if (outcome.status === "AVAILABLE") {
-        try {
-          result = { status: "AVAILABLE", data: trafficParser.trafficForLine(outcome.data.envelope,
-            event.lineId, receivedAt, receivedAt) };
-        } catch (ignored) { result = unavailable("INVALID_RESPONSE", receivedAt); }
-      } else result = unavailable(outcome.error.code, outcome.error.occurredAt * 1000, outcome.error.retryAfterSeconds);
-      deliver(event, result);
+      event.onCancel = null;
+      event.resolve(outcome);
     }
   }
 
-  function traffic(request, complete) {
-    var event = subscriber(complete);
-    var lineId;
-    var cached;
+  function subscribeTraffic(event, language, apiKey, resolve) {
     var startedAt = now();
+    var cached = trafficCache[language];
     var age;
     var flight;
     var index;
-    if (!request || typeof request.lineRef !== "string") {
-      deliver(event, unavailable("INVALID_SERVICE", startedAt));
-      return event.handle;
-    }
-    lineId = trafficParser.canonicalCatalogLineRef(request.lineRef);
-    if (typeof lineId === "undefined") {
-      deliver(event, unavailable("INVALID_SERVICE", startedAt));
-      return event.handle;
-    }
-    if (request.language !== "fr" && request.language !== "en") {
-      deliver(event, unavailable("INVALID_RESPONSE", startedAt));
-      return event.handle;
-    }
-    if (!contracts.isPersonalApiKey(request.apiKey) || containsCredential(TRAFFIC_URL, request.apiKey)) {
-      deliver(event, unavailable("API_KEY_INVALID", startedAt));
-      return event.handle;
-    }
-    cached = trafficCache[request.language];
+    event.resolve = resolve;
     if (cached !== null) {
       age = startedAt - cached.storedAt;
-      if (cached.apiKey === request.apiKey && age >= 0 && age < contracts.CACHE_FRESH_SECONDS * 1000) {
-        try {
-          deliver(event, { status: "AVAILABLE", data: trafficParser.trafficForLine(cached.envelope, lineId, startedAt, cached.storedAt) });
-        } catch (ignored) { deliver(event, unavailable("INVALID_RESPONSE", startedAt)); }
-        return event.handle;
+      if (cached.apiKey === apiKey && age >= 0 && age < contracts.CACHE_FRESH_SECONDS * 1000) {
+        resolve({ status: "AVAILABLE", data: cached });
+        return;
       }
-      trafficCache[request.language] = null;
+      trafficCache[language] = null;
     }
-    event.lineId = lineId;
     for (index = 0; index < trafficFlights.length; index += 1) {
-      if (trafficFlights[index].language === request.language && trafficFlights[index].apiKey === request.apiKey) {
+      if (trafficFlights[index].language === language && trafficFlights[index].apiKey === apiKey) {
         flight = trafficFlights[index];
         break;
       }
     }
     if (typeof flight === "undefined") {
-      flight = { language: request.language, apiKey: request.apiKey, subscribers: [], handle: null };
+      flight = { language: language, apiKey: apiKey, subscribers: [], handle: null };
       trafficFlights.push(flight);
     }
     flight.subscribers.push(event);
@@ -428,6 +402,65 @@ function createPrimClient(options) {
         return { storedAt: receivedAt, envelope: trafficParser.normalizePrimTrafficResponse(payload, flight.apiKey) };
       }, function (outcome) { finishTraffic(flight, outcome); });
     }
+  }
+
+  function traffic(request, complete) {
+    var event = subscriber(complete);
+    var startedAt = now();
+    var lineId = request ? trafficParser.canonicalCatalogLineRef(request.lineRef) : undefined;
+    var apiKey;
+    var language;
+    if (typeof lineId === "undefined") {
+      deliver(event, unavailable("INVALID_SERVICE", startedAt));
+      return event.handle;
+    }
+    language = request.language;
+    if (language !== "fr" && language !== "en") {
+      deliver(event, unavailable("INVALID_RESPONSE", startedAt));
+      return event.handle;
+    }
+    apiKey = request.apiKey;
+    if (!contracts.isPersonalApiKey(apiKey) || containsCredential(TRAFFIC_URL, apiKey)) {
+      deliver(event, unavailable("API_KEY_INVALID", startedAt));
+      return event.handle;
+    }
+    subscribeTraffic(event, language, apiKey, function (outcome) {
+      var evaluatedAt = now();
+      var snapshot;
+      var result;
+      if (outcome.status !== "AVAILABLE") {
+        deliver(event, unavailable(outcome.error.code, outcome.error.occurredAt * 1000, outcome.error.retryAfterSeconds));
+        return;
+      }
+      snapshot = outcome.data;
+      try {
+        result = trafficParser.trafficForLine(snapshot.envelope, lineId, evaluatedAt, snapshot.storedAt);
+      } catch (ignored) {
+        deliver(event, unavailable("INVALID_RESPONSE", evaluatedAt));
+        return;
+      }
+      if (language !== "en" || result.state !== "UNKNOWN") {
+        deliver(event, { status: "AVAILABLE", data: result });
+        return;
+      }
+      subscribeTraffic(event, "fr", apiKey, function (french) {
+        var completedAt = now();
+        var age = completedAt - snapshot.storedAt;
+        if (french.status !== "AVAILABLE") {
+          deliver(event, unavailable(french.error.code, french.error.occurredAt * 1000, french.error.retryAfterSeconds));
+          return;
+        }
+        if (age < 0 || age >= contracts.CACHE_FRESH_SECONDS * 1000) {
+          deliver(event, unavailable("INVALID_RESPONSE", completedAt));
+          return;
+        }
+        try {
+          result = trafficParser.trafficForLine(snapshot.envelope, lineId, evaluatedAt,
+            Math.min(snapshot.storedAt, french.data.storedAt), french.data.envelope, completedAt);
+          deliver(event, { status: "AVAILABLE", data: result });
+        } catch (ignored) { deliver(event, unavailable("INVALID_RESPONSE", completedAt)); }
+      });
+    });
     return event.handle;
   }
 

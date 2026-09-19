@@ -376,7 +376,7 @@ test("traffic calls coalesce across lines but not languages or credentials", fun
   requestTraffic(h, "IDFM:C100", anotherKey, KEY_B);
   assert.equal(h.transport.instances.length, 3);
   assert.equal(h.transport.instances[0].url, "https://prim.iledefrance-mobilites.fr/marketplace/disruptions_bulk/disruptions/v2");
-  assert.equal(h.transport.instances[0].headers["Accept-Language"], "fr");
+  assert.equal(h.transport.instances[0].headers["Accept-Language"], undefined);
   assert.equal(h.transport.instances[1].headers["Accept-Language"], "en");
   assert.equal(h.transport.instances[2].headers.apikey, KEY_B);
   h.transport.instances[0].respond(200, trafficFixture());
@@ -450,6 +450,193 @@ test("credential changes never reuse another key's traffic cache and callbacks c
   h.transport.instances[1].respond(429, {}, { "Retry-After": "5" });
   h.clock.advance(0);
   assertError(result.values[2], "RATE_LIMITED", TRAFFIC_MS, 5);
+});
+
+test("English complete text needs one request and missing either field uses the same French incident pair", function () {
+  ["complete", "title", "message"].forEach(function (missing) {
+    var h = harness(TRAFFIC_MS);
+    var result = collect();
+    var english = trafficFixture();
+    var french = trafficFixture();
+    english.disruptions[0].title = "English title";
+    english.disruptions[0].message = "English body";
+    if (missing !== "complete") english.disruptions[0][missing] = "<p> </p>";
+    requestTraffic(h, "IDFM:C200", result, KEY_A, "en");
+    h.transport.instances[0].respond(200, english);
+    h.clock.advance(0);
+    if (missing === "complete") {
+      assert.equal(h.transport.instances.length, 1);
+      assert.equal(result.values[0].data.title, "English title");
+      assert.equal(result.values[0].data.text, "English body");
+    } else {
+      assert.deepEqual(result.values, []);
+      assert.equal(h.transport.instances.length, 2);
+      assert.equal(h.transport.instances[1].headers["Accept-Language"], undefined);
+      french.lines[1].impactedObjects[0].disruptionIds.push("blocking-unclassified");
+      french.disruptions[0].severity = missing === "title" ? "INFORMATION" : "BLOQUANTE";
+      french.disruptions[3].lastUpdate = "20260115T100000";
+      // The French pair only supplies the same-ID body: its own works cause never re-selects or strips it.
+      french.disruptions[0].cause = "TRAVAUX";
+      h.transport.instances[1].respond(200, french);
+      h.clock.advance(0);
+      assert.deepEqual(result.values[0], { status: "AVAILABLE", data: {
+        schemaVersion: 1, state: "DELAYED", checkedAt: TRAFFIC_MS / 1000,
+        title: "Métro 2 : ralentissements", text: "Le trafic est ralenti & les temps d’attente sont allongés."
+      } });
+    }
+    h.clock.advance(600000);
+    assert.equal(h.transport.instances.length, missing === "complete" ? 1 : 2);
+  });
+});
+
+test("fallback shares a French flight across lines and direct French readers then reuses both fresh caches", function () {
+  var h = harness(TRAFFIC_MS);
+  var first = collect(), second = collect(), direct = collect();
+  var english = trafficFixture();
+  delete english.disruptions[0].message;
+  delete english.disruptions[3].title;
+  requestTraffic(h, "IDFM:C100", direct);
+  requestTraffic(h, "IDFM:C200", first, KEY_A, "en");
+  requestTraffic(h, "IDFM:C400", second, KEY_A, "en");
+  h.transport.instances[1].respond(200, english);
+  assert.equal(h.transport.instances.length, 2);
+  h.transport.instances[0].respond(200, trafficFixture());
+  h.clock.advance(0);
+  assert.equal(direct.values[0].data.state, "NORMAL");
+  assert.equal(first.values[0].data.title, "Métro 2 : ralentissements");
+  assert.equal(second.values[0].data.title, "Tram T3 : incident");
+  h.clock.advance(59000);
+  requestTraffic(h, "IDFM:C200", first, KEY_A, "en");
+  h.clock.advance(0);
+  assert.equal(h.transport.instances.length, 2);
+  assert.equal(first.values[1].data.checkedAt, TRAFFIC_MS / 1000);
+  assert.equal(first.values[1].data.title, "Métro 2 : ralentissements");
+  h.clock.advance(1000);
+  var expired = requestTraffic(h, "IDFM:C200", first, KEY_A, "en");
+  assert.equal(h.transport.instances.length, 3);
+  expired.abort();
+});
+
+test("cancellation moves with fallback, preserves other readers and suppresses late completions", function () {
+  var h = harness(TRAFFIC_MS);
+  var first = collect(), second = collect();
+  var english = trafficFixture();
+  delete english.disruptions[0].message;
+  var one = requestTraffic(h, "IDFM:C200", first, KEY_A, "en");
+  var two = requestTraffic(h, "IDFM:C200", second, KEY_A, "en");
+  h.transport.instances[0].respond(200, english);
+  var lateLoad = h.transport.instances[1].onload;
+  one.abort();
+  assert.equal(h.transport.instances[1].aborts, undefined);
+  two.abort();
+  assert.equal(h.transport.instances[1].aborts, 1);
+  lateLoad();
+  h.clock.advance(10000);
+  assert.deepEqual(first.values, []);
+  assert.deepEqual(second.values, []);
+  var resumed = requestTraffic(h, "IDFM:C200", second, KEY_A, "en");
+  assert.equal(h.transport.instances.length, 3);
+  h.transport.instances[2].respond(200, trafficFixture());
+  resumed.abort();
+  h.clock.advance(0);
+  assert.deepEqual(second.values, []);
+});
+
+test("French fallback cannot replace a missing, inactive or incomplete matching incident with another one", function () {
+  ["missing", "future", "expired", "incomplete", "selected-expired"].forEach(function (scenario) {
+    var h = harness(TRAFFIC_MS);
+    var result = collect();
+    var english = trafficFixture(), french = trafficFixture();
+    delete english.disruptions[0].message;
+    if (scenario === "selected-expired") {
+      english.disruptions[0].applicationPeriods[0].end = "20260115T100001";
+    }
+    if (scenario === "missing") {
+      french.disruptions[0].id = "different-incident";
+      french.lines.forEach(function (line) {
+        line.impactedObjects.forEach(function (object) {
+          object.disruptionIds = object.disruptionIds.map(function (id) {
+            return id === "delay-active" ? "different-incident" : id;
+          });
+        });
+      });
+    } else if (scenario === "future") {
+      french.disruptions[0].applicationPeriods[0].begin = "20260115T100002";
+    } else if (scenario === "expired") {
+      french.disruptions[0].applicationPeriods[0].end = "20260115T100001";
+    } else if (scenario === "incomplete") delete french.disruptions[0].title;
+    requestTraffic(h, "IDFM:C200", result, KEY_A, "en");
+    h.transport.instances[0].respond(200, english);
+    h.clock.advance(1000);
+    h.transport.instances[1].respond(200, french);
+    h.clock.advance(0);
+    assert.deepEqual(result.values[0], { status: "AVAILABLE", data: {
+      schemaVersion: 1, state: "UNKNOWN", checkedAt: TRAFFIC_MS / 1000
+    } });
+    assert.equal(h.transport.instances.length, 2);
+  });
+});
+
+test("English failures never fetch French and fallback failures propagate without retries", function () {
+  ["english", "french"].forEach(function (failedLanguage) {
+    var h = harness(TRAFFIC_MS), result = collect(), english = trafficFixture();
+    delete english.disruptions[0].title;
+    requestTraffic(h, "IDFM:C200", result, KEY_A, "en");
+    if (failedLanguage === "french") h.transport.instances[0].respond(200, english);
+    h.transport.instances[failedLanguage === "english" ? 0 : 1].respond(429, {}, { "Retry-After": "5" });
+    h.clock.advance(600000);
+    assertError(result.values[0], "RATE_LIMITED", TRAFFIC_MS, 5);
+    assert.equal(h.transport.instances.length, failedLanguage === "english" ? 1 : 2);
+  });
+});
+
+test("fallback never serves an English envelope that expires while French is pending", function () {
+  var h = harness(TRAFFIC_MS), result = collect(), english = trafficFixture();
+  delete english.disruptions[0].title;
+  requestTraffic(h, "IDFM:C100", result, KEY_A, "en");
+  h.transport.instances[0].respond(200, english);
+  h.clock.advance(59000);
+  requestTraffic(h, "IDFM:C200", result, KEY_A, "en");
+  h.clock.advance(1000);
+  h.transport.instances[1].respond(200, trafficFixture());
+  h.clock.advance(0);
+  assertError(result.values[1], "INVALID_RESPONSE", TRAFFIC_MS + 60000);
+  assert.equal(h.transport.instances.length, 2);
+});
+
+test("fallback stays inside the shared eight-slot limiter and cancelled queued fallback never starts", function () {
+  var h = harness(TRAFFIC_MS), result = collect(), english = trafficFixture(), handles = [];
+  delete english.disruptions[0].title;
+  requestTraffic(h, "IDFM:C100", result, KEY_A, "en");
+  h.transport.instances[0].respond(200, english);
+  h.clock.advance(0);
+  for (var index = 0; index < 8; index += 1) {
+    handles.push(h.client.departures({ routing: ROUTING, apiKey: KEY_A, context: CONTEXT }, result.complete));
+  }
+  var fallback = requestTraffic(h, "IDFM:C200", result, KEY_A, "en");
+  assert.equal(h.transport.instances.length, 9);
+  fallback.abort();
+  handles.forEach(function (handle) { handle.abort(); });
+  h.clock.advance(10000);
+  assert.equal(h.transport.instances.length, 9);
+  assert.equal(result.values.length, 1);
+});
+
+test("fallback refreshes expired French data and never borrows another credential's French cache", function () {
+  ["expired", "other-key"].forEach(function (scenario) {
+    var h = harness(TRAFFIC_MS), result = collect(), english = trafficFixture();
+    delete english.disruptions[0].title;
+    requestTraffic(h, "IDFM:C200", result, scenario === "other-key" ? KEY_B : KEY_A);
+    h.transport.instances[0].respond(200, trafficFixture());
+    h.clock.advance(scenario === "expired" ? 60000 : 0);
+    requestTraffic(h, "IDFM:C200", result, KEY_A, "en");
+    h.transport.instances[1].respond(200, english);
+    assert.equal(h.transport.instances.length, 3);
+    assert.equal(h.transport.instances[2].headers.apikey, KEY_A);
+    h.transport.instances[2].respond(503, {});
+    h.clock.advance(0);
+    assertError(result.values[1], "SOURCE_UNAVAILABLE", h.clock.now());
+  });
 });
 
 test("transport errors and malformed traffic are unavailable, not successful UNKNOWN, and are not cached", function () {

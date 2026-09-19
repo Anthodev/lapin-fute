@@ -216,14 +216,16 @@ function normalizePrimTrafficResponse(value, apiKey) {
       if (begin > end) fail();
       periods.push(Object.freeze({ begin: begin, end: end }));
     }
-    if (typeof candidate.lastUpdate !== "undefined") localTimestamp(candidate.lastUpdate);
     if (typeof candidate.title !== "undefined" && typeof candidate.title !== "string") fail();
     if (typeof candidate.message !== "undefined" && typeof candidate.message !== "string") fail();
+    if (typeof candidate.cause !== "undefined" && typeof candidate.cause !== "string") fail();
     title = typeof candidate.title === "undefined" ? undefined
       : plainBoundedText(candidate.title, contracts.LIMITS.trafficTitleUtf8Bytes, variants);
     text = typeof candidate.message === "undefined" ? undefined
       : plainBoundedText(candidate.message, contracts.LIMITS.trafficTextUtf8Bytes, variants);
     disruption = { id: candidate.id, severity: parseSeverity(candidate.severity), periods: Object.freeze(periods) };
+    if (typeof candidate.cause !== "undefined") disruption.cause = candidate.cause;
+    if (typeof candidate.lastUpdate !== "undefined") disruption.lastUpdate = localTimestamp(candidate.lastUpdate);
     if (typeof title !== "undefined") disruption.title = title;
     if (typeof text !== "undefined") disruption.text = text;
     disruptions[candidate.id] = Object.freeze(disruption);
@@ -272,13 +274,15 @@ function active(disruption, localNow) {
   return false;
 }
 
-function trafficForLine(envelope, lineId, evaluatedAtMilliseconds, checkedAtMilliseconds) {
+function trafficForLine(envelope, lineId, evaluatedAtMilliseconds, checkedAtMilliseconds, frenchEnvelope, fallbackAtMilliseconds) {
   var localNow = currentParisTimestamp(evaluatedAtMilliseconds);
   var line = envelope.lines[lineId];
   var best;
-  var bestPriority = 0;
+  var details;
+  var fallbackNow;
   var disruption;
-  var priority;
+  var updatedAt;
+  var bestUpdatedAt;
   var index;
   var result = {
     schemaVersion: contracts.SCHEMA_VERSION,
@@ -294,24 +298,31 @@ function trafficForLine(envelope, lineId, evaluatedAtMilliseconds, checkedAtMill
   }
   for (index = 0; index < line.length; index += 1) {
     disruption = envelope.disruptions[line[index]];
-    if (!active(disruption, localNow) || disruption.severity === "INFORMATION") continue;
-    if (typeof disruption.title === "undefined" || typeof disruption.text === "undefined") priority = 2;
-    else priority = disruption.severity === "BLOQUANTE" ? 3 : 1;
-    if (typeof best === "undefined" || priority > bestPriority
-        || (priority === bestPriority && disruption.id < best.id)) {
+    // Works never surface as traffic, including works already under way.
+    if (disruption.cause === "TRAVAUX" || !active(disruption, localNow)
+        || disruption.severity === "INFORMATION") continue;
+    updatedAt = disruption.lastUpdate || "";
+    bestUpdatedAt = typeof best === "undefined" ? "" : best.lastUpdate || "";
+    if (typeof best === "undefined" || updatedAt > bestUpdatedAt
+        || (updatedAt === bestUpdatedAt && disruption.id < best.id)) {
       best = disruption;
-      bestPriority = priority;
     }
   }
   if (typeof best === "undefined") result.state = "NORMAL";
-  else if (bestPriority === 1) {
-    result.state = "DELAYED";
-    result.title = best.title;
-    result.text = best.text;
-  } else if (bestPriority === 3) {
-    result.state = "STOPPED";
-    result.title = best.title;
-    result.text = best.text;
+  else {
+    details = best;
+    if ((typeof best.title === "undefined" || typeof best.text === "undefined") && frenchEnvelope) {
+      fallbackNow = currentParisTimestamp(fallbackAtMilliseconds);
+      details = frenchEnvelope.disruptions[best.id];
+      // Translation never changes the selected incident or its severity.
+      if (!active(best, fallbackNow) || typeof details === "undefined"
+          || !active(details, fallbackNow)) return result;
+    }
+    if (typeof details.title !== "undefined" && typeof details.text !== "undefined") {
+      result.state = best.severity === "BLOQUANTE" ? "STOPPED" : "DELAYED";
+      result.title = details.title;
+      result.text = details.text;
+    }
   }
   return result;
 }

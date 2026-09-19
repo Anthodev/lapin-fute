@@ -401,15 +401,59 @@ test("lines omitted from the disruption-only bulk feed have normal traffic", fun
   assert.equal(trafficDetail(payload, "invalid-line").state, "UNKNOWN");
 });
 
-test("BLOQUANTE produces STOPPED and outranks usable PERTURBEE details", function () {
+test("the latest active update wins even over a more severe incident", function () {
   var payload = trafficFixture();
   payload.lines[1].impactedObjects[0].disruptionIds = ["delay-active", "blocking-unclassified"];
+  payload.disruptions[0].lastUpdate = "20260115T095900";
   assert.deepEqual(trafficDetail(payload, "IDFM:C200"), {
-    schemaVersion: 1, state: "STOPPED", checkedAt: TRAFFIC_MS / 1000,
-    title: "Tram T3 : incident", text: "Une perturbation est en cours."
+    schemaVersion: 1, state: "DELAYED", checkedAt: TRAFFIC_MS / 1000,
+    title: "Métro 2 : ralentissements", text: "Le trafic est ralenti & les temps d’attente sont allongés."
   });
   payload.lines[1].impactedObjects[0].disruptionIds.reverse();
-  assert.equal(trafficDetail(payload, "IDFM:C200").state, "STOPPED");
+  assert.equal(trafficDetail(payload, "IDFM:C200").state, "DELAYED");
+});
+
+test("dated incidents outrank undated ones and equal dates use ID rather than input order", function () {
+  var payload = trafficFixture();
+  payload.lines[1].impactedObjects[0].disruptionIds = ["delay-active", "blocking-unclassified"];
+  delete payload.disruptions[3].lastUpdate;
+  assert.equal(trafficDetail(payload, "IDFM:C200").state, "DELAYED");
+  payload.disruptions[3].lastUpdate = payload.disruptions[0].lastUpdate;
+  assert.equal(trafficDetail(payload, "IDFM:C200").title, "Tram T3 : incident");
+  payload.lines[1].impactedObjects[0].disruptionIds.reverse();
+  assert.equal(trafficDetail(payload, "IDFM:C200").title, "Tram T3 : incident");
+  delete payload.disruptions[0].lastUpdate;
+  delete payload.disruptions[3].lastUpdate;
+  assert.equal(trafficDetail(payload, "IDFM:C200").title, "Tram T3 : incident");
+});
+
+test("newer future and active works are excluded and cannot mask older active incidents", function () {
+  var payload = trafficFixture();
+  payload.lines[1].impactedObjects[0].disruptionIds = ["delay-active", "future-delay", "blocking-unclassified"];
+  payload.disruptions[3].lastUpdate = "20260115T095900";
+  payload.disruptions[3].applicationPeriods = [{ begin: "20260115T090000", end: "20260115T100000" }];
+  payload.disruptions[4].lastUpdate = "20260115T100000";
+  assert.equal(trafficDetail(payload, "IDFM:C200").title, "Métro 2 : ralentissements");
+  payload.disruptions[4].applicationPeriods[0].begin = "20260115T100000";
+  assert.equal(trafficDetail(payload, "IDFM:C200").title, "Métro 2 : ralentissements");
+  payload.lines[1].impactedObjects[0].disruptionIds = ["future-delay"];
+  assert.equal(trafficDetail(payload, "IDFM:C200").state, "NORMAL");
+});
+
+test("works exclusion follows the explicit TRAVAUX cause, never the title, a missing or unknown cause", function () {
+  var payload = trafficFixture();
+  payload.lines[1].impactedObjects[0].disruptionIds = ["delay-active", "future-delay"];
+  payload.disruptions[4].applicationPeriods[0].begin = "20260115T100000";
+  payload.disruptions[4].lastUpdate = "20260115T100000";
+  payload.disruptions[0].lastUpdate = "20260115T090000";
+  payload.disruptions[0].title = "Travaux en cours sur la ligne";
+  assert.equal(trafficDetail(payload, "IDFM:C200").title, "Travaux en cours sur la ligne");
+  payload.disruptions[0].cause = "TRAVAUX";
+  assert.equal(trafficDetail(payload, "IDFM:C200").state, "NORMAL");
+  payload.disruptions[0].cause = "MANIFESTATION";
+  assert.equal(trafficDetail(payload, "IDFM:C200").title, "Travaux en cours sur la ligne");
+  delete payload.disruptions[0].cause;
+  assert.equal(trafficDetail(payload, "IDFM:C200").title, "Travaux en cours sur la ligne");
 });
 
 test("an active disruption without complete details remains UNKNOWN", function () {
@@ -504,6 +548,7 @@ test("malformed traffic joins, periods, duplicates and severities reject rather 
     function (payload) { delete payload.disruptions; },
     function (payload) { payload.lines[1].impactedObjects[0].disruptionIds = ["missing"]; },
     function (payload) { payload.disruptions[0].severity = "MAJEURE"; },
+    function (payload) { payload.disruptions[0].lastUpdate = "20260230T100000"; },
     function (payload) { payload.disruptions[0].applicationPeriods = [{ begin: "20260230T100000", end: "20260230T110000" }]; },
     function (payload) { payload.disruptions[0].applicationPeriods[0].begin += "\n"; },
     function (payload) { payload.lines.push(clone(payload.lines[0])); },

@@ -586,7 +586,7 @@ test("traffic completion remains token-bound and its line cache is language-spec
   language = "fr"; closeWith(target, "KEEP", favorites); acknowledgeConfiguration(target);
   sendTraffic(target, "translated", FIRST);
   assert.equal(requests(target, "traffic").length, 2);
-  assert.equal(requests(target, "traffic")[1].headers["Accept-Language"], "fr");
+  assert.equal(requests(target, "traffic")[1].headers["Accept-Language"], undefined);
   resolveProduction(target, favorites);
   assert.notDeepEqual(finalTransfer(target, "translated").records, finalTransfer(target, "old-traffic").records);
   target.companion.stop();
