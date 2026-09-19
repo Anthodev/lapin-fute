@@ -3,98 +3,81 @@ import { writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
 const STABLE_TAG = /^v(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/u;
+const FENCED_LINE = /^ {0,3}(`{3,}|~{3,})(.*)$/u;
 
-function compareVersions(left, right) {
-  for (let index = 0; index < 3; index += 1) {
-    if (left[index] < right[index]) return -1;
-    if (left[index] > right[index]) return 1;
+// Advance the fenced-code state for one line. Returns null when no block is
+// open, or { char, length } for the currently open fence marker.
+function nextFence(line, open) {
+  const match = line.match(FENCED_LINE);
+  if (!match) return open;
+  const [, marker, info] = match;
+  if (open) {
+    // A closing fence reuses the character, is at least as long, and has no info string.
+    return marker[0] === open.char && marker.length >= open.length && info.trim() === "" ? null : open;
   }
-  return 0;
+  // A backtick fence's info string cannot contain backticks.
+  if (marker[0] === "`" && info.includes("`")) return null;
+  return { char: marker[0], length: marker.length };
 }
 
-function previousStableTag(tags, currentTag) {
-  const current = currentTag?.match(STABLE_TAG)?.slice(1).map(BigInt);
-  if (!current) throw new Error("Release tag must be a strict stable version: vMAJOR.MINOR.PATCH");
-  let previous = null;
-  for (const tag of tags) {
-    const version = tag.match(STABLE_TAG)?.slice(1).map(BigInt);
-    if (!version || compareVersions(version, current) >= 0) continue;
-    if (!previous || compareVersions(version, previous.version) > 0) previous = { tag, version };
+// Return the body of the `## [<version>] - date` section, without the heading
+// itself. Headings and section boundaries inside fenced code blocks are
+// ignored so code examples can neither duplicate nor truncate a section.
+export function extractChangelogSection(changelog, version) {
+  const escaped = version.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
+  const heading = new RegExp(`^ {0,3}## \\[${escaped}\\](?:[ \\t].*)?$`, "u");
+  const lines = changelog.replace(/\r\n?/gu, "\n").split("\n");
+  let open = null;
+  let sections = 0;
+  let collected = null;
+  let collecting = false;
+  for (const line of lines) {
+    if (FENCED_LINE.test(line)) open = nextFence(line, open);
+    if (open) {
+      // Fenced content is part of the section; only heading detection ignores it.
+      if (collecting) collected.push(line);
+      continue;
+    }
+    if (heading.test(line)) {
+      sections += 1;
+      collecting = sections === 1;
+      if (collecting) collected = [];
+      continue;
+    }
+    if (!collecting) continue;
+    if (/^ {0,3}## /u.test(line)) {
+      // Another section began; keep scanning so a duplicated version heading
+      // cannot hide after it.
+      collecting = false;
+      continue;
+    }
+    collected.push(line);
   }
-  return previous?.tag ?? null;
+  if (sections === 0) throw new Error(`CHANGELOG.md has no section for version ${version}; expected a "## [${version}] - date" heading`);
+  if (sections > 1) throw new Error(`CHANGELOG.md has ${sections} sections for version ${version}; expected exactly one`);
+  const content = collected.join("\n").replace(/^\n+/u, "").replace(/\s+$/u, "");
+  if (!content) throw new Error(`CHANGELOG.md section for version ${version} is empty`);
+  return `${content}\n`;
 }
 
-export function generateReleaseNotes({ tag, revision = tag, repository, cwd = process.cwd() }) {
+export function generateReleaseNotes({ tag, revision = tag, cwd = process.cwd() }) {
+  if (!STABLE_TAG.test(tag)) throw new Error("Release tag must be a strict stable version: vMAJOR.MINOR.PATCH");
   const git = (...args) => execFileSync("git", args, { cwd, encoding: "utf8" });
-  if (!repository || !/^[\w.-]+\/[\w.-]+$/u.test(repository)) throw new Error("A GitHub owner/repository is required");
-  const previous = previousStableTag(git("tag", "--list").trim().split("\n"), tag);
   const currentCommit = git("rev-parse", "--verify", "--end-of-options", `${revision}^{commit}`).trim();
   const taggedCommit = git("rev-parse", "--verify", `refs/tags/${tag}^{commit}`).trim();
   if (currentCommit !== taggedCommit) throw new Error("Release revision does not match its tag");
-  const baseUrl = `https://github.com/${repository}`;
-  const notes = [];
-  let baseline = null;
-  let divergent = false;
-  if (previous) {
-    baseline = git("rev-parse", "--verify", `refs/tags/${previous}^{commit}`).trim();
-    try {
-      git("merge-base", "--is-ancestor", baseline, currentCommit);
-    } catch (error) {
-      if (error.status !== 1) throw error;
-      divergent = true;
-      baseline = null;
-    }
+  let changelog;
+  try {
+    changelog = git("show", `${currentCommit}:CHANGELOG.md`);
+  } catch {
+    throw new Error(`CHANGELOG.md is missing at the tagged revision of ${tag}`);
   }
-
-  if (divergent) {
-    // Two endpoints, not a merge-base diff: old feature commits must not look new.
-    const statuses = git("diff", "--no-renames", "--name-status", "-z", `refs/tags/${previous}`, currentCommit, "--")
-      .split("\0");
-    const counts = { A: 0, M: 0, D: 0, T: 0 };
-    for (let index = 0; index < statuses.length - 1; index += 2) counts[statuses[index]] += 1;
-    notes.push(
-      "## Net file changes",
-      "",
-      `The history of ${previous} is not an ancestor of ${tag}. This summary compares the two release trees directly; historical commit titles are omitted to avoid presenting previously shipped work as new.`,
-      "",
-      `- ${counts.A} files added, ${counts.M} modified, ${counts.D} deleted, ${counts.T} changed type.`,
-      "",
-    );
-  } else {
-    const groups = [
-      { key: "feat", title: "Features", commits: [] },
-      { key: "change", title: "Changes", commits: [] },
-      { key: "fix", title: "Fixes", commits: [] },
-      { key: "ci", title: "CI", commits: [] },
-    ];
-    const byKey = new Map(groups.map((group) => [group.key, group]));
-    const fields = git("log", "--first-parent", "-z", "--format=%s%x00%h", baseline ? `${baseline}..${currentCommit}` : currentCommit, "--")
-      .split("\0");
-    fields.pop(); // Remove only the record terminator; empty subjects are valid fields.
-    for (let index = 0; index < fields.length; index += 2) {
-      const subject = fields[index].trim() || "(no commit subject)";
-      const hash = fields[index + 1].trim();
-      const type = subject.match(/^([a-z]+)(?:\([^)]*\))?!?:\s+/i)?.[1].toLowerCase();
-      const key = ["feat", "fix", "ci"].includes(type) ? type : "change";
-      byKey.get(key).commits.push(`- ${subject} (\`${hash}\`)`);
-    }
-    for (const group of groups) {
-      if (group.commits.length === 0) continue;
-      notes.push(`## ${group.title}`, "", ...group.commits, "");
-    }
-  }
-  // GitHub's two-dot comparison shows the endpoint trees even across divergent histories.
-  const changelogUrl = previous
-    ? `${baseUrl}/compare/${previous}${divergent ? ".." : "..."}${tag}`
-    : `${baseUrl}/commits/${tag}`;
-  notes.push(`**${divergent ? "Release tree diff" : "Full changelog"}**: ${changelogUrl}`, "");
-  return notes.join("\n");
+  return extractChangelogSection(changelog, tag.slice(1));
 }
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
   writeFileSync("release-notes.md", generateReleaseNotes({
     tag: process.env.GITHUB_REF_NAME,
     revision: process.env.GITHUB_SHA,
-    repository: process.env.GITHUB_REPOSITORY,
   }));
 }

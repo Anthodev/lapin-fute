@@ -48,6 +48,14 @@ jobs:
           preview='^pre-v(0|[1-9][0-9]*)-(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$'
           [[ "$RELEASE_TAG" =~ $production || "$RELEASE_TAG" =~ $preview ]]
 
+      # Every mode that publishes release notes (a pushed v* tag, or a manual
+      # dispatch on an existing v* tag) runs the publish job, so a missing,
+      # empty, or duplicated changelog section must fail before any package or
+      # deployment runs.
+      - name: Validate release changelog section
+        if: ${{ startsWith(github.ref_name, 'v') }}
+        run: node scripts/generate-release-notes.mjs
+
       - run: npm test
 
   package:
@@ -380,7 +388,7 @@ jobs:
       - name: Generate release notes
         run: node scripts/generate-release-notes.mjs
 
-      - name: Create release with categorized notes
+      - name: Create release with changelog notes
         env:
           GH_TOKEN: ${{ github.token }}
         shell: bash

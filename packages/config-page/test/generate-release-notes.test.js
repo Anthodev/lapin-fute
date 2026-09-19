@@ -4,7 +4,124 @@ import { execFileSync } from "node:child_process";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { generateReleaseNotes } from "../../../scripts/generate-release-notes.mjs";
+import { extractChangelogSection, generateReleaseNotes } from "../../../scripts/generate-release-notes.mjs";
+
+const CHANGELOG = [
+  "# Changelog",
+  "",
+  "## [1.1.0] - 2026-09-19",
+  "",
+  "Favorites now pair a departure stop with a reachable arrival stop.",
+  "",
+  "### Features",
+  "",
+  "- feat(arrivals): support departure-to-arrival favorites (#28) (`102d719`)",
+  "",
+  "**Full changelog**: https://github.com/example/app/compare/v1.0.4...v1.1.0",
+  "",
+  "[Release v1.1.0](https://github.com/example/app/releases/tag/v1.1.0)",
+  "",
+  "## [1.0.4] - 2026-09-14",
+  "",
+  "This release fixes partial-service arrival pooling.",
+  "",
+].join("\n");
+
+test("release body keeps the whole section and excludes adjacent releases and the heading", () => {
+  const notes = extractChangelogSection(CHANGELOG, "1.1.0");
+  assert.match(notes, /^Favorites now pair a departure stop/u);
+  assert.match(notes, /### Features\n\n- feat\(arrivals\): support departure-to-arrival favorites \(#28\) \(`102d719`\)/u);
+  assert.match(notes, /\*\*Full changelog\*\*: https:\/\/github\.com\/example\/app\/compare\/v1\.0\.4\.\.\.v1\.1\.0/u);
+  assert.match(notes, /\[Release v1\.1\.0\]\(https:\/\/github\.com\/example\/app\/releases\/tag\/v1\.1\.0\)/u);
+  assert.doesNotMatch(notes, /## \[1\.1\.0\]|partial-service|Changelog/u);
+  assert.match(notes, /\n$/u);
+});
+
+test("adjacent releases stay isolated regardless of heading position", () => {
+  const notes = extractChangelogSection(CHANGELOG, "1.0.4");
+  assert.match(notes, /^This release fixes partial-service arrival pooling\.$/mu);
+  assert.doesNotMatch(notes, /departure stop|Features|Release v1\.1\.0/u);
+});
+
+test("exact bracket match does not confuse similar versions", () => {
+  const changelog = ["## [1.10.0] - 2026-09-19", "", "ten", "", "## [1.1.0] - 2026-09-19", "", "one", ""].join("\n");
+  assert.equal(extractChangelogSection(changelog, "1.1.0"), "one\n");
+  assert.equal(extractChangelogSection(changelog, "1.10.0"), "ten\n");
+});
+
+test("fenced code examples can neither duplicate nor truncate a section", () => {
+  const changelog = [
+    "## [1.1.0] - 2026-09-19",
+    "",
+    "Intro before example.",
+    "",
+    "```md",
+    "## [1.1.0] - fake",
+    "## [9.9.9] - fake",
+    "fake body",
+    "```",
+    "",
+    "Outro after example.",
+    "",
+    "## [1.0.4] - 2026-09-14",
+    "",
+    "previous release",
+    "",
+  ].join("\n");
+  const notes = extractChangelogSection(changelog, "1.1.0");
+  assert.match(notes, /Intro before example\./u);
+  assert.match(notes, /## \[1\.1\.0\] - fake\n## \[9\.9\.9\] - fake\nfake body/u);
+  assert.match(notes, /Outro after example\./u);
+  assert.doesNotMatch(notes, /previous release/u);
+});
+
+test("a fenced heading before any real section is not a section", () => {
+  const changelog = ["# Changelog", "", "```md", "## [1.1.0] - fake", "```", "", "## [1.1.0] - 2026-09-19", "", "real", ""].join("\n");
+  assert.equal(extractChangelogSection(changelog, "1.1.0"), "real\n");
+});
+
+test("tilde fences and CRLF line endings are handled like backtick fences", () => {
+  const changelog = [
+    "## [1.1.0] - 2026-09-19",
+    "",
+    "~~~",
+    "## [1.0.4] - fake",
+    "~~~",
+    "",
+    "kept",
+    "",
+    "## [1.0.4] - 2026-09-14",
+  ].join("\r\n");
+  const notes = extractChangelogSection(changelog, "1.1.0");
+  assert.match(notes, /## \[1\.0\.4\] - fake/u);
+  assert.match(notes, /kept/u);
+});
+
+test("missing, empty, and duplicate sections are rejected", () => {
+  assert.throws(() => extractChangelogSection(CHANGELOG, "1.0.5"), /no section for version 1\.0\.5/u);
+  assert.throws(() => extractChangelogSection("## [1.1.0] - 2026-09-19\n\n## [1.0.4] - 2026-09-14\n", "1.1.0"), /is empty/u);
+  const duplicated = ["## [1.1.0] - 2026-09-19", "", "first", "", "## [1.1.0] - 2026-09-19", "", "second", ""].join("\n");
+  assert.throws(() => extractChangelogSection(duplicated, "1.1.0"), /2 sections for version 1\.1\.0/u);
+});
+
+test("a duplicate section is rejected even when separated by another release", () => {
+  const changelog = [
+    "## [1.1.0] - 2026-09-19",
+    "",
+    "first",
+    "",
+    "## [1.0.4] - 2026-09-14",
+    "",
+    "older release",
+    "",
+    "## [1.1.0] - 2026-09-19",
+    "",
+    "second",
+    "",
+  ].join("\n");
+  assert.throws(() => extractChangelogSection(changelog, "1.1.0"), /2 sections for version 1\.1\.0/u);
+  assert.equal(extractChangelogSection(changelog, "1.0.4"), "older release\n");
+});
 
 function fixture(t) {
   const cwd = mkdtempSync(join(tmpdir(), "lapin-fute-release-notes-"));
@@ -14,91 +131,46 @@ function fixture(t) {
     env: { ...process.env, GIT_AUTHOR_NAME: "Fixture", GIT_AUTHOR_EMAIL: "fixture@example.invalid", GIT_COMMITTER_NAME: "Fixture", GIT_COMMITTER_EMAIL: "fixture@example.invalid" },
   }).trim();
   git("init", "--quiet");
-  function commit(subject, content, parents = [], filename = "app.txt") {
-    writeFileSync(join(cwd, filename), content);
-    git("add", "--", filename);
+  function commit(subject, parents = [], files = {}) {
+    for (const [name, content] of Object.entries(files)) writeFileSync(join(cwd, name), content);
+    git("add", "--", ...Object.keys(files));
     const tree = git("write-tree");
     return git("commit-tree", tree, ...parents.flatMap((parent) => ["-p", parent]), "-m", subject);
   }
-  const root = commit("chore: initialize", "root");
-  return {
-    git, commit, root,
-    notes: (tag, revision = tag) => generateReleaseNotes({ cwd, tag, revision, repository: "example/app" }),
-  };
+  const root = commit("chore: initialize", [], { "app.txt": "root" });
+  return { cwd, git, commit, root, notes: (tag, revision = tag) => generateReleaseNotes({ cwd, tag, revision }) };
 }
 
-test("empty commit subjects do not consume the following categorized commit", (t) => {
+test("release notes come from the tagged changelog, never the working copy", (t) => {
   const f = fixture(t);
-  f.git("tag", "v1.0.0", f.root);
-  const fix = f.commit("fix: preserve this change", "fixed", [f.root]);
-  f.git("update-ref", "HEAD", fix);
-  f.git("-c", "commit.gpgsign=false", "-c", "core.hooksPath=/dev/null",
-    "commit", "--quiet", "--allow-empty", "--allow-empty-message", "-m", "");
-  const empty = f.git("rev-parse", "HEAD");
-  f.git("tag", "v1.0.1", empty);
-  const notes = f.notes("v1.0.1");
-  assert.ok(notes.includes(`## Changes\n\n- (no commit subject) (\`${f.git("rev-parse", "--short", empty)}\`)`));
-  assert.ok(notes.includes(`## Fixes\n\n- fix: preserve this change (\`${f.git("rev-parse", "--short", fix)}\`)`));
-  assert.doesNotMatch(notes, /initialize/u);
+  const tagged = f.commit("chore: release", [f.root], {
+    "CHANGELOG.md": ["## [1.1.0] - 2026-09-19", "", "- feat: tagged feature (`102d719`)", ""].join("\n"),
+  });
+  f.git("tag", "v1.1.0", tagged);
+  writeFileSync(join(f.cwd, "CHANGELOG.md"), ["## [1.1.0] - 2026-09-19", "", "- feat: uncommitted change", ""].join("\n"));
+  const notes = f.notes("v1.1.0", tagged);
+  assert.match(notes, /- feat: tagged feature \(`102d719`\)/u);
+  assert.doesNotMatch(notes, /uncommitted change/u);
 });
 
-test("numeric stable predecessor excludes future, prerelease, build and malformed tags", (t) => {
+test("a changelog committed after the tag cannot leak into the tagged release", (t) => {
   const f = fixture(t);
-  const old = f.commit("feat: already shipped", "old", [f.root]);
-  for (const tag of ["v1.9.9", "v1.10.0"]) f.git("tag", tag, old);
-  const misleading = f.commit("fix: belongs in these notes", "intermediate", [old]);
-  for (const tag of ["v1.10.1-rc.1", "v1.10.1+build", "v01.10.1", "v1.10.1junk", "v1.11.0", "v2.0.0"]) f.git("tag", tag, misleading);
-  const current = f.commit("ci: release", "current", [misleading]);
-  f.git("tag", "v1.10.1", current);
-  const notes = f.notes("v1.10.1");
-  assert.match(notes, /compare\/v1\.10\.0\.\.\.v1\.10\.1/u);
-  assert.match(notes, /## Fixes\n\n- fix: belongs in these notes/u);
-  assert.match(notes, /## CI\n\n- ci: release/u);
-  assert.doesNotMatch(notes, /already shipped|initialize/u);
+  const tagged = f.commit("chore: release", [f.root], {
+    "CHANGELOG.md": ["## [1.1.0] - 2026-09-19", "", "- feat: tagged feature", ""].join("\n"),
+  });
+  f.git("tag", "v1.1.0", tagged);
+  const later = f.commit("docs: edit changelog", [tagged], {
+    "CHANGELOG.md": ["## [1.1.0] - 2026-09-19", "", "- feat: edited after tagging", ""].join("\n"),
+  });
+  assert.doesNotMatch(f.notes("v1.1.0", tagged), /edited after tagging/u);
+  assert.throws(() => f.notes("v1.1.0", later), /does not match its tag/u);
 });
 
-test("stable version comparison retains precision beyond Number safe integers", (t) => {
+test("releases reject non-stable tags and repositories without a tagged changelog", (t) => {
   const f = fixture(t);
-  f.git("tag", "v9007199254740992.0.0", f.root);
-  f.git("tag", "v9007199254740993.0.0", f.root);
-  const current = f.commit("fix: new", "new", [f.root]);
-  f.git("tag", "v9007199254740994.0.0", current);
-  assert.match(f.notes("v9007199254740994.0.0"), /compare\/v9007199254740993\.0\.0\.\.\.v9007199254740994\.0\.0/u);
-});
-
-test("divergent release uses net trees without replaying historical or squash commits", (t) => {
-  const f = fixture(t);
-  const previous = f.commit("feat: huge old feature", "released", [f.root]);
-  f.git("tag", "v1.0.0", previous);
-  const squash = f.commit("feat: ship all old features", "released", [f.root]);
-  const current = f.commit("fix: recent change", "new", [squash]);
-  f.git("tag", "v1.0.1", current);
-  const notes = f.notes("v1.0.1");
-  assert.match(notes, /## Net file changes/u);
-  assert.match(notes, /0 files added, 1 modified, 0 deleted, 0 changed type/u);
-  assert.match(notes, /compare\/v1\.0\.0\.\.v1\.0\.1\n/u);
-  assert.doesNotMatch(notes, /huge old feature|ship all old features|recent change|## Features/u);
-});
-
-test("net counts preserve unusual filenames without injecting Markdown", (t) => {
-  const f = fixture(t);
-  const previous = f.commit("feat: old", "old", [f.root]);
-  f.git("tag", "v1.0.0", previous);
-  const current = f.commit("feat: squash", "new", [f.root], "odd\n`[filename].txt");
-  f.git("tag", "v1.0.1", current);
-  const notes = f.notes("v1.0.1");
-  assert.match(notes, /1 files added, 0 modified, 0 deleted, 0 changed type/u);
-  assert.doesNotMatch(notes, /filename/u);
-});
-
-test("initial release alone includes full history and rejects invalid current releases", (t) => {
-  const f = fixture(t);
-  f.git("tag", "v1.0.0", f.root);
-  assert.match(f.notes("v1.0.0"), /chore: initialize/u);
-  assert.match(f.notes("v1.0.0"), /\/commits\/v1\.0\.0/u);
-  for (const tag of [undefined, "v1.0", "v1.0.0-rc.1", "v01.0.0"]) {
+  for (const tag of [undefined, "v1.0", "v1.0.0-rc.1", "v01.0.0", "pre-v1-0.0"]) {
     assert.throws(() => f.notes(tag), /strict stable version/u);
   }
-  const other = f.commit("fix: untagged", "other", [f.root]);
-  assert.throws(() => f.notes("v1.0.0", other), /does not match its tag/u);
+  f.git("tag", "v1.1.0", f.root);
+  assert.throws(() => f.notes("v1.1.0", f.root), /CHANGELOG\.md is missing/u);
 });
