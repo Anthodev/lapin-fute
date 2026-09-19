@@ -1,16 +1,18 @@
 # Changelog
 
-## [Unreleased]
+## [1.2.0] - 2026-09-20
 
 The configuration page can now override the watch app language independently of the watch system settings. Automatic remains the default; explicit French or English choices are saved on the phone and survive restarts.
 
+If saving a replacement credential fails, the previous language and favorites remain active.
+
 ### Features
 
-- Add an accessible Automatic / Français / English selector and synchronize language-only changes without editing favorites (#30).
+- feat(configuration): add persistent watch language selection (#30) (#31) (`1650944`)
 
-### Fixes
+### Changes
 
-- Keep the previous language and favorites active when a replacement credential's configuration cannot be saved.
+- chore(release): bump version to 1.2.0 and update changelog
 
 ## [1.1.0] - 2026-09-19
 
