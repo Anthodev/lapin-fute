@@ -9,10 +9,12 @@ const fixture = require("../../../fixtures/departures/foundation.json");
 const KEY = "journey-storage-fixture-key";
 const ARRIVAL = "plc_" + "a".repeat(43);
 const ROUTING = { monitoringRef: "STIF:StopPoint:Q:1:", lineRef: "STIF:Line::1:", destinationRef: "STIF:StopPoint:Q:2:" };
-function record(version = 2) {
+function record(version = configuration.CONFIG_SCHEMA_VERSION) {
   const favorite = { ...fixture.favorite, arrivalPlaceId: ARRIVAL, routing: { ...ROUTING } };
   if (version === 1) delete favorite.arrivalPlaceId;
-  return { schemaVersion: version, favorites: [favorite], primApiKey: KEY, keyStatus: C.KEY_STATUS.CONFIGURED };
+  const value = { schemaVersion: version, favorites: [favorite], primApiKey: KEY, keyStatus: C.KEY_STATUS.CONFIGURED };
+  if (version === configuration.CONFIG_SCHEMA_VERSION) value.languagePreference = "auto";
+  return value;
 }
 function storageFor(value) {
   const storage = new FakeStorage();
@@ -20,33 +22,37 @@ function storageFor(value) {
   return storage;
 }
 
-test("legacy storage migrates once without losing presentation, credentials or routing", () => {
-  const legacy = record(1), storage = storageFor(legacy);
-  const expected = { ...legacy, schemaVersion: 2, favorites: [{ ...legacy.favorites[0], arrivalPlaceId: null }] };
-  assert.deepEqual(configuration.loadConfiguration(storage), expected);
-  assert.deepEqual(JSON.parse(storage.getItem(configuration.CONFIG_STORAGE_KEY)), expected);
-  const writes = storage.writes.length;
-  assert.deepEqual(configuration.loadConfiguration(storage), expected);
-  assert.equal(storage.writes.length, writes);
-  assert.equal(configuration.isStoredConfiguration(legacy), false);
+test("both supported phone records migrate once to Automatic without losing favorites or credentials", () => {
+  for (const version of [1, 2]) {
+    const legacy = record(version), storage = storageFor(legacy);
+    const expected = { ...legacy, schemaVersion: configuration.CONFIG_SCHEMA_VERSION, languagePreference: "auto",
+      favorites: [{ ...legacy.favorites[0], arrivalPlaceId: version === 1 ? null : ARRIVAL }] };
+    assert.deepEqual(configuration.loadConfiguration(storage), expected);
+    assert.deepEqual(JSON.parse(storage.getItem(configuration.CONFIG_STORAGE_KEY)), expected);
+    const writes = storage.writes.length;
+    assert.deepEqual(configuration.loadConfiguration(storage), expected);
+    assert.equal(storage.writes.length, writes);
+    assert.equal(configuration.isStoredConfiguration(legacy), false);
+  }
 });
 
 test("storage never treats malformed or missing v2 arrivals as a legacy omission", () => {
-  for (const version of [1, 2]) {
+  for (const version of [1, 2, configuration.CONFIG_SCHEMA_VERSION]) {
     const value = record(version);
     value.favorites[0].arrivalPlaceId = "not-a-place";
     const storage = storageFor(value), before = storage.getItem(configuration.CONFIG_STORAGE_KEY);
     assert.equal(configuration.loadConfiguration(storage), null);
     assert.equal(storage.getItem(configuration.CONFIG_STORAGE_KEY), before);
   }
-  const value = record(); delete value.favorites[0].arrivalPlaceId;
+  const value = record(2); delete value.favorites[0].arrivalPlaceId;
   assert.equal(configuration.loadConfiguration(storageFor(value)), null);
   const inherited = record(); delete inherited.favorites[0].arrivalPlaceId;
   Object.setPrototypeOf(inherited.favorites[0], { arrivalPlaceId: ARRIVAL });
   assert.equal(configuration.isStoredConfiguration(inherited), false);
   const explicit = record(1);
   explicit.favorites[0].arrivalPlaceId = ARRIVAL;
-  assert.deepEqual(configuration.loadConfiguration(storageFor(explicit)), { ...explicit, schemaVersion: 2 });
+  assert.deepEqual(configuration.loadConfiguration(storageFor(explicit)),
+    { ...explicit, schemaVersion: configuration.CONFIG_SCHEMA_VERSION, languagePreference: "auto" });
 });
 
 test("routing recovery does not erase an explicit arrival and rejects unrelated corruption", () => {
@@ -57,21 +63,25 @@ test("routing recovery does not erase an explicit arrival and rejects unrelated 
   assert.equal(configuration.loadConfiguration(storageFor(value)), null);
 });
 
-test("migration readback failure restores the exact old bytes and exposes no writable configuration", () => {
-  const storage = storageFor(record(1)), original = storage.getItem(configuration.CONFIG_STORAGE_KEY);
-  const write = storage.setItem;
-  let fail = true;
-  storage.setItem = function (key, value) {
-    if (key === configuration.CONFIG_STORAGE_KEY && fail) {
-      fail = false;
-      write.call(this, key, "corrupted-write");
-    } else write.call(this, key, value);
-  };
-  assert.equal(configuration.loadConfiguration(storage), null);
-  assert.equal(storage.getItem(configuration.CONFIG_STORAGE_KEY), original);
-  assert.equal(configuration.applyConfigurationUpdate(null, { schemaVersion: 2, favorites: [],
-    apiKeyUpdate: { schemaVersion: 1, action: "KEEP" } }), null);
-  assert.equal(configuration.loadConfiguration(storage).favorites[0].arrivalPlaceId, null);
+test("migration readback failure restores either old format and exposes no writable configuration", () => {
+  for (const version of [1, 2]) {
+    const storage = storageFor(record(version)), original = storage.getItem(configuration.CONFIG_STORAGE_KEY);
+    const write = storage.setItem;
+    let fail = true;
+    storage.setItem = function (key, value) {
+      if (key === configuration.CONFIG_STORAGE_KEY && fail) {
+        fail = false;
+        write.call(this, key, "corrupted-write");
+      } else write.call(this, key, value);
+    };
+    assert.equal(configuration.loadConfiguration(storage), null);
+    assert.equal(storage.getItem(configuration.CONFIG_STORAGE_KEY), original);
+    assert.equal(configuration.applyConfigurationUpdate(null, { schemaVersion: 2, favorites: [],
+      apiKeyUpdate: { schemaVersion: 1, action: "KEEP" } }), null);
+    const restored = configuration.loadConfiguration(storage);
+    assert.equal(restored.favorites[0].arrivalPlaceId, version === 1 ? null : ARRIVAL);
+    assert.equal(restored.languagePreference, "auto");
+  }
 });
 
 test("a durable invalid-key marker remains authoritative across legacy migration", () => {
@@ -98,7 +108,8 @@ test("a durable invalid-key marker remains authoritative across legacy migration
 test("v2 page envelopes preserve arrivals while a legacy empty close can never clear favorites", () => {
   const current = record();
   const opening = configuration.configurationPageState(current, "fr");
-  assert.deepEqual(opening, { schemaVersion: 2, hasKey: true, favorites: current.favorites, language: "fr" });
+  assert.deepEqual(opening, { schemaVersion: 2, hasKey: true, favorites: current.favorites,
+    language: "fr", languagePreference: "auto" });
   const update = { schemaVersion: 2, favorites: current.favorites, apiKeyUpdate: { schemaVersion: 1, action: "KEEP" } };
   const parsed = configuration.parseCloseFragment("pebblejs://close#" + encodeURIComponent(JSON.stringify(update)));
   assert.deepEqual(configuration.applyConfigurationUpdate(current, parsed), current);
@@ -106,6 +117,53 @@ test("v2 page envelopes preserve arrivals while a legacy empty close can never c
   assert.equal(configuration.parseCloseFragment(JSON.stringify(legacy)), null);
   assert.equal(configuration.applyConfigurationUpdate(current, legacy), null);
   assert.equal(configuration.areFavoritesSecretFree(current.favorites, "aaa", null), false);
+});
+
+test("stored language preferences survive restoration while malformed values never become Automatic", () => {
+  for (const preference of ["auto", "en", "fr"]) {
+    const value = { ...record(), languagePreference: preference }, storage = storageFor(value);
+    assert.deepEqual(configuration.loadConfiguration(storage), value);
+    assert.equal(configuration.configurationPageState(configuration.loadConfiguration(storage), "en").languagePreference, preference);
+  }
+  for (const version of [1, 2, configuration.CONFIG_SCHEMA_VERSION]) {
+    for (const preference of ["fr-FR", "", null, false]) {
+      const storage = storageFor({ ...record(version), languagePreference: preference });
+      const original = storage.getItem(configuration.CONFIG_STORAGE_KEY);
+      assert.equal(configuration.loadConfiguration(storage), null);
+      assert.equal(storage.getItem(configuration.CONFIG_STORAGE_KEY), original);
+    }
+  }
+  const missing = record(); delete missing.languagePreference;
+  assert.equal(configuration.loadConfiguration(storageFor(missing)), null);
+});
+
+test("legacy saves preserve an override, explicit Automatic removes it, and invalid preferences reject the entire update", () => {
+  const current = { ...record(), languagePreference: "fr" };
+  const update = { schemaVersion: 2, favorites: current.favorites, apiKeyUpdate: { schemaVersion: 1, action: "KEEP" } };
+  const parse = (value) => configuration.parseCloseFragment(encodeURIComponent(JSON.stringify(value)));
+  assert.deepEqual(configuration.applyConfigurationUpdate(current, parse(update)), current);
+  assert.equal(configuration.applyConfigurationUpdate(current, parse({ ...update, languagePreference: "auto" })).languagePreference, "auto");
+  for (const preference of ["fr-FR", "", null, false, undefined]) {
+    const invalid = { ...update, favorites: [], apiKeyUpdate: { schemaVersion: 1, action: "REMOVE" },
+      languagePreference: preference };
+    assert.equal(configuration.applyConfigurationUpdate(current, invalid), null);
+    if (preference !== undefined) assert.equal(parse(invalid), null);
+  }
+  assert.equal(current.languagePreference, "fr");
+  assert.deepEqual(current.favorites, record().favorites);
+  assert.equal(current.primApiKey, KEY);
+});
+
+test("Automatic retains French normalization and English fallback without consulting the watch for overrides", () => {
+  for (const [language, expected] of [["fr_FR", "fr"], ["FR-ca", "fr"], ["de_DE", "en"], [undefined, "en"]]) {
+    assert.equal(configuration.effectiveWatchLanguage({ getActiveWatchInfo: () => ({ language }) }, "auto"), expected);
+  }
+  assert.equal(configuration.effectiveWatchLanguage({}, "auto"), "en");
+  assert.equal(configuration.effectiveWatchLanguage({ getActiveWatchInfo: () => null }, "auto"), "en");
+  const unavailable = { getActiveWatchInfo: () => { throw new Error("unavailable"); } };
+  assert.equal(configuration.effectiveWatchLanguage(unavailable, "auto"), "en");
+  assert.equal(configuration.effectiveWatchLanguage(unavailable, "en"), "en");
+  assert.equal(configuration.effectiveWatchLanguage(unavailable, "fr"), "fr");
 });
 
 function overview(favorites) {

@@ -1,5 +1,17 @@
 # Changelog
 
+## [Unreleased]
+
+The configuration page can now override the watch app language independently of the watch system settings. Automatic remains the default; explicit French or English choices are saved on the phone and survive restarts.
+
+### Features
+
+- Add an accessible Automatic / Français / English selector and synchronize language-only changes without editing favorites (#30).
+
+### Fixes
+
+- Keep the previous language and favorites active when a replacement credential's configuration cannot be saved.
+
 ## [1.1.0] - 2026-09-19
 
 Favorites now pair a departure stop and line with a reachable arrival stop, including intermediate stops. Available across all five transport modes, journeys stay on one line without connections. The configuration page lets you select the arrival stop. The watch combines full-line and short-turn departures chronologically, excludes services known not to reach your arrival stop, and marks uncertain journeys with `?` without changing their departure times.

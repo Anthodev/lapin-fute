@@ -2,11 +2,13 @@
 
 var contracts = require("./contracts");
 var CONFIG_STORAGE_KEY = "lapinFuteConfig";
+// Phone-local preference version; page envelopes remain CONFIGURATION_VERSION 2.
+var CONFIG_SCHEMA_VERSION = 3;
 var RESULTS_STORAGE_KEY = "lapinFuteResults";
 // Phone-local cache version. Earlier caches did not bind results to an arrival.
 var CACHE_SCHEMA_VERSION = 3;
 var INVALID_KEY_STATUS_STORAGE_KEY = "lapinFuteInvalidKeyStatus";
-var CONFIG_RECORD_KEYS = ["schemaVersion", "favorites", "primApiKey", "keyStatus"];
+var CONFIG_RECORD_KEYS = ["schemaVersion", "favorites", "primApiKey", "keyStatus", "languagePreference"];
 var CACHE_RECORD_KEYS = ["schemaVersion", "overview", "trafficDetails"];
 var OVERVIEW_ENTRY_KEYS = [
   "favoriteId",
@@ -24,7 +26,7 @@ var INVALID_KEY_STATUS_RECORD_KEYS = [
   "keyStatus",
   "configurationFingerprint"
 ];
-var UPDATE_KEYS = ["schemaVersion", "favorites", "apiKeyUpdate", "forceFullSync"];
+var UPDATE_KEYS = ["schemaVersion", "favorites", "apiKeyUpdate", "forceFullSync", "languagePreference"];
 var MAX_CLOSE_RESPONSE_LENGTH = 32768;
 var MAX_SAFE_INTEGER = 9007199254740991;
 var FAVORITE_STRING_KEYS = [
@@ -47,19 +49,21 @@ var ROUTING_STRING_KEYS = [
 
 function emptyConfiguration() {
   return {
-    schemaVersion: contracts.CONFIGURATION_VERSION,
+    schemaVersion: CONFIG_SCHEMA_VERSION,
     favorites: [],
     primApiKey: null,
-    keyStatus: contracts.KEY_STATUS.MISSING
+    keyStatus: contracts.KEY_STATUS.MISSING,
+    languagePreference: "auto"
   };
 }
 
 function copyConfiguration(value) {
   return {
-    schemaVersion: contracts.CONFIGURATION_VERSION,
+    schemaVersion: CONFIG_SCHEMA_VERSION,
     favorites: value.favorites.map(contracts.copyPhoneFavorite),
     primApiKey: value.primApiKey,
-    keyStatus: value.keyStatus
+    keyStatus: value.keyStatus,
+    languagePreference: value.languagePreference
   };
 }
 
@@ -162,10 +166,20 @@ function activeWatchLanguage(Pebble) {
   }
 }
 
+function isLanguagePreference(value) {
+  return value === "auto" || value === contracts.WIRE_LANGUAGE.EN || value === contracts.WIRE_LANGUAGE.FR;
+}
+
+function effectiveWatchLanguage(Pebble, preference) {
+  return preference === "auto" ? activeWatchLanguage(Pebble) : preference;
+}
+
 function isStoredConfiguration(value) {
   if (!contracts.isObject(value)
       || !contracts.hasOnlyKeys(value, CONFIG_RECORD_KEYS)
-      || value.schemaVersion !== contracts.CONFIGURATION_VERSION
+      || value.schemaVersion !== CONFIG_SCHEMA_VERSION
+      || !Object.prototype.hasOwnProperty.call(value, "languagePreference")
+      || !isLanguagePreference(value.languagePreference)
       || !contracts.isPhoneFavoriteList(value.favorites)) return false;
   if (value.primApiKey === null) {
     return value.keyStatus === contracts.KEY_STATUS.MISSING;
@@ -179,8 +193,13 @@ function isStoredConfiguration(value) {
 function recoverStoredConfiguration(value) {
   if (!contracts.isObject(value) || !Array.isArray(value.favorites)
       || value.schemaVersion !== contracts.SCHEMA_VERSION
-        && value.schemaVersion !== contracts.CONFIGURATION_VERSION) return null;
+        && value.schemaVersion !== contracts.CONFIGURATION_VERSION
+        && value.schemaVersion !== CONFIG_SCHEMA_VERSION) return null;
   var legacy = value.schemaVersion === contracts.SCHEMA_VERSION;
+  if (value.schemaVersion !== CONFIG_SCHEMA_VERSION
+      && !Object.prototype.hasOwnProperty.call(value, "languagePreference")) {
+    value.languagePreference = "auto";
+  }
   // This freshly parsed record is private to restoration. Routing is replaceable
   // catalog enrichment; preserve every other field for ordinary validation.
   value.favorites.forEach(function (favorite) {
@@ -192,7 +211,7 @@ function recoverStoredConfiguration(value) {
         && Object.prototype.hasOwnProperty.call(favorite, "routing")
         && !contracts.isServiceRouting(favorite.routing)) delete favorite.routing;
   });
-  value.schemaVersion = contracts.CONFIGURATION_VERSION;
+  value.schemaVersion = CONFIG_SCHEMA_VERSION;
   return isStoredConfiguration(value) ? value : null;
 }
 
@@ -202,6 +221,8 @@ function isConfigurationUpdate(value) {
     && value.schemaVersion === contracts.CONFIGURATION_VERSION
     && contracts.isPhoneFavoriteList(value.favorites)
     && contracts.isApiKeyUpdate(value.apiKeyUpdate)
+    && (!Object.prototype.hasOwnProperty.call(value, "languagePreference")
+      || isLanguagePreference(value.languagePreference))
     && (!Object.prototype.hasOwnProperty.call(value, "forceFullSync")
       || typeof value.forceFullSync === "boolean");
 }
@@ -460,7 +481,7 @@ function loadConfiguration(storage) {
   var current = parseStored(storage, CONFIG_STORAGE_KEY);
   var invalidMarker = parseStored(storage, INVALID_KEY_STATUS_STORAGE_KEY).value;
   var loaded;
-  var migration = current.value && current.value.schemaVersion === contracts.SCHEMA_VERSION;
+  var migration = current.value && current.value.schemaVersion !== CONFIG_SCHEMA_VERSION;
   if (!current.present) return emptyConfiguration();
   loaded = recoverStoredConfiguration(current.value);
   if (loaded === null) return null;
@@ -695,16 +716,19 @@ function applyConfigurationUpdate(current, update) {
     keyStatus = contracts.KEY_STATUS.MISSING;
   }
   return {
-    schemaVersion: contracts.CONFIGURATION_VERSION,
+    schemaVersion: CONFIG_SCHEMA_VERSION,
     favorites: update.favorites.map(contracts.copyPhoneFavorite),
     primApiKey: primApiKey,
-    keyStatus: keyStatus
+    keyStatus: keyStatus,
+    languagePreference: Object.prototype.hasOwnProperty.call(update, "languagePreference")
+      ? update.languagePreference : current.languagePreference
   };
 }
 
 function parseCloseFragment(response) {
   var fragment;
   var parsed;
+  var update;
   var closePrefix = "pebblejs://close#";
   if (typeof response !== "string"
       || response.length === 0
@@ -725,7 +749,7 @@ function parseCloseFragment(response) {
     }
   }
   if (!isConfigurationUpdate(parsed)) return null;
-  return {
+  update = {
     schemaVersion: contracts.CONFIGURATION_VERSION,
     favorites: parsed.favorites.map(contracts.copyPhoneFavorite),
     apiKeyUpdate: parsed.apiKeyUpdate.action === "REPLACE"
@@ -733,6 +757,10 @@ function parseCloseFragment(response) {
       : { schemaVersion: contracts.SCHEMA_VERSION, action: parsed.apiKeyUpdate.action },
     forceFullSync: parsed.forceFullSync === true
   };
+  if (Object.prototype.hasOwnProperty.call(parsed, "languagePreference")) {
+    update.languagePreference = parsed.languagePreference;
+  }
+  return update;
 }
 
 function configurationPageState(value, language) {
@@ -740,6 +768,7 @@ function configurationPageState(value, language) {
     schemaVersion: contracts.CONFIGURATION_VERSION,
     hasKey: value.primApiKey !== null,
     favorites: value.favorites.map(contracts.copyPhoneFavorite),
+    languagePreference: value.languagePreference,
     language: typeof language === "string" && language.length > 0 ? language : "en"
   };
 }
@@ -764,6 +793,7 @@ function configurationUrl(baseUrl, value, language) {
 
 module.exports = {
   CONFIG_STORAGE_KEY: CONFIG_STORAGE_KEY,
+  CONFIG_SCHEMA_VERSION: CONFIG_SCHEMA_VERSION,
   RESULTS_STORAGE_KEY: RESULTS_STORAGE_KEY,
   INVALID_KEY_STATUS_STORAGE_KEY: INVALID_KEY_STATUS_STORAGE_KEY,
   MAX_CLOSE_RESPONSE_LENGTH: MAX_CLOSE_RESPONSE_LENGTH,
@@ -776,6 +806,7 @@ module.exports = {
   areFavoritesSecretFree: areFavoritesSecretFree,
   normalizeLanguage: normalizeLanguage,
   activeWatchLanguage: activeWatchLanguage,
+  effectiveWatchLanguage: effectiveWatchLanguage,
   loadConfiguration: loadConfiguration,
   saveConfiguration: saveConfiguration,
   saveInvalidConfiguration: saveInvalidConfiguration,

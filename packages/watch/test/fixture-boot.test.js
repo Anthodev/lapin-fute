@@ -39,7 +39,8 @@ function coupled(t, { count = 2, age = 0, cached = count, profile = 0 } = {}) {
     routing: { ...ROUTING }
   }));
   assert(configuration.saveConfiguration(storage, {
-    schemaVersion: 2, favorites, keyStatus: contracts.KEY_STATUS.CONFIGURED, primApiKey: KEY
+    schemaVersion: configuration.CONFIG_SCHEMA_VERSION, languagePreference: "auto",
+    favorites, keyStatus: contracts.KEY_STATUS.CONFIGURED, primApiKey: KEY
   }));
   let cache = configuration.emptyCache();
   if (cached) {

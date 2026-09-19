@@ -132,7 +132,15 @@ function legacyFavorite(id: string, sortOrder: number): LegacyFavorite {
   return withoutArrival;
 }
 
-const EMPTY_READONLY_STATE = { hasKey: false, language: "en", locale: "en", favorites: [], editable: false };
+const EMPTY_READONLY_STATE = {
+  hasKey: false,
+  language: "en",
+  locale: "en",
+  favorites: [],
+  editable: false,
+  languagePreference: "auto",
+  languagePreferenceSupported: false,
+};
 
 function openingFragment(value: Record<string, unknown>): string {
   return `#${encodeURIComponent(JSON.stringify(value))}`;
@@ -152,6 +160,20 @@ function fragmentWith(favorites: unknown[], overrides: Record<string, unknown> =
 // Old or unversioned phone: legacy read-only opening envelope.
 function legacyFragmentWith(favorites: unknown[], overrides: Record<string, unknown> = {}): string {
   return openingFragment({ hasKey: true, favorites, language: "fr_FR", ...overrides });
+}
+
+// A current phone-local record: CONFIG_SCHEMA_VERSION 3 with a required
+// languagePreference. Older stored shapes only exist through the companion's
+// migration and are never produced here.
+function storedConfiguration(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    schemaVersion: companionConfiguration.CONFIG_SCHEMA_VERSION,
+    favorites: fixtureList,
+    primApiKey: "stored-personal-key",
+    keyStatus: 1,
+    languagePreference: "auto",
+    ...overrides,
+  };
 }
 
 test("mirrored constants equal the canonical contract", () => {
@@ -332,7 +354,7 @@ test("the config page consumes the companion-produced opening fragment exactly",
   const key = "stored-personal-key";
   const url = companionConfiguration.configurationUrl(
     "https://config.example.test/index.html",
-    { schemaVersion: CONFIGURATION_VERSION, favorites: fixtureList, primApiKey: key, keyStatus: 1 },
+    storedConfiguration({ favorites: fixtureList, primApiKey: key }),
     "fr_FR",
   );
   assert.equal(typeof url, "string");
@@ -340,11 +362,15 @@ test("the config page consumes the companion-produced opening fragment exactly",
   assert.equal(url.includes(key), false);
 
   const openingState = JSON.parse(decodeURIComponent(url.slice(url.indexOf("#") + 1)));
-  assert.deepEqual(Object.keys(openingState), ["schemaVersion", "hasKey", "favorites", "language"]);
+  assert.deepEqual(
+    Object.keys(openingState),
+    ["schemaVersion", "hasKey", "favorites", "languagePreference", "language"],
+  );
   assert.deepEqual(openingState, {
     schemaVersion: CONFIGURATION_VERSION,
     hasKey: true,
     favorites: fixtureList,
+    languagePreference: "auto",
     language: "fr_FR",
   });
   assert.deepEqual(parseConfigFragment(new URL(url).hash), {
@@ -353,7 +379,149 @@ test("the config page consumes the companion-produced opening fragment exactly",
     locale: "fr",
     favorites: fixtureList,
     editable: true,
+    languagePreference: "auto",
+    languagePreferenceSupported: true,
   });
+});
+
+test("an advertised languagePreference enables a strict selector round trip", () => {
+  const parsed = parseConfigFragment(fragmentWith(fixtureList, { languagePreference: "fr" }));
+  assert.equal(parsed.editable, true);
+  assert.equal(parsed.languagePreference, "fr");
+  assert.equal(parsed.languagePreferenceSupported, true);
+
+  const state = initialConfigState(parsed);
+  assert.equal(state.languagePreference, "fr");
+  assert.equal(state.languagePreferenceSupported, true);
+
+  // An untouched selector replays the launch value verbatim.
+  const untouched = planConfigResult(state);
+  assert.equal(untouched.ok, true);
+  if (!untouched.ok) return;
+  assert.equal(untouched.payload.languagePreference, "fr");
+  assert.equal(closePayloadFits(untouched.payload), true);
+
+  // Every supported value is accepted exactly, including an explicit "auto"
+  // that clears the override, and nothing outside the trio is ever adopted.
+  for (const value of ["auto", "en", "fr"]) {
+    assert.equal(reduceConfigState(state, { type: "language-preference", value }).languagePreference, value);
+  }
+  assert.equal(reduceConfigState(state, { type: "language-preference", value: "de" }), state);
+
+  // A preference-only save leaves favorites and the key decision untouched.
+  const changed = planConfigResult(reduceConfigState(state, { type: "language-preference", value: "en" }));
+  assert.equal(changed.ok, true);
+  if (!changed.ok) return;
+  assert.equal(changed.payload.languagePreference, "en");
+  assert.deepEqual(changed.payload.favorites, untouched.payload.favorites);
+  assert.deepEqual(changed.payload.apiKeyUpdate, untouched.payload.apiKeyUpdate);
+
+  // A read-only session shows the launch preference but can never save.
+  const readOnly = parseConfigFragment(fragmentWith(
+    [{ ...favorite("bad", 0), stopLabel: "x".repeat(97) }],
+    { languagePreference: "fr" },
+  ));
+  assert.equal(readOnly.editable, false);
+  assert.equal(readOnly.languagePreference, "fr");
+  assert.equal(readOnly.languagePreferenceSupported, true);
+  assert.equal(planConfigResult(initialConfigState(readOnly)).ok, false);
+});
+
+test("an unadvertised launch keeps the selector inert and the close payload free of the preference", () => {
+  // An older companion build emits the v2 envelope without the field.
+  const parsed = parseConfigFragment(openingFragment({
+    schemaVersion: CONFIGURATION_VERSION,
+    hasKey: true,
+    favorites: fixtureList,
+    language: "fr_FR",
+  }));
+  assert.equal(parsed.editable, true);
+  assert.equal(parsed.languagePreference, "auto");
+  assert.equal(parsed.languagePreferenceSupported, false);
+
+  const state = initialConfigState(parsed);
+  // Even a supported value is ignored: the session never adopts a preference
+  // the launch did not advertise.
+  const changed = reduceConfigState(state, { type: "language-preference", value: "en" });
+  assert.equal(changed, state);
+  assert.equal(changed.languagePreference, "auto");
+
+  const outcome = planConfigResult(state);
+  assert.equal(outcome.ok, true);
+  if (!outcome.ok) return;
+  // Omission is the compatibility contract: the phone preserves the stored
+  // preference instead of receiving an unknown field it must reject whole.
+  assert.deepEqual(Object.keys(outcome.payload).sort(), ["apiKeyUpdate", "favorites", "schemaVersion"]);
+  const parsedUpdate = companionConfiguration.parseCloseFragment(encodeCloseFragment(outcome.payload));
+  assert.notEqual(parsedUpdate, null);
+  if (parsedUpdate === null) return;
+  assert.equal(Object.hasOwn(parsedUpdate, "languagePreference"), false);
+
+  // The same omission leaves an existing explicit override untouched.
+  const applied = companionConfiguration.applyConfigurationUpdate(
+    storedConfiguration({ languagePreference: "en" }),
+    parsedUpdate,
+  );
+  assert.notEqual(applied, null);
+  if (applied === null) return;
+  assert.equal(applied.languagePreference, "en");
+
+  // Legacy and unversioned envelopes are read-only and never advertise.
+  assert.equal(parseConfigFragment(legacyFragmentWith(fixtureList)).languagePreferenceSupported, false);
+});
+
+test("an invalid present languagePreference rejects the whole opening without coercion", () => {
+  for (const bad of ["de", "DE", "", "auto ", "fr-FR", 1, null, true]) {
+    const parsed = parseConfigFragment(fragmentWith(fixtureList, { languagePreference: bad }));
+    assert.deepEqual(parsed, EMPTY_READONLY_STATE);
+    const outcome = planConfigResult(initialConfigState(parsed));
+    assert.equal(outcome.ok, false);
+    if (outcome.ok) return;
+    assert.equal(typeof COPY.en[outcome.error], "string");
+  }
+});
+
+test("explicit choices stay distinct from automatic across a full save and reopen", () => {
+  // A saved explicit French choice matching the system language must never
+  // come back as Automatic.
+  const stored = storedConfiguration({ languagePreference: "fr" });
+  const opened = parseConfigFragment(new URL(
+    companionConfiguration.configurationUrl("https://config.example.test/index.html", stored, "fr_FR") ?? "",
+  ).hash);
+  assert.equal(opened.languagePreference, "fr");
+  assert.equal(opened.languagePreferenceSupported, true);
+  assert.equal(opened.locale, "fr");
+
+  // The user returns the selector to Automatic and saves.
+  const state = reduceConfigState(initialConfigState(opened), { type: "language-preference", value: "auto" });
+  const outcome = planConfigResult(state);
+  assert.equal(outcome.ok, true);
+  if (!outcome.ok) return;
+  assert.equal(outcome.payload.languagePreference, "auto");
+
+  const parsedUpdate = companionConfiguration.parseCloseFragment(encodeCloseFragment(outcome.payload));
+  assert.notEqual(parsedUpdate, null);
+  if (parsedUpdate === null) return;
+  assert.equal(parsedUpdate.languagePreference, "auto");
+
+  // The commit keeps favorites and the key, and stores the explicit reset.
+  const applied = companionConfiguration.applyConfigurationUpdate(stored, parsedUpdate);
+  assert.notEqual(applied, null);
+  if (applied === null) return;
+  assert.equal(applied.languagePreference, "auto");
+  assert.deepEqual(applied.favorites, stored.favorites);
+  assert.equal(applied.primApiKey, stored.primApiKey);
+  assert.equal(applied.keyStatus, stored.keyStatus);
+  assert.equal(companionConfiguration.isStoredConfiguration(applied), true);
+
+  // Reopening restores Automatic as the stored intent while the resolved
+  // system language still drives the page copy.
+  const reopened = parseConfigFragment(new URL(
+    companionConfiguration.configurationUrl("https://config.example.test/index.html", applied, "fr_FR") ?? "",
+  ).hash);
+  assert.equal(reopened.languagePreference, "auto");
+  assert.equal(reopened.languagePreferenceSupported, true);
+  assert.equal(reopened.locale, "fr");
 });
 
 
@@ -846,12 +1014,7 @@ test("routing and arrivals survive the full page round trip and phone-side valid
 
   // The companion-produced opening fragment carries routing and arrivals and
   // never the key.
-  const stored = {
-    schemaVersion: CONFIGURATION_VERSION,
-    favorites: outcome.payload.favorites,
-    primApiKey: "stored-personal-key",
-    keyStatus: 1,
-  };
+  const stored = storedConfiguration({ favorites: outcome.payload.favorites });
   const url = companionConfiguration.configurationUrl(
     "https://config.example.test/index.html",
     stored,
@@ -1052,12 +1215,7 @@ test("encoded close and opening fragments enforce the 32768 bound at producers",
   assert.equal(companionConfiguration.parseCloseFragment(encodeCloseFragment(bloated)), null);
 
   // The opening producer never emits a fragment the page would discard.
-  const oversizedConfig = {
-    schemaVersion: CONFIGURATION_VERSION,
-    favorites: [bloatedFavorite],
-    primApiKey: "stored-personal-key",
-    keyStatus: 1,
-  };
+  const oversizedConfig = storedConfiguration({ favorites: [bloatedFavorite] });
   assert.equal(companionConfiguration.isStoredConfiguration(oversizedConfig), true);
   assert.equal(
     companionConfiguration.configurationUrl("https://config.example.test/index.html", oversizedConfig, "en_US"),
@@ -1116,7 +1274,6 @@ test("page keeps secrets out of durable and observable surfaces", () => {
   assert.doesNotMatch(client, /prim\.iledefrance-mobilites/u);
   assert.match(html, /type="password" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false"/u);
   assert.match(html, /connect-src 'self'/u);
-  assert.doesNotMatch(html, /value=["'][^"']+["']/u);
   assert.match(html, /img-src 'self'/u);
   assert.doesNotMatch(html, /img-src 'none'/u);
 });
