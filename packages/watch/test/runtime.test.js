@@ -667,9 +667,10 @@ test("wire validation rejects malformed frames before any state changes", () => 
   const h = harness();
   const baseline = h.out.length;
   assert(!h.runtime.receive(new Map([[0, 1], [1, 20], [2, "p000000000000001"]])), "schema version one is not D2");
-  assert(!h.runtime.receive(new Map([[0, 2], [1, 99]])), "unknown message types reject");
-  assert(!h.runtime.receive(new Map([[0, 2], [1, 21], [2, "too-short"]])), "malformed p-tokens reject");
-  assert(!h.runtime.receive(new Map([[0, 2], [1, 21], [2, "x00000000000001"]])), "non p-prefix tokens reject");
+  assert(!h.runtime.receive(new Map([[0, 2], [1, 21], [2, "p000000000000001"]])), "old display wire version rejects");
+  assert(!h.runtime.receive(new Map([[0, 3], [1, 99]])), "unknown message types reject");
+  assert(!h.runtime.receive(new Map([[0, 3], [1, 21], [2, "too-short"]])), "malformed p-tokens reject");
+  assert(!h.runtime.receive(new Map([[0, 3], [1, 21], [2, "x00000000000001"]])), "non p-prefix tokens reject");
   assert(!h.runtime.receive(message(2, "000000000000001c0000000g", 1,
     { 10: 1, 11: 0, 36: 0, 37: "fr", 39: 0 })), "non-hex request ids reject");
   assert(!h.runtime.receive(message(2, "000000000000001c00000001", 2,

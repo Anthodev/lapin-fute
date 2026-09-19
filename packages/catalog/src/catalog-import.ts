@@ -22,10 +22,12 @@ import {
   SCHEMA_VERSION,
   TRANSPORT_MODE,
 } from "../../contracts/src/index.ts";
-import type { TransportMode } from "../../contracts/src/index.ts";
+import type { JourneyPattern, JourneyPlace, JourneyStop, JourneyTerminal, TransportMode } from "../../contracts/src/index.ts";
+import { validateJourneyCatalog } from "./catalog.ts";
+import journeyPatterns from "../../companion/src/journey-patterns.js";
 import { normalizeCatalogSearchText } from "../../config-page/src/search-text.js";
 
-export const CATALOG_VERSION = 3 as const;
+export const CATALOG_VERSION = 4 as const;
 export const DOWNLOAD_TIMEOUT_MS = 15 * 60 * 1_000;
 export const MAX_COMPRESSED_DOWNLOAD_BYTES = 2 * 1024 ** 3;
 export const MAX_SELECTED_ENTRY_BYTES = 8 * 1024 ** 3;
@@ -166,6 +168,7 @@ export interface CatalogBuildResult {
 
 interface CsvSpec {
   readonly required: readonly string[];
+  readonly optional?: readonly string[];
   readonly insert: (row: Readonly<Record<string, string>>) => void;
 }
 
@@ -289,13 +292,13 @@ function fsyncDirectory(path: string): void {
   }
 }
 
-function canonicalTuple(namespace: "place" | "service", fields: readonly string[]): string {
+function canonicalTuple(namespace: "place" | "service" | "journey-stop", fields: readonly string[]): string {
   let tuple = `lapin-fute:${namespace}:v1`;
   for (const field of fields) tuple += `|${Buffer.byteLength(field, "utf8")}:${field}`;
   return tuple;
 }
 
-function opaqueId(prefix: "plc_" | "svc_", tuple: string): string {
+function opaqueId(prefix: "plc_" | "svc_" | "grp_" | "pat_" | "term_", tuple: string): string {
   return prefix + createHash("sha256").update(tuple, "utf8").digest("base64url");
 }
 
@@ -507,6 +510,25 @@ function createSchema(database: DatabaseSync): void {
       destination_ref TEXT NOT NULL,
       canonical_tuple TEXT NOT NULL UNIQUE
     ) STRICT;
+    CREATE TABLE journey_groups (
+      group_id TEXT PRIMARY KEY,
+      line_mode TEXT NOT NULL,
+      line_ref TEXT NOT NULL,
+      UNIQUE(line_mode,line_ref)
+    ) STRICT;
+    CREATE TABLE journey_rows (
+      group_id TEXT NOT NULL REFERENCES journey_groups(group_id),
+      row_kind TEXT NOT NULL CHECK(row_kind IN ('place','terminal','pattern')),
+      row_id TEXT NOT NULL,
+      row_json TEXT NOT NULL,
+      PRIMARY KEY(group_id,row_kind,row_id)
+    ) STRICT;
+    CREATE TABLE service_journeys (
+      service_id TEXT PRIMARY KEY REFERENCES services(service_id),
+      group_id TEXT NOT NULL REFERENCES journey_groups(group_id),
+      terminal_place_id TEXT
+    ) STRICT;
+    CREATE INDEX service_journeys_group ON service_journeys(group_id);
     CREATE VIRTUAL TABLE place_search USING fts5(
       search_text,
       place_id UNINDEXED,
@@ -529,6 +551,7 @@ function createSchema(database: DatabaseSync): void {
       stop_id TEXT NOT NULL,
       stop_sequence INTEGER NOT NULL,
       pickup_type INTEGER NOT NULL,
+      drop_off_type INTEGER NOT NULL,
       PRIMARY KEY (trip_id, stop_sequence)
     ) STRICT;
     CREATE TABLE stage_stops (
@@ -554,7 +577,8 @@ function createSchema(database: DatabaseSync): void {
     ) STRICT;
     CREATE TABLE stage_arrets (
       arrid TEXT PRIMARY KEY,
-      zdaid TEXT NOT NULL
+      zdaid TEXT NOT NULL,
+      arrname TEXT NOT NULL
     ) STRICT;
     CREATE TABLE stage_zones (
       zdaid TEXT PRIMARY KEY,
@@ -587,12 +611,12 @@ function createSchema(database: DatabaseSync): void {
 function prepareSpecs(database: DatabaseSync): Readonly<Record<keyof CatalogRecordSourceSet, CsvSpec>> {
   const route = database.prepare("INSERT INTO stage_routes VALUES (?, ?, ?)");
   const trip = database.prepare("INSERT INTO stage_trips VALUES (?, ?, ?, ?)");
-  const stopTime = database.prepare("INSERT INTO stage_stop_times VALUES (?, ?, ?, ?)");
+  const stopTime = database.prepare("INSERT INTO stage_stop_times VALUES (?, ?, ?, ?, ?)");
   const stop = database.prepare("INSERT INTO stage_stops VALUES (?, ?, ?)");
   const agency = database.prepare("INSERT OR IGNORE INTO stage_agency VALUES (?)");
   const code = database.prepare("INSERT OR IGNORE INTO stage_codes VALUES (?, ?, ?, ?)");
   const perimeter = database.prepare("INSERT OR IGNORE INTO stage_perimeter VALUES (?, ?, ?)");
-  const arret = database.prepare("INSERT INTO stage_arrets VALUES (?, ?)");
+  const arret = database.prepare("INSERT INTO stage_arrets VALUES (?, ?, ?)");
   const zone = database.prepare("INSERT INTO stage_zones VALUES (?, ?, ?)");
   const relation = database.prepare("INSERT INTO stage_relations VALUES (?, ?, ?)");
   const line = database.prepare("INSERT INTO stage_lines VALUES (?, ?, ?, ?, ?, ?, ?, ?)");
@@ -609,10 +633,12 @@ function prepareSpecs(database: DatabaseSync): Readonly<Record<keyof CatalogReco
     },
     stopTimes: {
       required: ["trip_id", "stop_id", "stop_sequence", "pickup_type"],
+      optional: ["drop_off_type"],
       insert: (row) => {
-        const pickupType = row.pickup_type === "" ? 0 : integer(row.pickup_type, "stop_times.pickup_type");
-        if (pickupType < 0 || pickupType > 3) fail("INVALID_SOURCE", "stop_times.pickup_type is outside GTFS range");
-        stopTime.run(nonEmpty(row.trip_id, "stop_times.trip_id"), nonEmpty(row.stop_id, "stop_times.stop_id"), integer(row.stop_sequence, "stop_times.stop_sequence"), pickupType);
+        const pickupType = row.pickup_type === undefined || row.pickup_type === "" ? 0 : integer(row.pickup_type, "stop_times.pickup_type");
+        const dropOffType = row.drop_off_type === undefined || row.drop_off_type === "" ? 0 : integer(row.drop_off_type, "stop_times.drop_off_type");
+        if (pickupType < 0 || pickupType > 3 || dropOffType < 0 || dropOffType > 3) fail("INVALID_SOURCE", "stop_times boarding restriction is outside GTFS range");
+        stopTime.run(nonEmpty(row.trip_id, "stop_times.trip_id"), nonEmpty(row.stop_id, "stop_times.stop_id"), integer(row.stop_sequence, "stop_times.stop_sequence"), pickupType, dropOffType);
       },
     },
     stops: {
@@ -637,8 +663,8 @@ function prepareSpecs(database: DatabaseSync): Readonly<Record<keyof CatalogReco
       insert: (row) => perimeter.run(nonEmpty(row.line, "perimeter.line"), canonicalLineId(row.line, "perimeter.line"), nonEmpty(row.ns2_stoppointref, "perimeter.ns2_stoppointref")),
     },
     arrets: {
-      required: ["arrid", "zdaid"],
-      insert: (row) => arret.run(nonEmpty(row.arrid, "arrets.arrid"), nonEmpty(row.zdaid, "arrets.zdaid")),
+      required: ["arrid", "zdaid", "arrname"],
+      insert: (row) => arret.run(nonEmpty(row.arrid, "arrets.arrid"), nonEmpty(row.zdaid, "arrets.zdaid"), optionalText(row.arrname)),
     },
     zones: {
       required: ["zdaid", "zdaname", "zdatown"],
@@ -646,7 +672,17 @@ function prepareSpecs(database: DatabaseSync): Readonly<Record<keyof CatalogReco
     },
     relations: {
       required: ["zdaid", "arrid", "artid"],
-      insert: (row) => relation.run(nonEmpty(row.zdaid, "relations.zdaid"), nonEmpty(row.arrid, "relations.arrid"), optionalText(row.artid) || null),
+      optional: ["zdcid"],
+      insert: (row) => {
+        const arrid = optionalText(row.arrid);
+        const artid = optionalText(row.artid);
+        if (arrid === "" && artid === "") {
+          // The hierarchy can end at a ZdA or ZdC without any stop to project.
+          if (optionalText(row.zdaid) === "") nonEmpty(row.zdcid, "relations.zdcid");
+          return;
+        }
+        relation.run(nonEmpty(row.zdaid, "relations.zdaid"), nonEmpty(arrid, "relations.arrid"), artid || null);
+      },
     },
     lines: {
       required: ["id_line", "name_line", "shortname_line", "transportmode", "transportsubmode", "status", "colourweb_hexa", "textcolourweb_hexa"],
@@ -678,11 +714,14 @@ function runBatched(database: DatabaseSync, rows: Iterable<Readonly<Record<strin
   }
 }
 
-function stringRecord(record: CsvRecord, required: readonly string[]): Readonly<Record<string, string>> {
+function stringRecord(record: CsvRecord, spec: CsvSpec): Readonly<Record<string, string>> {
   const result: Record<string, string> = {};
-  for (const key of required) {
+  for (const key of spec.required) {
     if (!Object.hasOwn(record, key)) fail("MISSING_COLUMN", `record is missing ${key}`);
     result[key] = String(record[key] ?? "");
+  }
+  for (const key of spec.optional ?? []) {
+    if (Object.hasOwn(record, key)) result[key] = String(record[key] ?? "");
   }
   return result;
 }
@@ -691,7 +730,7 @@ function loadRecordSources(database: DatabaseSync, sources: CatalogRecordSourceS
   const specs = prepareSpecs(database);
   for (const key of Object.keys(specs) as (keyof CatalogRecordSourceSet)[]) {
     const spec = specs[key];
-    const rows = sources[key].map((row) => stringRecord(row, spec.required));
+    const rows = sources[key].map((row) => stringRecord(row, spec));
     runBatched(database, rows, spec);
   }
 }
@@ -785,6 +824,10 @@ async function loadCsvStream(
           const index = header.indexOf(required);
           if (index === -1) fail("MISSING_COLUMN", `CSV is missing required column ${required}`);
           mapped[required] = index;
+        }
+        for (const optional of spec.optional ?? []) {
+          const index = header.indexOf(optional);
+          if (index !== -1) mapped[optional] = index;
         }
         indexes = mapped;
         continue;
@@ -1027,6 +1070,9 @@ function deriveCandidates(database: DatabaseSync): void {
         ELSE stop.stop_id
       END;
 
+    CREATE INDEX stage_stop_zda_place ON stage_stop_zda(zdaid);
+    CREATE INDEX stage_stop_zda_rail_place ON stage_stop_zda(rail_zdaid);
+
     CREATE TABLE stage_terminals AS
     SELECT stop_time.trip_id, stop_time.stop_id, stop.stop_name
     FROM stage_stop_times AS stop_time
@@ -1039,6 +1085,17 @@ function deriveCandidates(database: DatabaseSync): void {
       ON terminal.trip_id = stop_time.trip_id
       AND terminal.stop_sequence = stop_time.stop_sequence;
     CREATE UNIQUE INDEX stage_terminals_trip ON stage_terminals(trip_id);
+
+    -- Retain every source occurrence before the service projection loses order.
+    CREATE TABLE stage_journey_stops AS
+    SELECT line_mode.mode, line_mode.id_line, trip.trip_id,
+      stop_time.stop_sequence, stop_time.stop_id, stop_time.pickup_type, stop_time.drop_off_type
+    FROM stage_trips AS trip
+    JOIN stage_routes AS route
+      ON route.route_id = CASE WHEN trip.route_id LIKE 'IDFM:%' THEN substr(trip.route_id, 6) ELSE trip.route_id END
+    JOIN stage_line_modes AS line_mode ON line_mode.id_line = route.route_id
+    JOIN stage_stop_times AS stop_time ON stop_time.trip_id = trip.trip_id;
+    CREATE INDEX stage_journey_line ON stage_journey_stops(mode, id_line, trip_id, stop_sequence);
 
     CREATE TABLE stage_gtfs_services AS
     SELECT DISTINCT trip.route_id, trip.trip_headsign, trip.direction_id,
@@ -1098,6 +1155,9 @@ function deriveCandidates(database: DatabaseSync): void {
           AND trip.terminal_stop_id LIKE 'IDFM:%' AND trip.terminal_stop_id NOT LIKE 'IDFM:monomodalStopPlace:%')
       );
 
+    CREATE INDEX stage_routing_terminal_tuple ON stage_routing_candidates
+      (mode, id_line, monitoring_ref, direction_id, destination_ref, source_terminal_code);
+
     -- Detect conflicts before perimeter or attachment exclusions can hide one side.
     CREATE TABLE stage_routing_collisions AS
     SELECT monitoring_ref, id_line, destination_ref
@@ -1150,6 +1210,7 @@ function deriveCandidates(database: DatabaseSync): void {
     )
     GROUP BY candidate.mode, candidate.zdaid, candidate.monitoring_ref, candidate.id_line,
       perimeter.line, candidate.direction_id, candidate.destination_ref, candidate.source_terminal_code;
+    CREATE INDEX stage_candidates_journey_group ON stage_candidates(mode, line_ref);
   `);
 }
 
@@ -1252,6 +1313,147 @@ function insertFinalCatalog(database: DatabaseSync, sourceRevision: string, crea
   return placeResolution;
 }
 
+interface JourneySourceStop {
+  stop_id: string;
+  stop_name: string;
+  parent_station: string;
+  zdaid: string | null;
+  rail_zdaid: string;
+}
+
+function journeyStopIdentity(mode: TransportMode, stop: JourneySourceStop): { placeId: string; stopRef: string | null } {
+  const rail = mode === "RER" || mode === "TRANSILIEN";
+  const railProven = stop.stop_id.startsWith("IDFM:monomodalStopPlace:")
+    || stop.parent_station.startsWith("IDFM:monomodalStopPlace:");
+  const zda = rail ? (railProven ? stop.rail_zdaid : null) : stop.zdaid;
+  const placeId = zda === null
+    ? opaqueId("plc_", canonicalTuple("journey-stop", [mode, stop.stop_id]))
+    : createPlaceIdentity(mode, zda).placeId;
+  const suffix = rail ? (railProven ? stop.rail_zdaid : null)
+    : /^IDFM:(?!monomodalStopPlace:)[^:\s\x00-\x1f\x7f]+$/u.test(stop.stop_id) ? stop.stop_id.slice(5) : null;
+  return { placeId, stopRef: suffix === null ? null : `STIF:${rail ? "StopArea:SP" : "StopPoint:Q"}:${suffix}:` };
+}
+
+function insertJourneys(database: DatabaseSync): void {
+  const sourceStop = database.prepare(`
+    SELECT stop.*, projection.zdaid, projection.rail_zdaid
+    FROM stage_stops AS stop JOIN stage_stop_zda AS projection USING(stop_id)
+    WHERE stop.stop_id = ?
+  `);
+  const equivalentStops = database.prepare(`
+    SELECT stop.*, projection.zdaid, projection.rail_zdaid
+    FROM stage_stops AS stop JOIN stage_stop_zda AS projection USING(stop_id)
+    WHERE (? = 0 AND projection.zdaid = ?) OR (? = 1 AND projection.rail_zdaid = ?)
+  `);
+  const equivalentArrets = database.prepare("SELECT arrid, arrname FROM stage_arrets WHERE zdaid = ?");
+  const insertGroup = database.prepare("INSERT INTO journey_groups VALUES (?, ?, ?)");
+  const insertRow = database.prepare("INSERT INTO journey_rows VALUES (?, ?, ?, ?)");
+  const insertServiceJourney = database.prepare("INSERT INTO service_journeys VALUES (?, ?, ?)");
+  const terminalSources = database.prepare(`
+    SELECT DISTINCT terminal_stop_id FROM stage_routing_candidates
+    WHERE mode = ? AND id_line = ? AND monitoring_ref = ? AND direction_id = ?
+      AND destination_ref = ? AND source_terminal_code = ?
+  `);
+  const groups = database.prepare("SELECT DISTINCT mode, id_line, line_ref FROM stage_candidates ORDER BY mode, line_ref");
+  for (const group of groups.iterate() as Iterable<QueryRow>) {
+    const mode = transportMode(group.mode);
+    const lineRef = String(group.line_ref);
+    const groupId = opaqueId("grp_", JSON.stringify([mode, lineRef]));
+    const places = new Map<string, JourneyPlace>();
+    const terminals = new Map<string, JourneyTerminal>();
+    const patterns = new Map<string, JourneyPattern>();
+    let patternBytes = 0;
+    const stopCache = new Map<string, JourneySourceStop>();
+    const resolveStop = (stopId: string): JourneySourceStop => {
+      let stop = stopCache.get(stopId);
+      if (stop === undefined) {
+        stop = sourceStop.get(stopId) as unknown as JourneySourceStop | undefined;
+        if (stop === undefined) fail("CATALOG_JOURNEY", `missing GTFS stop ${stopId}`);
+        stopCache.set(stopId, stop);
+      }
+      return stop;
+    };
+    const addPlace = (stop: JourneySourceStop): { placeId: string; stopRef: string | null } => {
+      const identity = journeyStopIdentity(mode, stop);
+      const previous = places.get(identity.placeId);
+      if (previous === undefined || stop.stop_name < previous.label) {
+        places.set(identity.placeId, { kind: "place", placeId: identity.placeId, label: stop.stop_name });
+        if (places.size > journeyPatterns.JOURNEY_LIMITS.places) fail("CATALOG_JOURNEY", `too many places in ${groupId}`);
+      }
+      return identity;
+    };
+    let tripId: string | undefined;
+    let stops: JourneyStop[] = [];
+    let terminalStop: JourneySourceStop | undefined;
+    const finishTrip = (): void => {
+      if (terminalStop === undefined) return;
+      const terminalId = opaqueId("term_", JSON.stringify([mode, terminalStop.stop_id]));
+      if (!terminals.has(terminalId)) {
+        const identity = addPlace(terminalStop);
+        const refs = new Set<string>(identity.stopRef === null ? [] : [identity.stopRef]);
+        const labels = new Set<string>([terminalStop.stop_name]);
+        const rail = mode === "RER" || mode === "TRANSILIEN";
+        const zda = rail ? terminalStop.rail_zdaid : terminalStop.zdaid;
+        if (zda !== null && (!rail || identity.stopRef !== null)) {
+          for (const equivalent of equivalentStops.iterate(Number(rail), zda, Number(rail), zda) as unknown as Iterable<JourneySourceStop>) {
+            const other = journeyStopIdentity(mode, equivalent);
+            if (other.placeId !== identity.placeId) continue;
+            if (other.stopRef !== null) refs.add(other.stopRef);
+            labels.add(equivalent.stop_name);
+            addPlace(equivalent);
+          }
+          for (const equivalent of equivalentArrets.iterate(zda) as Iterable<QueryRow>) {
+            if (!rail) refs.add(`STIF:StopPoint:Q:${String(equivalent.arrid)}:`);
+            if (String(equivalent.arrname) !== "") labels.add(String(equivalent.arrname));
+          }
+          if (refs.size > journeyPatterns.JOURNEY_LIMITS.terminalRefs || labels.size > journeyPatterns.JOURNEY_LIMITS.terminalLabels) {
+            fail("CATALOG_JOURNEY", `too many terminal aliases in ${groupId}`);
+          }
+        }
+        terminals.set(terminalId, { kind: "terminal", terminalId, terminalPlaceId: identity.placeId, refs: [...refs].sort(), labels: [...labels].sort() });
+        if (terminals.size > journeyPatterns.JOURNEY_LIMITS.terminals) fail("CATALOG_JOURNEY", `too many terminals in ${groupId}`);
+      }
+      const patternId = opaqueId("pat_", JSON.stringify([mode, lineRef, terminalId,
+        stops.map((stop) => [stop.stopRef, stop.placeId, stop.pickupType, stop.dropOffType])]));
+      const pattern: JourneyPattern = { kind: "pattern", patternId, terminalId, stops };
+      if (!patterns.has(patternId)) patternBytes += Buffer.byteLength(JSON.stringify(pattern));
+      if (patternBytes > journeyPatterns.JOURNEY_LIMITS.groupBytes) fail("CATALOG_JOURNEY", `journey group exceeds byte budget: ${groupId}`);
+      patterns.set(patternId, pattern);
+      if (patterns.size > journeyPatterns.JOURNEY_LIMITS.patterns) fail("CATALOG_JOURNEY", `too many patterns in ${groupId}`);
+      stops = [];
+    };
+    for (const occurrence of database.prepare(`
+      SELECT * FROM stage_journey_stops WHERE mode = ? AND id_line = ?
+      ORDER BY trip_id, stop_sequence
+    `).iterate(mode, String(group.id_line)) as Iterable<QueryRow>) {
+      if (tripId !== occurrence.trip_id) {
+        finishTrip();
+        tripId = String(occurrence.trip_id);
+      }
+      terminalStop = resolveStop(String(occurrence.stop_id));
+      stops.push({ ...addPlace(terminalStop), pickupType: Number(occurrence.pickup_type) as JourneyStop["pickupType"],
+        dropOffType: Number(occurrence.drop_off_type) as JourneyStop["dropOffType"] });
+      if (stops.length > journeyPatterns.JOURNEY_LIMITS.stops) fail("CATALOG_JOURNEY", `too many occurrences in ${groupId}`);
+    }
+    finishTrip();
+    insertGroup.run(groupId, mode, lineRef);
+    for (const [id, value] of places) insertRow.run(groupId, value.kind, id, JSON.stringify(value));
+    for (const [id, value] of terminals) insertRow.run(groupId, value.kind, id, JSON.stringify(value));
+    for (const [id, value] of patterns) insertRow.run(groupId, value.kind, id, JSON.stringify(value));
+    for (const candidate of database.prepare("SELECT * FROM stage_candidates WHERE mode = ? AND line_ref = ?")
+      .iterate(mode, lineRef) as Iterable<QueryRow>) {
+      const serviceId = createServiceIdentity({ mode, lineId: String(candidate.id_line), monitoringRef: String(candidate.monitoring_ref),
+        directionId: String(candidate.direction_id), destinationRef: String(candidate.source_terminal_code) }).serviceId;
+      const terminalPlaces = new Set<string>();
+      for (const terminal of terminalSources.iterate(mode, String(candidate.id_line), String(candidate.monitoring_ref),
+        String(candidate.direction_id), String(candidate.destination_ref), String(candidate.source_terminal_code)) as Iterable<QueryRow>) {
+        terminalPlaces.add(journeyStopIdentity(mode, resolveStop(String(terminal.terminal_stop_id))).placeId);
+      }
+      insertServiceJourney.run(serviceId, groupId, terminalPlaces.size === 1 ? [...terminalPlaces][0]! : null);
+    }
+  }
+}
+
 function validateByteBounds(database: DatabaseSync): void {
   const invalidPlace = database.prepare(`
     SELECT place_id FROM places
@@ -1309,6 +1511,7 @@ function validateOpenCatalog(database: DatabaseSync): CatalogBuildResult {
   if (integrity.length !== 1 || String(integrity[0]?.integrity_check) !== "ok") fail("CATALOG_INTEGRITY", "SQLite integrity_check failed");
   if ((database.prepare("PRAGMA foreign_key_check").all() as QueryRow[]).length !== 0) fail("CATALOG_FOREIGN_KEY", "SQLite foreign_key_check failed");
   validateByteBounds(database);
+  validateJourneyCatalog(database);
 
   const missingSearch = database.prepare(`
     SELECT 1 FROM places AS place
@@ -1433,6 +1636,7 @@ function dropStaging(database: DatabaseSync): void {
     DROP TABLE stage_routing_collisions;
     DROP TABLE stage_routing_candidates;
     DROP TABLE stage_gtfs_services;
+    DROP TABLE stage_journey_stops;
     DROP TABLE stage_terminals;
     DROP TABLE stage_stop_zda;
     DROP TABLE stage_line_modes;
@@ -1474,6 +1678,7 @@ async function build(
     validateStagedPerimeter(database);
     validateCandidateSemanticTuples(database);
     const placeResolution = insertFinalCatalog(database, sourceRevision, createdAt);
+    insertJourneys(database);
     dropStaging(database);
     const result = validateOpenCatalog(database);
     database.close();

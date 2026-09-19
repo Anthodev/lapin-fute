@@ -8,6 +8,7 @@ const {
 } = await watchModule("packed");
 import { NOW, appearance, departure, trafficDocument, scalars } from "./d2-records.js";
 import layout from "../../companion/src/display-layout.js";
+import display from "../../companion/src/display.js";
 const { prepareAppearance } = layout;
 
 test("appearance records round trip and validate", () => {
@@ -137,6 +138,33 @@ test("departure records validate bounds and pairing", () => {
   assert(stale(null, NOW));
   assert(!departureValid("01" + good.slice(2, 22) + "2" + good.slice(23), 4), "declared count must match the pair count");
   assert(!departureValid(good + "0", 1));
+});
+
+test("departure status and uncertainty survive packing independently without record growth", () => {
+  for (const journeyUncertain of [false, true]) {
+    const departures = ["ON_TIME", "DELAYED", "CANCELLED", "UNKNOWN"].map((status, index) => ({
+      expectedAt: Math.floor(NOW / 1000) + index * 60, status, journeyUncertain
+    }));
+    const view = { hasData: true, fetchedAt: Math.floor(NOW / 1000), freshness: "REALTIME",
+      trafficPalette: "NORMAL", trafficCheckedAt: Math.floor(NOW / 1000), departures };
+    const record = display.departureRecord(view);
+    assert.equal(textBytes(record), 59);
+    assert(departureValid(record, 4));
+    for (let index = 0; index < 4; index++) {
+      const offset = 31 + 9 * index;
+      assert.equal(hex(record, 23 + 9 * index, 8), departures[index].expectedAt);
+      assert.equal(hex(record, offset, 1) & 3, index);
+      assert.equal(Boolean(hex(record, offset, 1) & 4), journeyUncertain);
+      for (let nibble = 0; nibble < 16; nibble++) {
+        const changed = record.slice(0, offset) + nibble.toString(16) + record.slice(offset + 1);
+        assert.equal(departureValid(changed, 4), nibble < 8);
+      }
+    }
+    for (const invalid of [undefined, null, 0, "false"]) {
+      assert.throws(() => display.departureRecord({ ...view,
+        departures: [{ ...departures[0], journeyUncertain: invalid }] }), TypeError);
+    }
+  }
 });
 
 test("traffic documents validate section counts and bounds", () => {

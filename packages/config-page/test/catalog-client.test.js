@@ -1,8 +1,20 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
+import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { CatalogClientError, SEARCH_DEBOUNCE_MS, createCatalogClient } from "../src/catalog-client.js";
 import { LIMITS } from "../../contracts/src/index.ts";
 import { normalizeCatalogSearchText } from "../src/search-text.js";
+import { JOURNEY_LIMITS } from "../src/generated/journey-patterns.js";
+import {
+  buildCatalogCandidateFromRecords,
+  createPlaceIdentity,
+  createServiceIdentity,
+} from "../../catalog/src/catalog-import.ts";
+import { publishStaticCatalog } from "../../catalog/src/static-catalog.ts";
 
 const revision = "a".repeat(64);
 const otherRevision = "b".repeat(64);
@@ -283,4 +295,481 @@ test("decoded response bounds stop a stream instead of buffering the remainder",
   });
   await assert.rejects(client.searchPlaces("chatelet"), unavailable);
   assert.equal(canceled, true);
+});
+
+// --- lookupJourney: real publication -> client regressions --------------------
+
+const catalogFixtureSource = JSON.parse(
+  readFileSync(new URL("../../../fixtures/catalog/idfm-v1.json", import.meta.url), "utf8"),
+);
+
+function opaqueId(prefix, tuple) {
+  return prefix + createHash("sha256").update(tuple, "utf8").digest("base64url");
+}
+
+function catalogSources(sourceRevision) {
+  const overlay = catalogFixtureSource.journeySources ?? {};
+  const selected = (rows) => rows
+    .filter((row) => !Array.isArray(row.revisions) || row.revisions.includes(sourceRevision))
+    .map(({ revisions, ...row }) => row);
+  return Object.fromEntries(Object.entries(catalogFixtureSource.sources).map(([key, rows]) => {
+    const extra = selected(overlay[key] ?? []);
+    if (key === "stopTimes") {
+      const replaced = new Set(extra.map((row) => row.trip_id));
+      return [key, [...selected(rows).filter((row) => !replaced.has(row.trip_id)), ...extra]];
+    }
+    return [key, [...selected(rows), ...extra]];
+  }));
+}
+
+function attachJourneyGroup(database, group) {
+  database.prepare("INSERT INTO journey_groups VALUES (?, ?, ?)").run(group.groupId, group.mode, group.lineRef);
+  const insertRow = database.prepare("INSERT INTO journey_rows VALUES (?, ?, ?, ?)");
+  for (const row of group.rows) {
+    const rowId = row.kind === "place" ? row.placeId : row.kind === "terminal" ? row.terminalId : row.patternId;
+    insertRow.run(group.groupId, row.kind, rowId, JSON.stringify(row));
+  }
+  const insertAnnex = database.prepare("INSERT INTO service_journeys VALUES (?, ?, ?)");
+  for (const [serviceId, terminalPlaceId] of group.annexes) {
+    insertAnnex.run(serviceId, group.groupId, terminalPlaceId);
+  }
+}
+
+// Two 1024-stop patterns of one line: their rows exceed one document budget,
+// so the publisher really splits the group over multiple pages.
+function multiPageJourneyGroup(serviceIds) {
+  const mode = "BUS";
+  const lineRef = "STIF:Line::C-JOURNEY:";
+  const places = [];
+  const terminals = [];
+  const patterns = [];
+  let terminalPlaceId = null;
+  for (const suffix of ["A", "B"]) {
+    const originPlaceId = opaqueId("plc_", JSON.stringify(["journey-stop", [mode, lineRef, suffix]]));
+    const endPlaceId = opaqueId("plc_", JSON.stringify(["journey-stop", [mode, lineRef, `${suffix}-end`]]));
+    const terminalId = opaqueId("term_", JSON.stringify([mode, `${lineRef}-${suffix}`]));
+    const stops = Array.from({ length: 1024 }, (_, index) => ({
+      stopRef: `STIF:StopPoint:Q:JOURNEY-${suffix}-${index}:`,
+      placeId: index % 2 === 0 ? originPlaceId : endPlaceId,
+      pickupType: 0,
+      dropOffType: 0,
+    }));
+    const patternId = opaqueId("pat_", JSON.stringify([mode, lineRef, terminalId,
+      stops.map((stop) => [stop.stopRef, stop.placeId, stop.pickupType, stop.dropOffType])]));
+    places.push({ kind: "place", placeId: originPlaceId, label: `Marché ${suffix}` });
+    places.push({ kind: "place", placeId: endPlaceId, label: `Terminus ${suffix}` });
+    terminals.push({
+      kind: "terminal", terminalId, terminalPlaceId: endPlaceId,
+      refs: [`STIF:StopPoint:Q:JOURNEY-${suffix}-1023:`], labels: [`Terminus ${suffix}`],
+    });
+    patterns.push({ kind: "pattern", patternId, terminalId, stops });
+    if (suffix === "A") terminalPlaceId = endPlaceId;
+  }
+  return {
+    mode,
+    lineRef,
+    groupId: opaqueId("grp_", JSON.stringify([mode, lineRef])),
+    terminalPlaceId,
+    rows: [...places, ...terminals, ...patterns],
+    annexes: serviceIds.map((serviceId) => [serviceId, terminalPlaceId]),
+  };
+}
+
+function singlePageJourneyGroup(serviceId) {
+  const mode = "BUS";
+  const lineRef = "STIF:Line::C-OTHER:";
+  const placeId = opaqueId("plc_", JSON.stringify(["journey-stop", [mode, lineRef, "other"]]));
+  const terminalId = opaqueId("term_", JSON.stringify([mode, `${lineRef}-terminal`]));
+  const stops = [
+    { stopRef: "STIF:StopPoint:Q:JOURNEY-OTHER:", placeId, pickupType: 0, dropOffType: 0 },
+    { stopRef: "STIF:StopPoint:Q:JOURNEY-OTHER-END:", placeId, pickupType: 0, dropOffType: 0 },
+  ];
+  const patternId = opaqueId("pat_", JSON.stringify([mode, lineRef, terminalId,
+    stops.map((stop) => [stop.stopRef, stop.placeId, stop.pickupType, stop.dropOffType])]));
+  return {
+    mode,
+    lineRef,
+    groupId: opaqueId("grp_", JSON.stringify([mode, lineRef])),
+    terminalPlaceId: placeId,
+    rows: [
+      { kind: "place", placeId, label: "Marché Autre" },
+      { kind: "terminal", terminalId, terminalPlaceId: placeId, refs: ["STIF:StopPoint:Q:JOURNEY-OTHER-END:"], labels: ["Terminus Autre"] },
+      { kind: "pattern", patternId, terminalId, stops },
+    ],
+    annexes: [[serviceId, placeId]],
+  };
+}
+
+function journeyService(lineId, monitoringSuffix, destinationSuffix) {
+  const monitoringRef = `STIF:StopPoint:Q:${monitoringSuffix}:`;
+  const destinationRef = `STIF:StopPoint:Q:${destinationSuffix}:`;
+  return {
+    routing: { monitoringRef, lineRef: `STIF:Line::${lineId}:`, destinationRef },
+    identity: createServiceIdentity({
+      mode: "BUS", lineId, monitoringRef, directionId: "0", destinationRef,
+    }),
+  };
+}
+
+async function journeyFixture(t) {
+  const directory = mkdtempSync(join(tmpdir(), "lapin-fute-journey-client-"));
+  t.after(() => rmSync(directory, { recursive: true, force: true }));
+  const catalogPath = join(directory, "catalog.sqlite");
+  await buildCatalogCandidateFromRecords({
+    candidatePath: catalogPath,
+    sourceRevision: "fixture-2026-08-a",
+    createdAt: "2026-09-05T00:00:00.000Z",
+    sources: catalogSources("fixture-2026-08-a"),
+  });
+  const place = createPlaceIdentity("BUS", "STATIC-JOURNEY");
+  const full = journeyService("C-JOURNEY", "JOURNEY-FULL", "JOURNEY-END-A");
+  const short = journeyService("C-JOURNEY", "JOURNEY-SHORT", "JOURNEY-END-A");
+  const other = journeyService("C-OTHER", "JOURNEY-OTHER", "JOURNEY-OTHER-END");
+  const bigGroup = multiPageJourneyGroup([full.identity.serviceId, short.identity.serviceId]);
+  const smallGroup = singlePageJourneyGroup(other.identity.serviceId);
+  const database = new DatabaseSync(catalogPath);
+  try {
+    database.exec("BEGIN");
+    const insertPlace = database.prepare("INSERT INTO places VALUES (?, ?, ?, ?, ?)");
+    const insertSearch = database.prepare("INSERT INTO place_search(search_text, place_id) VALUES (?, ?)");
+    const insertService = database.prepare("INSERT INTO services VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)");
+    insertPlace.run(place.placeId, "Marché A", "Saint-Denis", "BUS", place.canonicalTuple);
+    insertSearch.run(normalizeCatalogSearchText("Marché A Saint-Denis"), place.placeId);
+    for (const entry of [full, short, other]) {
+      insertService.run(
+        entry.identity.serviceId, place.placeId, "Marché A", "J255", "Terminus",
+        "#e86a10", "#ffffff", entry.routing.monitoringRef, entry.routing.lineRef, "0",
+        entry.routing.destinationRef, entry.identity.canonicalTuple,
+      );
+    }
+    attachJourneyGroup(database, bigGroup);
+    attachJourneyGroup(database, smallGroup);
+    database.exec("COMMIT");
+  } finally {
+    database.close();
+  }
+  const outputDirectory = join(directory, "static");
+  const publication = publishStaticCatalog({
+    catalogPath, outputDirectory, attribution: catalogFixtureSource.attribution,
+  });
+  return { outputDirectory, publication, full, short, other, bigGroup, smallGroup };
+}
+
+// Serves the exact bytes published on disk; hide fakes missing files, mutate
+// fakes a compromised host, gates hold a response until released.
+function journeyClient(directory, requests, { hide = [], mutate = null, gates = [] } = {}) {
+  return createCatalogClient({
+    setTimer(callback) { queueMicrotask(callback); return 1; },
+    clearTimer() {},
+    fetchImpl(url, options) {
+      requests.push(url);
+      assert.equal(options.credentials, "omit");
+      assert.equal(new Headers(options.headers).has("Authorization"), false);
+      assert.equal(options.redirect, "error");
+      const suffix = url.slice("catalog/".length);
+      if (hide.some((fragment) => suffix.includes(fragment))) {
+        return Promise.resolve(new Response(null, { status: 404 }));
+      }
+      const respond = () => {
+        const path = join(directory, suffix);
+        if (!existsSync(path)) return new Response(null, { status: 404 });
+        let bytes = readFileSync(path);
+        if (mutate !== null) bytes = mutate(suffix, bytes) ?? bytes;
+        return new Response(bytes, { headers: { "content-type": "application/json" } });
+      };
+      const gate = gates.find((entry) => suffix.includes(entry.key));
+      if (gate === undefined) return Promise.resolve(respond());
+      return new Promise((resolve, reject) => {
+        if (options.signal?.aborted) {
+          reject(new DOMException("Superseded", "AbortError"));
+          return;
+        }
+        gate.waiters.push({ suffix, signal: options.signal, resolve: () => resolve(respond()) });
+        if (!gate.ignoreAbort) {
+          options.signal?.addEventListener("abort", () => reject(new DOMException("Superseded", "AbortError")), { once: true });
+        }
+      });
+    },
+  });
+}
+
+function releaseGate(gate) {
+  for (const waiter of gate.waiters.splice(0)) waiter.resolve();
+}
+
+async function until(condition) {
+  for (let attempt = 0; attempt < 10000 && !condition(); attempt += 1) {
+    await new Promise((resolve) => setImmediate(resolve));
+  }
+  assert.ok(condition(), "condition not reached");
+}
+
+function assertRetainedService(result, env) {
+  assert.equal(result === null, false);
+  assert.equal(result.group, null);
+  assert.equal(result.service.serviceId, env.full.identity.serviceId);
+  assert.equal(result.service.revision, env.publication.manifest.revision);
+  assert.equal(result.service.groupId, env.bigGroup.groupId);
+  assert.equal(result.service.terminalPlaceId, env.bigGroup.terminalPlaceId);
+  assert.deepEqual(result.service.routing, env.full.routing);
+}
+
+test("lookupJourney assembles a real multi-page group on one pinned revision", async (t) => {
+  const env = await journeyFixture(t);
+  const requests = [];
+  const client = journeyClient(env.outputDirectory, requests);
+  const rev = env.publication.manifest.revision;
+  const base = `catalog/${rev}/journeys/groups/${env.bigGroup.groupId}`;
+  const result = await client.lookupJourney(env.full.identity.serviceId, env.full.routing);
+  assert.equal(result === null, false);
+  assert.equal(result.service.serviceId, env.full.identity.serviceId);
+  assert.equal(result.service.revision, rev);
+  assert.equal(result.service.groupId, env.bigGroup.groupId);
+  assert.equal(result.service.terminalPlaceId, env.bigGroup.terminalPlaceId);
+  assert.deepEqual(result.service.routing, env.full.routing);
+  assert.equal(result.group.revision, rev);
+  assert.equal(result.group.groupId, env.bigGroup.groupId);
+  assert.equal(result.group.patterns.length, 2);
+  assert.equal(result.group.places.length, 4);
+  assert.equal(result.group.terminals.length, 2);
+  assert.deepEqual(requests, [
+    "catalog/manifest.json",
+    `catalog/${rev}/journeys/services/${env.full.identity.serviceId}.json`,
+    `${base}/index.json`,
+    `${base}/0.json`,
+    `${base}/1.json`,
+  ]);
+  const index = JSON.parse(readFileSync(
+    join(env.outputDirectory, rev, "journeys", "groups", env.bigGroup.groupId, "index.json"), "utf8",
+  ));
+  assert.equal(index.pageCount, 2);
+  // No group is retained between lookups: the second one transfers everything again.
+  const repeated = await client.lookupJourney(env.full.identity.serviceId, env.full.routing);
+  assert.equal(repeated.group.patterns.length, 2);
+  assert.equal(requests.filter((url) => url === `${base}/index.json`).length, 2);
+});
+
+test("concurrent services of one group share one flight and one assembled group", async (t) => {
+  const env = await journeyFixture(t);
+  const requests = [];
+  const gate = { key: `${env.bigGroup.groupId}/index.json`, waiters: [] };
+  const client = journeyClient(env.outputDirectory, requests, { gates: [gate] });
+  const rev = env.publication.manifest.revision;
+  const base = `catalog/${rev}/journeys/groups/${env.bigGroup.groupId}`;
+  const first = client.lookupJourney(env.full.identity.serviceId, env.full.routing);
+  const second = client.lookupJourney(env.short.identity.serviceId, env.short.routing);
+  await until(() => requests.filter((url) => url.includes("journeys/services/")).length === 2
+    && requests.includes(`${base}/index.json`));
+  releaseGate(gate);
+  const [left, right] = await Promise.all([first, second]);
+  assert.equal(left.group, right.group);
+  assert.equal(left.group.patterns.length, 2);
+  assert.deepEqual(right.service.routing, env.short.routing);
+  assert.equal(requests.filter((url) => url.endsWith("/index.json")).length, 1);
+  assert.equal(requests.filter((url) => url === `${base}/0.json`).length, 1);
+  assert.equal(requests.filter((url) => url === `${base}/1.json`).length, 1);
+});
+
+test("lookups for different groups run separate flights", async (t) => {
+  const env = await journeyFixture(t);
+  const requests = [];
+  const gate = { key: `${env.bigGroup.groupId}/index.json`, waiters: [] };
+  const client = journeyClient(env.outputDirectory, requests, { gates: [gate] });
+  const rev = env.publication.manifest.revision;
+  const big = client.lookupJourney(env.full.identity.serviceId, env.full.routing);
+  const small = client.lookupJourney(env.other.identity.serviceId, env.other.routing);
+  await until(() => requests.includes(`catalog/${rev}/journeys/groups/${env.smallGroup.groupId}/index.json`));
+  assert.equal(requests.filter((url) => url.endsWith("/index.json")).length, 2);
+  releaseGate(gate);
+  const [left, right] = await Promise.all([big, small]);
+  assert.equal(left.group.patterns.length, 2);
+  assert.equal(right.group.patterns.length, 1);
+  assert.notEqual(left.group.groupId, right.group.groupId);
+});
+
+test("aborting one subscriber leaves the shared group load intact", async (t) => {
+  const env = await journeyFixture(t);
+  const requests = [];
+  const gate = { key: `${env.bigGroup.groupId}/index.json`, waiters: [] };
+  const client = journeyClient(env.outputDirectory, requests, { gates: [gate] });
+  const rev = env.publication.manifest.revision;
+  const base = `catalog/${rev}/journeys/groups/${env.bigGroup.groupId}`;
+  const controller = new AbortController();
+  const first = client.lookupJourney(env.full.identity.serviceId, env.full.routing, controller.signal);
+  const second = client.lookupJourney(env.short.identity.serviceId, env.short.routing);
+  await until(() => requests.filter((url) => url.includes("journeys/services/")).length === 2
+    && requests.includes(`${base}/index.json`));
+  controller.abort();
+  await assert.rejects(first, (error) => error.name === "AbortError");
+  releaseGate(gate);
+  const kept = await second;
+  assert.equal(kept.group.groupId, env.bigGroup.groupId);
+  assert.equal(kept.group.patterns.length, 2);
+  assert.equal(requests.filter((url) => url === `${base}/index.json`).length, 1);
+  assert.equal(requests.filter((url) => url === `${base}/0.json`).length, 1);
+  assert.equal(requests.filter((url) => url === `${base}/1.json`).length, 1);
+});
+
+test("aborting the last subscriber cancels the load and a later lookup starts fresh", async (t) => {
+  const env = await journeyFixture(t);
+  const requests = [];
+  const gate = { key: `${env.bigGroup.groupId}/index.json`, waiters: [], ignoreAbort: true };
+  const client = journeyClient(env.outputDirectory, requests, { gates: [gate] });
+  const rev = env.publication.manifest.revision;
+  const base = `catalog/${rev}/journeys/groups/${env.bigGroup.groupId}`;
+  const controller = new AbortController();
+  const pending = client.lookupJourney(env.full.identity.serviceId, env.full.routing, controller.signal);
+  const secondController = new AbortController();
+  const second = client.lookupJourney(env.short.identity.serviceId, env.short.routing, secondController.signal);
+  await until(() => requests.includes(`${base}/index.json`));
+  controller.abort();
+  await assert.rejects(pending, (error) => error.name === "AbortError");
+  assert.equal(gate.waiters[0].signal.aborted, false);
+  secondController.abort();
+  const fresh = client.lookupJourney(env.full.identity.serviceId, env.full.routing);
+  await assert.rejects(second, (error) => error.name === "AbortError");
+  assert.equal(gate.waiters[0].signal.aborted, true);
+  assert.equal(requests.some((url) => url === `${base}/0.json`), false);
+  // Keep the canceled transport unresolved until its replacement is fetching.
+  // Releasing before that point would leave the replacement behind a new gate.
+  await until(() => gate.waiters.length === 2);
+  releaseGate(gate);
+  assert.equal((await fresh).group.patterns.length, 2);
+  assert.equal(requests.filter((url) => url === `${base}/index.json`).length, 2);
+});
+
+test("group admission failures keep the service and never yield a partial group", async (t) => {
+  const env = await journeyFixture(t);
+  const rev = env.publication.manifest.revision;
+  const serviceId = env.full.identity.serviceId;
+  const groupBase = `${rev}/journeys/groups/${env.bigGroup.groupId}`;
+  let result = await journeyClient(env.outputDirectory, [],
+    { hide: [`${env.bigGroup.groupId}/index.json`] }).lookupJourney(serviceId, env.full.routing);
+  assertRetainedService(result, env);
+  result = await journeyClient(env.outputDirectory, [],
+    { hide: [`${env.bigGroup.groupId}/1.json`] }).lookupJourney(serviceId, env.full.routing);
+  assertRetainedService(result, env);
+  result = await journeyClient(env.outputDirectory, [], {
+    mutate: (suffix, bytes) => suffix === `${groupBase}/index.json`
+      ? Buffer.concat([bytes, Buffer.from(" broken")]) : null,
+  }).lookupJourney(serviceId, env.full.routing);
+  assertRetainedService(result, env);
+  result = await journeyClient(env.outputDirectory, [], {
+    mutate: (suffix, bytes) => suffix === `${groupBase}/index.json`
+      ? Buffer.from(JSON.stringify({ ...JSON.parse(bytes), rowCount: 999 })) : null,
+  }).lookupJourney(serviceId, env.full.routing);
+  assertRetainedService(result, env);
+  result = await journeyClient(env.outputDirectory, [], {
+    mutate: (suffix, bytes) => suffix === `${groupBase}/1.json`
+      ? Buffer.from(JSON.stringify({
+        ...JSON.parse(bytes),
+        rows: [...JSON.parse(bytes).rows, { kind: "place", placeId: `plc_${"z".repeat(43)}` }],
+      })) : null,
+  }).lookupJourney(serviceId, env.full.routing);
+  assertRetainedService(result, env);
+});
+
+test("group line and mode must match the service annex even when group identities match", async (t) => {
+  const env = await journeyFixture(t);
+  const rev = env.publication.manifest.revision;
+  const groupBase = `${rev}/journeys/groups/${env.bigGroup.groupId}`;
+  for (const mismatch of [{ lineRef: env.other.routing.lineRef }, { lineMode: "TRAM" }]) {
+    const requests = [];
+    const client = journeyClient(env.outputDirectory, requests, {
+      mutate: (suffix, bytes) => suffix === `${groupBase}/index.json`
+        ? Buffer.from(JSON.stringify({ ...JSON.parse(bytes), ...mismatch })) : null,
+    });
+    const result = await client.lookupJourney(env.full.identity.serviceId, env.full.routing);
+    assertRetainedService(result, env);
+    assert.equal(requests.includes(`catalog/${groupBase}/1.json`), true);
+  }
+});
+
+test("annex failures return null without any group transfer", async (t) => {
+  const env = await journeyFixture(t);
+  const rev = env.publication.manifest.revision;
+  const serviceId = env.full.identity.serviceId;
+  const annexPath = `${rev}/journeys/services/${serviceId}.json`;
+  const requests = [];
+  const client = journeyClient(env.outputDirectory, requests);
+  assert.equal(await client.lookupJourney(`svc_${"z".repeat(43)}`, env.full.routing), null);
+  assert.equal(requests.filter((url) => url.includes("journeys/groups/")).length, 0);
+  const afterUnknown = requests.length;
+  await assert.rejects(client.lookupJourney("not-a-service", env.full.routing),
+    (error) => error instanceof CatalogClientError && error.code === "INVALID_SERVICE");
+  await assert.rejects(client.lookupJourney(serviceId, null),
+    (error) => error instanceof CatalogClientError && error.code === "INVALID_SERVICE");
+  await assert.rejects(client.lookupJourney(serviceId, { monitoringRef: "x" }),
+    (error) => error instanceof CatalogClientError && error.code === "INVALID_SERVICE");
+  assert.equal(requests.length, afterUnknown);
+  const broken = journeyClient(env.outputDirectory, requests, {
+    mutate: (suffix, bytes) => suffix === annexPath ? Buffer.concat([bytes, Buffer.from(" broken")]) : null,
+  });
+  assert.equal(await broken.lookupJourney(serviceId, env.full.routing), null);
+  assert.equal(requests.filter((url) => url.includes("journeys/groups/")).length, 0);
+  const foreign = journeyClient(env.outputDirectory, requests, {
+    mutate: (suffix, bytes) => suffix === annexPath
+      ? Buffer.from(JSON.stringify({ ...JSON.parse(bytes), revision: "f".repeat(64) })) : null,
+  });
+  assert.equal(await foreign.lookupJourney(serviceId, env.full.routing), null);
+  const oversized = journeyClient(env.outputDirectory, requests, {
+    mutate: (suffix, bytes) => suffix === annexPath ? Buffer.concat([bytes, Buffer.alloc(300000, 0x20)]) : null,
+  });
+  assert.equal(await oversized.lookupJourney(serviceId, env.full.routing), null);
+  const controller = new AbortController();
+  controller.abort();
+  await assert.rejects(
+    journeyClient(env.outputDirectory, requests)
+      .lookupJourney(serviceId, env.full.routing, controller.signal),
+    (error) => error.name === "AbortError",
+  );
+  assert.equal(requests.filter((url) => url.includes("journeys/groups/")).length, 0);
+});
+
+test("annex routing must exactly match every requested routing field", async (t) => {
+  const env = await journeyFixture(t);
+  for (const field of ["monitoringRef", "lineRef", "destinationRef"]) {
+    const requests = [];
+    const client = journeyClient(env.outputDirectory, requests);
+    const routing = { ...env.full.routing, [field]: env.other.routing[field] };
+    assert.equal(await client.lookupJourney(env.full.identity.serviceId, routing), null, field);
+    assert.equal(requests.some((url) => url.includes("journeys/groups/")), false, field);
+  }
+});
+
+test("raw group budget includes whitespace in the index as well as pages", async () => {
+  const option = journeyService("C-OTHER", "JOURNEY-OTHER", "JOURNEY-OTHER-END");
+  const group = singlePageJourneyGroup(option.identity.serviceId);
+  const pageCount = JOURNEY_LIMITS.pages;
+  const index = {
+    schemaVersion: 1, revision, groupId: group.groupId, lineMode: group.mode,
+    lineRef: group.lineRef, pageCount, rowCount: pageCount + 2, patternCount: pageCount,
+  };
+  const indexText = JSON.stringify(index);
+  const annex = {
+    schemaVersion: 1, revision, serviceId: option.identity.serviceId, groupId: group.groupId,
+    lineMode: group.mode, routing: option.routing, terminalPlaceId: group.terminalPlaceId,
+  };
+  const pages = Array.from({ length: pageCount }, (_, page) => {
+    const pattern = { ...group.rows[2], patternId: opaqueId("pat_", `budget-${page}`) };
+    const text = JSON.stringify({
+      schemaVersion: 1, revision, groupId: group.groupId, page,
+      nextPage: page + 1 < pageCount ? page + 1 : null,
+      rows: page === 0 ? [...group.rows.slice(0, 2), pattern] : [pattern],
+    });
+    const bytes = page + 1 < pageCount ? JOURNEY_LIMITS.documentBytes
+      : JOURNEY_LIMITS.groupBytes - (pageCount - 1) * JOURNEY_LIMITS.documentBytes
+        - Buffer.byteLength(indexText);
+    return text + " ".repeat(bytes - Buffer.byteLength(text));
+  });
+  const load = (indexWhitespace) => fixtureClient((url) => {
+    if (url === "catalog/manifest.json") return response(manifest);
+    if (url.includes("journeys/services/")) return response(annex);
+    if (url.endsWith("/index.json")) return new Response(indexText + indexWhitespace);
+    return new Response(pages[Number(url.split("/").at(-1).slice(0, -5))]);
+  }).client.lookupJourney(option.identity.serviceId, option.routing);
+  // Exactly the original-byte budget is admitted. One extra index byte is not.
+  assert.equal((await load("")).group.patterns.length, pageCount);
+  const exceeded = await load(" ");
+  assert.deepEqual(exceeded, { service: annex, group: null });
 });

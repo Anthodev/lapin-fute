@@ -299,8 +299,10 @@ function createPrimClient(options) {
     var event = subscriber(complete);
     var url;
     var refs;
+    var context;
     var handle;
-    if (!request || !contracts.isServiceRouting(request.routing)) {
+    if (!request || !contracts.isServiceRouting(request.routing)
+        || !departureParser.isDepartureContext(request.context, request.routing)) {
       deliver(event, unavailable("INVALID_SERVICE", now()));
       return event.handle;
     }
@@ -316,12 +318,15 @@ function createPrimClient(options) {
       deliver(event, unavailable("INVALID_SERVICE", now()));
       return event.handle;
     }
+    // The validated group belongs to the flight and is shared read-only.
+    // Capture the binding without duplicating its potentially large patterns.
+    context = { arrivalPlaceId: request.context.arrivalPlaceId, patterns: request.context.patterns };
     if (containsCredential(url, request.apiKey)) {
       deliver(event, unavailable("INVALID_SERVICE", now()));
       return event.handle;
     }
     handle = requestJson(url, request.apiKey, null, function (payload, receivedAt) {
-      return departureParser.normalizePrimDepartureResponse(payload, refs, Math.floor(receivedAt / 1000));
+      return departureParser.normalizePrimDepartureResponse(payload, refs, Math.floor(receivedAt / 1000), context);
     }, function (outcome) { deliver(event, outcome); });
     if (!event.scheduled) event.onCancel = handle.abort;
     return event.handle;

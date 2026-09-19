@@ -14,7 +14,7 @@ function wireValid(message) {
     const key = raw === "SCHEMA_VERSION" ? 0 : raw;
     if (!unsigned(key, 43)) { valid = false; return; }
     if (key < 32) low |= 1 << key; else high |= 1 << (key - 32);
-    if (key === 0) valid = valid && value === 2;
+    if (key === 0) valid = valid && value === 3;
     else if (key === 2) valid = valid && idValid(value, 24, true);
     else if (key === 3) valid = valid && idValid(value, 64);
     else if (key === 37) valid = valid && (value === "en" || value === "fr");
@@ -92,7 +92,7 @@ function constructRuntimeFromSaved(saved, storage, timer, send, redraw, profile,
     r.focus = 0; r.active = 0; r.page = 0; r.screen = 0; r.key = 0;
   }
   function packet(type, requestId) {
-    const message = new Map([[0, 2], [1, type]]);
+    const message = new Map([[0, 3], [1, type]]);
     if (requestId) { message.set(2, requestId); message.set(41, r.generation); }
     return message;
   }
@@ -164,7 +164,7 @@ function constructRuntimeFromSaved(saved, storage, timer, send, redraw, profile,
       r.traffic = null; r.trafficId = ""; r.page = 0;
       invalidate();
     }
-    const message = new Map([[0, 2], [1, 16], [2, c.id], [35, mask], [39, r.profile], [41, c.generation], [42, r.hour12 ? 1 : 0]]);
+    const message = new Map([[0, 3], [1, 16], [2, c.id], [35, mask], [39, r.profile], [41, c.generation], [42, r.hour12 ? 1 : 0]]);
     if (!send(message)) { discard(true); invalidate(); return false; }
     return true;
   }

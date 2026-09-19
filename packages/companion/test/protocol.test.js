@@ -24,7 +24,7 @@ function drain(h) {
   }
 }
 function hello(epoch = EPOCH, profile = 0, clock = 0, token = "w" + epoch) {
-  return { SCHEMA_VERSION: 2, MESSAGE_TYPE: T.DISPLAY_HELLO, REQUEST_ID: token,
+  return { SCHEMA_VERSION: 3, MESSAGE_TYPE: T.DISPLAY_HELLO, REQUEST_ID: token,
     WATCH_SESSION_ID: "w" + epoch, DISPLAY_EPOCH: epoch, DISPLAY_PROFILE: profile, CLOCK_12H: clock };
 }
 function syncHarness() {
@@ -35,11 +35,12 @@ function syncHarness() {
   return h;
 }
 function target(favorites = [fixture.favorite]) {
+  favorites = favorites.map(f => ({ arrivalPlaceId: null, ...f }));
   return { favorites, records: favorites.map(f => layout.prepareAppearance(f, 0, "fr")),
     keyStatus: 1, language: "fr", lifecycleGeneration: 7 };
 }
 function need(h, token, mask, additions = {}) {
-  return h.sync.receive(Object.assign({ SCHEMA_VERSION: 2, MESSAGE_TYPE: T.CONFIG_NEED,
+  return h.sync.receive(Object.assign({ SCHEMA_VERSION: 3, MESSAGE_TYPE: T.CONFIG_NEED,
     REQUEST_ID: token, DISPLAY_GENERATION: parseInt(token.slice(16), 16),
     CONFIG_NEED_MASK: mask, DISPLAY_PROFILE: 0, CLOCK_12H: 0 }, additions));
 }
@@ -47,7 +48,7 @@ function need(h, token, mask, additions = {}) {
 // The foreign-session, wrong-epoch and wrong-kind inputs are independent
 // admission failures, not snapshots of mirrored constants.
 test("strict watch decoder admits overview CACHE_ONLY but rejects retired and mismatched envelopes", () => {
-  const request = { SCHEMA_VERSION: 2, MESSAGE_TYPE: T.OVERVIEW_REQUEST,
+  const request = { SCHEMA_VERSION: 3, MESSAGE_TYPE: T.OVERVIEW_REQUEST,
     REQUEST_ID: id("r", 1), DISPLAY_GENERATION: 1, REQUEST_TRIGGER: 5 };
   assert.deepEqual(codec.decodeDataRequest(request), {
     kind: "overview", requestId: id("r", 1), wireGeneration: 1, trigger: 5
@@ -127,6 +128,44 @@ test("superseded sync ignores stale NEED and late transport failure without rese
   need(h, second, 1); drain(h);
   assert.equal(h.completed[0].generation, 2);
   assert.deepEqual(h.failures, []);
+});
+
+test("phone enrichment updates only matching lifecycle bindings without changing watch metadata", () => {
+  const h = syncHarness();
+  const base = { ...fixture.favorite, arrivalPlaceId: null };
+  delete base.routing;
+  const arrival = "plc_" + "a".repeat(43);
+  const routing = { monitoringRef: "STIF:StopPoint:Q:1:", lineRef: "STIF:Line::1:",
+    destinationRef: "STIF:StopPoint:Q:2:" };
+  const enriched = { ...base, arrivalPlaceId: arrival, routing, displayName: "Must not replace" };
+  const commit = lifecycleGeneration => {
+    const token = h.sync.synchronize({ ...target([base]), lifecycleGeneration }, false);
+    drain(h); need(h, token, 0); drain(h);
+    return { requestId: id("r", 1), wireGeneration: parseInt(token.slice(16), 16) };
+  };
+  const old = commit(6), current = commit(7);
+  const token = h.sync.synchronize(target([base]), false);
+  const sent = h.Pebble.sent.length;
+  h.sync.enrichPhoneFavorites([enriched], 8);
+  h.sync.enrichPhoneFavorites([{ ...enriched, serviceId: "other-service" }], 7);
+  h.sync.enrichPhoneFavorites([{ ...enriched, id: "other-id" }], 7);
+  assert.equal(h.sync.resolveDataBinding(current).favorites[0].arrivalPlaceId, null);
+  h.sync.enrichPhoneFavorites([enriched], 7);
+  assert.equal(h.Pebble.sent.length, sent);
+  assert.equal(h.sync.resolveDataBinding(old).favorites[0].arrivalPlaceId, null);
+  assert.deepEqual(h.sync.resolveDataBinding(current).favorites[0], { ...base, arrivalPlaceId: arrival, routing });
+  assert.equal(h.sync.resolveDataBinding(current).generation, 2);
+  drain(h); need(h, token, 1); drain(h);
+  const active = { requestId: id("r", 1), wireGeneration: 3 };
+  assert.deepEqual(h.sync.resolveDataBinding(active).favorites[0], { ...base, arrivalPlaceId: arrival, routing });
+  assert.equal(h.Pebble.sent.filter(m => m.MESSAGE_TYPE === T.FAVORITE).at(-1).DISPLAY_RECORD,
+    target([base]).records[0]);
+  h.sync.enrichPhoneFavorites([{ ...enriched, arrivalPlaceId: "plc_" + "b".repeat(43),
+    routing: { ...routing, lineRef: "different" } }], 7);
+  assert.deepEqual(h.sync.resolveDataBinding(current).favorites[0], { ...base, arrivalPlaceId: arrival, routing });
+  assert.deepEqual(h.sync.resolveDataBinding(active).favorites[0], { ...base, arrivalPlaceId: arrival, routing });
+  enriched.routing.lineRef = "changed-after-enrichment";
+  assert.equal(h.sync.resolveDataBinding(active).favorites[0].routing.lineRef, "STIF:Line::1:");
 });
 
 test("Unicode appearance and traffic continuation strings cross D2 without clipping source data", () => {

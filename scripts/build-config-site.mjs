@@ -1,6 +1,7 @@
 import { cpSync, existsSync, mkdirSync, readdirSync, rmSync, statSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { generateJourneyPatterns } from "./generate-journey-patterns.mjs";
 
 // Builds the deployable static configuration site: the config page sources
 // plus the published static catalog under catalog/ beside index.html.
@@ -61,6 +62,7 @@ export function buildConfigSite({
   rmSync(outputPath, { recursive: true, force: true });
   mkdirSync(outputPath, { recursive: true });
   try {
+    generateJourneyPatterns();
     copyPage(pageSource, outputPath);
     if (includeCatalog) copyCatalog(staticPath, outputPath);
   } catch (error) {

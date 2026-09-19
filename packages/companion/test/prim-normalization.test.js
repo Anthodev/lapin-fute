@@ -25,12 +25,12 @@ function routing(number) {
   return {
     monitoringRef: "IDFM:SP:" + number,
     lineRef: "IDFM:C" + number,
-    destinationRef: "IDFM:" + number + "DST"
+    destinationRef: "STIF:StopPoint:Q:" + number + "DST:"
   };
 }
 
 function departure(time, minutes, status, aimed, interval) {
-  var result = { expectedAt: Date.parse("2026-01-15T" + time + "Z") / 1000, minutes: minutes, status: status };
+  var result = { expectedAt: Date.parse("2026-01-15T" + time + "Z") / 1000, minutes: minutes, status: status, journeyUncertain: false };
   if (aimed) result.aimedAt = Date.parse("2026-01-15T" + aimed + "Z") / 1000;
   if (interval) result.nextIntervalMinutes = interval;
   return result;
@@ -105,7 +105,41 @@ function portableModules() {
   return { departures: load("prim-departures"), traffic: load("prim-traffic"), paris: load("compactparis-time") };
 }
 
-test("all five recorded modes preserve source times, freshness and intervals on the phone", function () {
+function placeId(letter) { return "plc_" + letter.repeat(43); }
+
+function stop(ref, place, pickup, dropOff) {
+  return { stopRef: ref, placeId: placeId(place), pickupType: pickup || 0, dropOffType: dropOff || 0 };
+}
+
+function journeyContext(refs, arrival, sequences, terminals) {
+  return { arrivalPlaceId: placeId(arrival), patterns: {
+    revision: "a".repeat(64), groupId: "grp_" + "g".repeat(43), lineMode: "BUS", lineRef: refs.lineRef,
+    places: ["a", "b", "c"].map(function (letter) { return { kind: "place", placeId: placeId(letter), label: letter }; }),
+    terminals: terminals || [
+      { kind: "terminal", terminalId: "full", terminalPlaceId: placeId("c"), refs: [refs.destinationRef], labels: ["Full"] },
+      { kind: "terminal", terminalId: "short", terminalPlaceId: placeId("b"), refs: ["STIF:StopPoint:Q:SHORT:"], labels: ["Short"] }
+    ],
+    patterns: (sequences || [
+      [stop(refs.monitoringRef, "a"), stop(null, "b"), stop(null, "c")],
+      [stop(refs.monitoringRef, "a"), stop(null, "b")]
+    ]).map(function (stops, index) {
+      return { kind: "pattern", patternId: "pattern" + index,
+        terminalId: stops[stops.length - 1].placeId === placeId("c") ? "full" : "short", stops: stops };
+    })
+  } };
+}
+
+function normalize(payload, refs, context, parser) {
+  return (parser || departures).normalizePrimDepartureResponse(payload, refs, FETCHED_AT, context);
+}
+
+function live(refs, terminal, minute, status) {
+  var visit = quayVisit(refs.monitoringRef, refs.lineRef, terminal, "2026-01-15T08:" + minute + ":00Z");
+  visit.MonitoredVehicleJourney.MonitoredCall.DepartureStatus = status || "ontime";
+  return visit;
+}
+
+test("all five recorded modes preserve source times, freshness and confirmed intervals in ES5", function () {
   var cases = [
     ["bus", 1001, [departure("08:32:00", 2, "ON_TIME", "08:31:00", 6), departure("08:38:00", 8, "ON_TIME", "08:37:30")]],
     ["metro", 2001, [departure("08:34:00", 4, "ON_TIME", "08:33:00")]],
@@ -115,178 +149,230 @@ test("all five recorded modes preserve source times, freshness and intervals on 
   ];
   var portable = portableModules();
   cases.forEach(function (entry) {
-    var result = departures.normalizePrimDepartureResponse(fixture(entry[0]), routing(entry[1]), FETCHED_AT);
+    var refs = routing(entry[1]), context = journeyContext(refs, "c");
+    context.patterns.lineMode = entry[0].toUpperCase();
+    var result = normalize(fixture(entry[0]), refs, context);
     assert.deepEqual(result, snapshot("REALTIME", entry[2]), entry[0]);
     assert.equal(contracts.isDepartureSnapshot(result), true);
-    assert.deepEqual(clone(portable.departures.normalizePrimDepartureResponse(fixture(entry[0]), routing(entry[1]), FETCHED_AT)), result);
-    assert.doesNotMatch(JSON.stringify(result), /STIF:|IDFM:|DEST:|Siri/);
+    assert.deepEqual(clone(normalize(fixture(entry[0]), refs, context, portable.departures)), result);
   });
 });
 
-test("delays, cancelled visits and scheduled-only visits retain their distinct semantics", function () {
-  assert.deepEqual(departures.normalizePrimDepartureResponse(fixture("delayed"), routing(2001), FETCHED_AT),
-    snapshot("REALTIME", [departure("08:37:00", 7, "DELAYED", "08:33:00")]));
-  assert.deepEqual(departures.normalizePrimDepartureResponse(fixture("cancelled"), routing(3001), FETCHED_AT), snapshot("REALTIME", [
-    departure("08:32:00", 2, "CANCELLED", "08:31:30"),
-    departure("08:35:00", 5, "ON_TIME", "08:34:30", 5),
-    departure("08:40:00", 10, "ON_TIME", "08:39:30")
-  ]));
-  assert.deepEqual(departures.normalizePrimDepartureResponse(fixture("scheduled-only"), routing(5001), FETCHED_AT), snapshot("SCHEDULED", [
-    departure("08:44:00", 14, "UNKNOWN", "08:44:00", 14), departure("08:58:00", 28, "UNKNOWN", "08:58:00")
-  ]));
-  assert.deepEqual(departures.normalizePrimDepartureResponse(fixture("mixed"), routing(4001), FETCHED_AT), snapshot("MIXED", [
-    departure("08:33:00", 3, "ON_TIME", "08:32:30", 8),
-    departure("08:41:00", 11, "UNKNOWN", "08:41:00", 8),
-    departure("08:49:00", 19, "ON_TIME", "08:48:00")
-  ]));
-});
-
-test("a valid response without visits reports no scheduled departures", function () {
-  var payload = fixture("metro");
-  payload.Siri.ServiceDelivery.StopMonitoringDelivery[0].MonitoredStopVisit = [];
-  assert.deepEqual(departures.normalizePrimDepartureResponse(payload, routing(2001), FETCHED_AT),
-    snapshot("SCHEDULED", []));
-});
-
-test("foreign stop, line and destination visits do not contaminate departures or source freshness", function () {
-  var payload = fixture("partial");
-  var list = visits(payload);
-  payload.Siri.ServiceDelivery.StopMonitoringDelivery[1].MonitoredStopVisit[1]
-    .MonitoredVehicleJourney.DestinationRef = { value: routing(1001).destinationRef };
-  var source = clone(list.filter(function (visit) {
-    return visit.MonitoringRef.value === routing(1001).monitoringRef
-      && visit.MonitoredVehicleJourney.LineRef.value === routing(1001).lineRef;
-  })[0]);
-  source.RecordedAtTime = "2026-01-15T12:00:00Z";
-  source.MonitoredVehicleJourney.DestinationRef = "other-destination";
-  list.push(source);
-  assert.deepEqual(departures.normalizePrimDepartureResponse(payload, routing(1001), FETCHED_AT), snapshot("REALTIME", [
-    departure("08:34:00", 4, "ON_TIME", "08:33:00", 8), departure("08:42:00", 12, "ON_TIME")
-  ], Date.parse("2026-01-15T08:29:35Z") / 1000));
-});
-
-test("exact terminal routing ignores Retour, blank and absent SIRI direction labels", function () {
-  var refs = {
-    monitoringRef: "STIF:StopPoint:Q:12345:",
-    lineRef: "STIF:Line::C01371:",
-    destinationRef: "STIF:StopPoint:Q:67890:"
-  };
-  var payload = fixture("metro");
-  var visit = visits(payload)[0];
-  var journey = visit.MonitoredVehicleJourney;
-  visit.MonitoringRef = { value: refs.monitoringRef };
-  journey.LineRef = { value: refs.lineRef };
-  journey.DestinationRef = { value: refs.destinationRef };
-  // A GTFS direction_id of 0 does not mean the live DirectionRef is "0".
-  [{ value: "Retour" }, { value: "" }, undefined].forEach(function (label) {
-    journey.DirectionRef = label;
-    assert.deepEqual(departures.normalizePrimDepartureResponse(payload, refs, FETCHED_AT),
-      snapshot("REALTIME", [departure("08:34:00", 4, "ON_TIME", "08:33:00")]));
+test("delay, cancellation, expected then aimed, and mixed freshness remain independent of journey evidence", function () {
+  [
+    ["delayed", 2001, "REALTIME", [departure("08:37:00", 7, "DELAYED", "08:33:00")]],
+    ["cancelled", 3001, "REALTIME", [departure("08:32:00", 2, "CANCELLED", "08:31:30"),
+      departure("08:35:00", 5, "ON_TIME", "08:34:30", 5), departure("08:40:00", 10, "ON_TIME", "08:39:30")]],
+    ["scheduled-only", 5001, "SCHEDULED", [departure("08:44:00", 14, "UNKNOWN", "08:44:00", 14),
+      departure("08:58:00", 28, "UNKNOWN", "08:58:00")]],
+    ["mixed", 4001, "MIXED", [departure("08:33:00", 3, "ON_TIME", "08:32:30", 8),
+      departure("08:41:00", 11, "UNKNOWN", "08:41:00", 8), departure("08:49:00", 19, "ON_TIME", "08:48:00")]]
+  ].forEach(function (entry) {
+    var refs = routing(entry[1]);
+    assert.deepEqual(normalize(fixture(entry[0]), refs, journeyContext(refs, "c")), snapshot(entry[2], entry[3]));
   });
-  var opposite = clone(visit);
-  opposite.RecordedAtTime = "2026-01-15T12:00:00Z";
-  opposite.MonitoredVehicleJourney.DestinationRef = { value: "STIF:StopPoint:Q:99999:" };
-  opposite.MonitoredVehicleJourney.MonitoredCall.ExpectedDepartureTime = "2026-01-15T08:31:00Z";
-  visits(payload).push(opposite);
-  // Quay refs pool sibling destinations after the exact matches.
-  assert.deepEqual(departures.normalizePrimDepartureResponse(payload, refs, FETCHED_AT),
-    snapshot("REALTIME", [departure("08:34:00", 4, "ON_TIME", "08:33:00"), departure("08:31:00", 1, "ON_TIME", "08:33:00")],
-      Date.parse("2026-01-15T12:00:00Z") / 1000));
-  journey.DestinationRef = opposite.MonitoredVehicleJourney.DestinationRef;
-  // Zero exact matches at a quay ref still pools instead of failing.
-  assert.deepEqual(departures.normalizePrimDepartureResponse(payload, refs, FETCHED_AT),
-    snapshot("REALTIME", [departure("08:31:00", 1, "ON_TIME", "08:33:00", 3), departure("08:34:00", 4, "ON_TIME", "08:33:00")],
-      Date.parse("2026-01-15T12:00:00Z") / 1000));
-  delete journey.DestinationRef;
-  assert.throws(function () { departures.normalizePrimDepartureResponse(payload, refs, FETCHED_AT); });
 });
 
-test("quay monitoring pools sibling destinations after exact matches", function () {
-  var quay = "STIF:StopPoint:Q:25433:";
-  var line = "STIF:Line::C01246:";
-  var refs = {
-    monitoringRef: quay,
-    lineRef: line,
-    destinationRef: "STIF:StopPoint:Q:493344:"
-  };
-  var payload = quayPayload([
-    quayVisit(quay, line, "STIF:StopPoint:Q:2181:", "2026-01-15T08:42:00Z"),
-    quayVisit(quay, line, "STIF:StopPoint:Q:2181:", "2026-01-15T08:50:00Z"),
-    quayVisit(quay, line, refs.destinationRef, "2026-01-15T08:35:00Z"),
-    quayVisit(quay, line, refs.destinationRef, "2026-01-15T09:00:00Z"),
-    quayVisit("STIF:StopPoint:Q:99999:", line, refs.destinationRef, "2026-01-15T08:36:00Z")
-  ]);
-  assert.deepEqual(departures.normalizePrimDepartureResponse(payload, refs, FETCHED_AT),
-    snapshot("REALTIME", [
-      departure("08:35:00", 5, "ON_TIME", undefined, 25),
-      departure("09:00:00", 30, "ON_TIME"),
-      departure("08:42:00", 12, "ON_TIME", undefined, 8),
-      departure("08:50:00", 20, "ON_TIME")
-    ]));
+test("common arrivals combine full and partial chronologically; beyond partial excludes only proven partials", function () {
+  var refs = routing(1001);
+  var payload = quayPayload([live(refs, refs.destinationRef, 50), live(refs, "STIF:StopPoint:Q:SHORT:", 35),
+    live(refs, refs.destinationRef, 42)]);
+  assert.deepEqual(normalize(payload, refs, journeyContext(refs, "b")).departures.map(function (d) { return d.minutes; }), [5, 12, 20]);
+  assert.deepEqual(normalize(payload, refs, journeyContext(refs, "c")).departures.map(function (d) { return d.minutes; }), [12, 20]);
+  var fromB = journeyContext(refs, "c");
+  fromB.patterns.patterns[0].stops[0].stopRef = null;
+  fromB.patterns.patterns[0].stops[1].stopRef = refs.monitoringRef;
+  fromB.patterns.patterns[1].stops[0].stopRef = null;
+  fromB.patterns.patterns[1].stops[1].stopRef = refs.monitoringRef;
+  assert.deepEqual(normalize(payload, refs, fromB).departures.map(function (d) { return d.minutes; }), [12, 20]);
 });
 
-test("area monitoring stays strict and yields an empty snapshot instead of failing", function () {
-  var refs = {
-    monitoringRef: "STIF:StopArea:SP:4001:",
-    lineRef: "STIF:Line::C005:",
-    destinationRef: "STIF:StopArea:SP:43219:"
-  };
-  var payload = quayPayload([
-    quayVisit(refs.monitoringRef, refs.lineRef, "STIF:StopArea:SP:99999:", "2026-01-15T08:36:00Z"),
-    quayVisit(refs.monitoringRef, refs.lineRef, "STIF:StopArea:SP:98888:", "2026-01-15T08:40:00Z")
-  ]);
-  assert.deepEqual(departures.normalizePrimDepartureResponse(payload, refs, FETCHED_AT),
-    snapshot("SCHEDULED", []));
+test("unknown short names and absent terminal hints prove only universally compatible journeys", function () {
+  var refs = { monitoringRef: "STIF:StopPoint:Q:34214:", lineRef: "STIF:Line::C01246:",
+    destinationRef: "STIF:StopPoint:Q:462557:" };
+  var context = journeyContext(refs, "b");
+  context.patterns.terminals[0].labels = ["Porte de Clignancourt"];
+  var abbreviated = live(refs, refs.destinationRef, 32);
+  abbreviated.MonitoredVehicleJourney.DestinationName = "Porte de Clignancourt";
+  abbreviated.MonitoredVehicleJourney.DestinationShortName = "Clignancourt";
+  abbreviated.MonitoredVehicleJourney.MonitoredCall.DestinationDisplay = "Clignancourt";
+  var missing = live(refs, refs.destinationRef, 35);
+  delete missing.MonitoredVehicleJourney.DestinationRef;
+  var payload = quayPayload([missing, abbreviated]);
+  assert.deepEqual(normalize(payload, refs, context).departures,
+    [departure("08:32:00", 2, "ON_TIME", undefined, 3), departure("08:35:00", 5, "ON_TIME")]);
+  context.arrivalPlaceId = placeId("c");
+  assert.deepEqual(normalize(payload, refs, context).departures.map(function (d) { return [d.minutes, d.journeyUncertain]; }),
+    [[2, true], [5, true]]);
+  context.arrivalPlaceId = placeId("a");
+  assert.deepEqual(normalize(payload, refs, context).departures, []);
 });
 
-test("explicit offsets are independent of local timezone and malformed timestamps fail closed", function () {
-  var payload = fixture("metro");
+test("reduced 255 south and north contradictions confirm only shared arrivals and honor proven Q aliases", function () {
+  [
+    ["34214", "462557", "39931", ["Porte de Clignancourt"], ["Porte de Paris"], [], "Clignancourt"],
+    ["25446", "2181", "493344", ["Les Prévoyants", "Prevoyants"], ["Mairie", "Stains Mairie"], ["STIF:StopPoint:Q:7969:"], "Prevoyants"]
+  ].forEach(function (row) {
+    var refs = { monitoringRef: "STIF:StopPoint:Q:" + row[0] + ":", lineRef: "STIF:Line::C01246:",
+      destinationRef: "STIF:StopPoint:Q:" + row[1] + ":" };
+    var context = journeyContext(refs, "b");
+    context.patterns.terminals[0].labels = row[3];
+    context.patterns.terminals[1].labels = row[4];
+    context.patterns.terminals[1].refs = ["STIF:StopPoint:Q:" + row[2] + ":"].concat(row[5]);
+    var visit = live(refs, refs.destinationRef, 32);
+    visit.MonitoredVehicleJourney.DestinationName = [{ value: row[3][0] }];
+    visit.MonitoredVehicleJourney.MonitoredCall.DestinationDisplay = row[4][0];
+    assert.equal(normalize(quayPayload([visit]), refs, context).departures[0].journeyUncertain, false);
+    context.arrivalPlaceId = placeId("c");
+    assert.equal(normalize(quayPayload([visit]), refs, context).departures[0].journeyUncertain, true);
+    visit.MonitoredVehicleJourney.DestinationRef = context.patterns.terminals[1].refs.slice(-1)[0];
+    visit.MonitoredVehicleJourney.DestinationName = row[4][0];
+    visit.MonitoredVehicleJourney.DestinationShortName = { value: row[4][row[4].length - 1] };
+    visit.MonitoredVehicleJourney.MonitoredCall.DestinationDisplay = row[6];
+    assert.equal(normalize(quayPayload([visit]), refs, context).departures[0].journeyUncertain, true);
+    delete visit.MonitoredVehicleJourney.MonitoredCall.DestinationDisplay;
+    assert.deepEqual(normalize(quayPayload([visit]), refs, context).departures, []);
+    visit.MonitoredVehicleJourney.DestinationDisplay = "Unknown operator text";
+    assert.equal(normalize(quayPayload([visit]), refs, context).departures[0].journeyUncertain, true);
+  });
+});
+
+test("express, loops, order and boarding restrictions cannot be confirmed by one favorable occurrence", function () {
+  var refs = routing(1001), payload = quayPayload([live(refs, refs.destinationRef, 35)]);
+  var a = function (pickup) { return stop(refs.monitoringRef, "a", pickup); };
+  var b = function (drop) { return stop(null, "b", 0, drop); };
+  var c = function () { return stop(null, "c"); };
+  [
+    ["b", [[a(), b(), c()], [a(), c()]], true],
+    ["b", [[a(), b(), a(), c()]], true],
+    ["b", [[b(), a(), c()]], null],
+    ["b", [[a(1), b(), c()]], null],
+    ["b", [[a(), b(1), c()]], null],
+    ["b", [[a(2), b(), c()]], true],
+    ["b", [[a(3), b(), c()]], true],
+    ["b", [[a(), b(2), c()]], true],
+    ["b", [[a(), b(3), c()]], true],
+    ["a", [[a(), b(), c()]], null],
+    ["a", [[a(), b(), a(), c()]], true]
+  ].forEach(function (entry) {
+    var result = normalize(payload, refs, journeyContext(refs, entry[0], entry[1])).departures;
+    if (entry[2] === null) assert.deepEqual(result, []);
+    else assert.equal(result[0].journeyUncertain, entry[2]);
+  });
+});
+
+test("SP opposite directions and a different Q quay never become equivalent by place", function () {
+  ["STIF:StopArea:SP:AREA:", "STIF:StopPoint:Q:QUAY:"].forEach(function (monitoring) {
+    var refs = routing(1001); refs.monitoringRef = monitoring;
+    var context = journeyContext(refs, "b", [
+      [stop(monitoring, "a"), stop(null, "b"), stop(null, "c")],
+      [stop(null, "c"), stop(null, "b"), stop(monitoring, "a"), stop(null, "c")]
+    ]);
+    assert.equal(normalize(quayPayload([live(refs, refs.destinationRef, 35)]), refs, context).departures[0].journeyUncertain, true);
+    context.patterns.patterns[1].stops[2].stopRef = "STIF:StopPoint:Q:OTHER:";
+    assert.equal(normalize(quayPayload([live(refs, refs.destinationRef, 35)]), refs, context).departures[0].journeyUncertain, false);
+  });
+});
+
+test("four total entries prioritize confirmation, preserve ties and never synthesize missing visits", function () {
+  var refs = routing(1001), context = journeyContext(refs, "b");
+  context.patterns.terminals.push({ kind: "terminal", terminalId: "branch", terminalPlaceId: placeId("c"),
+    refs: ["STIF:StopPoint:Q:BRANCH:"], labels: ["Branch"] });
+  context.patterns.patterns.push({ kind: "pattern", patternId: "branch", terminalId: "branch",
+    stops: [stop(refs.monitoringRef, "a"), stop(null, "c")] });
+  var known = live(refs, refs.destinationRef, 40), short = live(refs, "STIF:StopPoint:Q:SHORT:", 40, "delayed");
+  known.MonitoredVehicleJourney.DestinationName = ["Full", { value: "Short" }];
+  var unknown = live(refs, "STIF:StopPoint:Q:UNKNOWN:", 31);
+  var result = normalize(quayPayload([unknown, known, short, live(refs, refs.destinationRef, 50),
+    live(refs, "STIF:StopPoint:Q:UNKNOWN:", 32)]), refs, context).departures;
+  assert.deepEqual(result.map(function (d) { return [d.minutes, d.status, d.journeyUncertain, d.nextIntervalMinutes]; }),
+    [[10, "ON_TIME", false, undefined], [10, "DELAYED", false, 10], [20, "ON_TIME", false, undefined],
+      [1, "ON_TIME", true, undefined]]);
+  [0, 1, 2, 3, 4, 5].forEach(function (count) {
+    var list = [45, 33, 39, 42, 36].slice(0, count).map(function (minute) { return live(refs, refs.destinationRef, minute); });
+    assert.deepEqual(normalize(quayPayload(list), refs, context).departures.map(function (d) { return d.minutes; }),
+      [45, 33, 39, 42, 36].slice(0, count).sort(function (a, b) { return a - b; }).slice(0, 4).map(function (n) { return n - 30; }));
+  });
+  result = normalize(quayPayload([live(refs, refs.destinationRef, 32), live(refs, refs.destinationRef, 35, "cancelled"),
+    live(refs, refs.destinationRef, 40), unknown]), refs, context).departures;
+  assert.deepEqual(result.map(function (d) { return d.nextIntervalMinutes; }), [8, undefined, undefined, undefined]);
+  var bad = live(refs, refs.destinationRef, 59);
+  bad.MonitoredVehicleJourney.DestinationName = 42;
+  assert.throws(function () { normalize(quayPayload([known, known, known, known, bad]), refs, context); });
+});
+
+test("every supported SIRI evidence field accepts strings, value objects and flat arrays without coercion", function () {
+  var refs = routing(1001), context = journeyContext(refs, "c");
+  ["DestinationName", "DestinationShortName", "DestinationDisplay", "call"].forEach(function (field) {
+    ["Full", { value: "Full" }, ["Full", { value: "Full" }]].forEach(function (value) {
+      var visit = live(refs, refs.destinationRef, 35), journey = visit.MonitoredVehicleJourney;
+      delete journey.DestinationRef;
+      (field === "call" ? journey.MonitoredCall : journey)[field === "call" ? "DestinationDisplay" : field] = value;
+      assert.equal(normalize(quayPayload([visit]), refs, context).departures[0].journeyUncertain, false);
+    });
+    [42, false, {}, { value: null }, ["Full", 7], [["Full"]], [null]].forEach(function (value) {
+      var visit = live(refs, refs.destinationRef, 35), journey = visit.MonitoredVehicleJourney;
+      (field === "call" ? journey.MonitoredCall : journey)[field === "call" ? "DestinationDisplay" : field] = value;
+      assert.throws(function () { normalize(quayPayload([visit]), refs, context); });
+    });
+  });
+  [refs.destinationRef, { value: refs.destinationRef }, [refs.destinationRef, { value: refs.destinationRef }]].forEach(function (value) {
+    var visit = live(refs, refs.destinationRef, 35);
+    visit.MonitoredVehicleJourney.DestinationRef = value;
+    assert.equal(normalize(quayPayload([visit]), refs, context).departures[0].journeyUncertain, false);
+  });
+  ["", "IDFM:bad", "STIF:StopPoint:Q:bad space:", "STIF:StopPoint:Q:bad:\n", 7, {}, [null]].forEach(function (value) {
+    var visit = live(refs, refs.destinationRef, 35);
+    visit.MonitoredVehicleJourney.DestinationRef = value;
+    assert.throws(function () { normalize(quayPayload([visit]), refs, context); });
+  });
+  [undefined, null].forEach(function (value) {
+    var visit = live(refs, refs.destinationRef, 35), journey = visit.MonitoredVehicleJourney;
+    journey.DestinationRef = value;
+    journey.DestinationName = ["", { value: "" }];
+    journey.DirectionRef = refs.destinationRef;
+    journey.DirectionName = "Full";
+    assert.equal(normalize(quayPayload([visit]), refs, context).departures[0].journeyUncertain, true);
+  });
+});
+
+test("resolved arrival context is mandatory; unavailable patterns keep actual uncertain times and statuses", function () {
+  var refs = routing(1001), payload = quayPayload([live(refs, refs.destinationRef, 35, "delayed"),
+    live(refs, refs.destinationRef, 40, "cancelled")]);
+  [undefined, null, {}, { arrivalPlaceId: null, patterns: null }, { arrivalPlaceId: placeId("c") },
+    { arrivalPlaceId: placeId("c"), patterns: undefined }, { arrivalPlaceId: "plc_bad", patterns: null },
+    { arrivalPlaceId: placeId("c"), patterns: {} }].forEach(function (context) {
+    assert.throws(function () { normalize(payload, refs, context); });
+  });
+  var result = normalize(payload, refs, { arrivalPlaceId: placeId("c"), patterns: null }).departures;
+  assert.deepEqual(result.map(function (d) { return [d.minutes, d.status, d.journeyUncertain, d.nextIntervalMinutes]; }),
+    [[5, "DELAYED", true, undefined], [10, "CANCELLED", true, undefined]]);
+});
+
+test("foreign line and monitoring visits do not contaminate source freshness", function () {
+  var refs = routing(1001), good = live(refs, refs.destinationRef, 35), other = clone(good);
+  other.RecordedAtTime = "2026-01-15T12:00:00Z";
+  other.MonitoringRef = "other-stop";
+  var wrongLine = clone(other); wrongLine.MonitoringRef = refs.monitoringRef;
+  wrongLine.MonitoredVehicleJourney.LineRef = "other-line";
+  assert.deepEqual(normalize(quayPayload([other, good, wrongLine]), refs, journeyContext(refs, "c")),
+    snapshot("REALTIME", [departure("08:35:00", 5, "ON_TIME")]));
+});
+
+test("explicit offsets and strict source dates remain independent of local timezone", function () {
+  var refs = routing(2001), payload = fixture("metro"), context = journeyContext(refs, "c");
   var call = visits(payload)[0].MonitoredVehicleJourney.MonitoredCall;
   call.ExpectedDepartureTime = "2026-01-15T09:34:00.999+01:00";
-  assert.equal(departures.normalizePrimDepartureResponse(payload, routing(2001), FETCHED_AT).departures[0].expectedAt,
-    Date.parse("2026-01-15T08:34:00Z") / 1000);
+  assert.equal(normalize(payload, refs, context).departures[0].expectedAt, Date.parse("2026-01-15T08:34:00Z") / 1000);
   ["2026-01-15T08:32:00", "2026-02-29T08:32:00Z", "2026-01-15T24:00:00Z",
     "2026-01-15T08:60:00Z", "2026-01-15T08:32:60Z", "2026-01-15T08:32:00+24:00",
     "2026-01-15T08:32:00+01:60", "2026-01-15T08:32:00z", "2026-01-15T08:32:00Z\n",
     "1969-12-31T23:59:59Z", "2106-02-07T06:28:16Z"].forEach(function (timestamp) {
     call.ExpectedDepartureTime = timestamp;
-    assert.throws(function () { departures.normalizePrimDepartureResponse(payload, routing(2001), FETCHED_AT); });
+    assert.throws(function () { normalize(payload, refs, context); });
   });
-  assert.throws(function () { departures.normalizePrimDepartureResponse(fixture("malformed"), routing(2001), FETCHED_AT); });
+  assert.throws(function () { normalize(fixture("malformed"), refs, context); });
 });
-
-test("normalization bounds chronological output but still validates discarded visits", function () {
-  var payload = fixture("bus");
-  var original = visits(payload)[0];
-  payload.Siri.ServiceDelivery.StopMonitoringDelivery[0].MonitoredStopVisit = [40, 35, 38, 37, 36, 39].map(function (minute) {
-    var visit = clone(original);
-    visit.MonitoredVehicleJourney.MonitoredCall.ExpectedDepartureTime = "2026-01-15T08:" + minute + ":00Z";
-    return visit;
-  });
-  var result = departures.normalizePrimDepartureResponse(payload, routing(1001), FETCHED_AT);
-  assert.deepEqual(result.departures.map(function (entry) { return entry.minutes; }), [5, 6, 7, 8]);
-  assert.deepEqual(result.departures.map(function (entry) { return entry.nextIntervalMinutes; }), [1, 1, 1, undefined]);
-  delete visits(payload)[5].MonitoredVehicleJourney.MonitoredCall;
-  assert.throws(function () { departures.normalizePrimDepartureResponse(payload, routing(1001), FETCHED_AT); });
-});
-
-test("upstream routing may exceed watch ID lengths without leaking into the snapshot", function () {
-  var payload = fixture("metro");
-  var refs = routing(2001);
-  var visit = visits(payload)[0];
-  refs.monitoringRef += "x".repeat(100);
-  refs.lineRef += "y".repeat(100);
-  refs.destinationRef += "q".repeat(100);
-  visit.MonitoringRef.value = refs.monitoringRef;
-  visit.MonitoredVehicleJourney.LineRef.value = refs.lineRef;
-  visit.MonitoredVehicleJourney.DestinationRef.value = refs.destinationRef;
-  assert.deepEqual(departures.normalizePrimDepartureResponse(payload, refs, FETCHED_AT),
-    snapshot("REALTIME", [departure("08:34:00", 4, "ON_TIME", "08:33:00")]));
-  var trafficPayload = trafficFixture();
-  trafficPayload.lines[0].id = "line:" + refs.lineRef;
-  assert.equal(trafficDetail(trafficPayload, refs.lineRef).state, "NORMAL");
-});
-
 test("traffic distinguishes observed normal, useful disruption and source uncertainty", function () {
   var payload = trafficFixture();
   var expected = {

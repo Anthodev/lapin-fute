@@ -49,7 +49,7 @@ function chip(port, record, slot, x, y, width, height) {
 }
 function countdown(r, record, index, now, primary = false, copyRole = 0) {
   if (!record || index >= hex(record,22,1)) return "-";
-  if (hex(record,31+index*9,1) === 2) return "-";
+  if ((hex(record,31+index*9,1)&3) === 2) return "-";
   const minutes = Math.ceil((hex(record,23+index*9,8)*1000-now)/60000);
   return minutes < 0 ? copy(r.profile,r.language,12,copyRole) : minutes === 0 ? copy(r.profile,r.language,13,copyRole) : String(minutes)+(primary ? "" : " min");
 }
@@ -135,7 +135,8 @@ function overview(port,r,now) {
         draw(port,">",0,color,routeX,y+31,10,20,-1);
         draw(port,clipped(record,mark?10:9),0,color,routeX+10,y+31,routeWidth-10,20,-1);
       }
-      draw(port,countdown(r,summary,0,now,false,compact?2:1),1,color,x+width-padding-countdownWidth-markWidth,y,countdownWidth,height,1);
+      const uncertain=summary && hex(summary,22,1) && (hex(summary,31,1)&4) && (hex(summary,31,1)&3)!==2;
+      draw(port,uncertain?"?":countdown(r,summary,0,now,false,compact?2:1),1,color,x+width-padding-countdownWidth-markWidth,y,countdownWidth,height,1);
       if(mark) draw(port,mark,1,color,x+width-padding-markWidth,y,markWidth,height);
     }
     if (!focused && !round) port.fillColor(RULE,x,y+height,width,1);
@@ -143,6 +144,9 @@ function overview(port,r,now) {
 }
 function departures(port,r,now) {
   const round=r.profile===1, record=r.records[r.active], data=source(r), count=data?hex(data,22,1):0;
+  const rows=Math.min(round?2:3,Math.max(0,count-1));
+  let uncertain=false;
+  for(let i=0;i<count && i<=rows;i++)if(hex(data,31+i*9,1)&4)uncertain=true;
   let x=round?46:8,y=round?52:31,width=round?168:184,height=round?40:44;
   chip(port,record,2,x,y+6,44,27);
   draw(port,clipped(record,8),1,INK,x+52,y,width-52,20,-1);
@@ -153,8 +157,14 @@ function departures(port,r,now) {
   if (!count) {
     const text=copy(r.profile,r.language,11,5);
     lines(port,text,1,INK,x,y+Math.max(0,Math.floor((height-lineCount(text)*16)/2)),width,16);
+  } else if(uncertain) {
+    const flags=hex(data,31,1), status=flags&3;
+    draw(port,countdown(r,data,0,now),2,INK,x+16,y+2,width-32,28);
+    if(flags&4)draw(port,"?",1,INK,x+2,y+2,12,28);
+    if(status)draw(port,copy(r.profile,r.language,13+status),1,INK,x,y+30,width,18);
+    draw(port,copy(r.profile,r.language,47),0,INK,x,y+height-16,width,16);
   } else {
-    const status=hex(data,31,1), value=countdown(r,data,0,now,true), unit=status!==2 && Math.ceil((hex(data,23,8)*1000-now)/60000)>0;
+    const status=hex(data,31,1)&3, value=countdown(r,data,0,now,true), unit=status!==2 && Math.ceil((hex(data,23,8)*1000-now)/60000)>0;
     const style=value==="-"?2:3, unitWidth=unit?Math.ceil(port.measureString("min",fonts[2]).width):0;
     const gap=unit?4:0, valueWidth=Math.min(width-unitWidth-gap,Math.ceil(port.measureString(value,fonts[style]).width));
     const left=x+Math.floor((width-valueWidth-unitWidth-gap)/2), bottom=y+height-(status?(round?17:15):(round?10:5));
@@ -162,15 +172,18 @@ function departures(port,r,now) {
     if(unit)drawBottom(port,"min",2,INK,left+valueWidth+gap,bottom,unitWidth);
     if(status)draw(port,copy(r.profile,r.language,13+status),1,INK,x,y+height-19,width,18);
   }
-  const rows=Math.min(round?2:3,Math.max(0,count-1));
   x=round?48:8;y=round?162:137;width=round?164:184;height=round?42:51;
   const rowHeight=rows?Math.max(1,Math.floor(height/rows)):0;
+  let announced=!!(count && (hex(data,31,1)&4));
   for(let i=0;i<rows;i++) {
-    const status=hex(data,40+i*9,1), top=y+i*rowHeight;
-    const label=status?copy(r.profile,r.language,13+status,1):i===0?copy(r.profile,r.language,10):"";
-    draw(port,label,status?1:0,INK,x+2,top,Math.floor(width*.65),rowHeight,-1);
+    const flags=hex(data,40+i*9,1), status=flags&3, doubtful=!!(flags&4), top=y+i*rowHeight;
+    const starts=doubtful && !announced;
+    const label=status?copy(r.profile,r.language,13+status,uncertain?7:1):starts?copy(r.profile,r.language,48,7):i===0 && !doubtful?copy(r.profile,r.language,10):"";
+    draw(port,label,uncertain?0:status?1:0,INK,x+2,top,Math.floor(width*.65)-(uncertain?12:0),rowHeight,-1);
+    if(doubtful)draw(port,"?",1,INK,x+Math.floor(width*.65)-8,top,8,rowHeight);
     draw(port,countdown(r,data,i+1,now),1,INK,x+Math.floor(width*.65),top,Math.ceil(width*.35)-2,rowHeight,1);
-    if(i>0)port.fillColor(RULE,x,top,width,1);
+    if(i>0 || starts)port.fillColor(RULE,x,top,width,1);
+    if(doubtful)announced=true;
   }
   const state=palette(r,data), foreground=FOREGROUNDS[state];
   x=round?42:0;y=round?208:188;width=round?176:200;height=round?38:40;

@@ -47,3 +47,24 @@ test("secondary departure status labels fit native detail columns while primary 
     assert.ok(measured(text, 1) <= width, `${language} profile ${profile} token ${token}: ${text} exceeds ${width}px`);
   }
 });
+
+test("uncertain journey legend and secondary labels fit their native slots", () => {
+  for (const profile of [0, 1]) for (const language of ["en", "fr"]) {
+    const legend = copy(profile, language, 47);
+    assert.equal(legend, language === "fr" ? "? : trajet incertain" : "? : journey uncertain");
+    assert.ok(measured(legend, 0) <= (profile ? 176 : 184));
+    for (const token of [14, 15, 16, 48]) {
+      const text = copy(profile, language, token, 7);
+      assert.ok(measured(text, 0) <= (profile ? 94 : 107));
+      if (token === 48) assert.equal(text, language === "fr" ? "Trajet incertain" : "Uncertain trip");
+      else {
+        const raw = copy(profile, language, token);
+        if (measured(raw, 0) <= (profile ? 94 : 107)) assert.equal(text, raw);
+        else {
+          assert.ok(text.endsWith("…"));
+          assert.ok(raw.startsWith(text.slice(0, -1)));
+        }
+      }
+    }
+  }
+});

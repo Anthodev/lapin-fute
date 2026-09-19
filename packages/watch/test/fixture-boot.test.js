@@ -22,7 +22,7 @@ const ROUTING = { monitoringRef: "IDFM:SP:2001", lineRef: "IDFM:C200", destinati
 function snapshot(fetchedAt) {
   return {
     fetchedAt, freshness: "REALTIME", sourceUpdatedAt: fetchedAt - 10,
-    departures: [120, 360].map((offset) => ({ expectedAt: fetchedAt + offset, minutes: offset / 60, status: "ON_TIME" }))
+    departures: [120, 360].map((offset) => ({ expectedAt: fetchedAt + offset, minutes: offset / 60, status: "ON_TIME", journeyUncertain: false }))
   };
 }
 
@@ -34,11 +34,12 @@ function coupled(t, { count = 2, age = 0, cached = count, profile = 0 } = {}) {
     ...contracts.copyFavorite(fixture.favorite),
     id: "favorite-" + index,
     serviceId: "opaque:fixture:service:" + index,
+    arrivalPlaceId: "plc_" + String(index).repeat(43),
     sortOrder: index,
     routing: { ...ROUTING }
   }));
   assert(configuration.saveConfiguration(storage, {
-    schemaVersion: 1, favorites, keyStatus: contracts.KEY_STATUS.CONFIGURED, primApiKey: KEY
+    schemaVersion: 2, favorites, keyStatus: contracts.KEY_STATUS.CONFIGURED, primApiKey: KEY
   }));
   let cache = configuration.emptyCache();
   if (cached) {
@@ -49,7 +50,7 @@ function coupled(t, { count = 2, age = 0, cached = count, profile = 0 } = {}) {
         departures: { status: "AVAILABLE", data: snapshot(NOW / 1000 - age) },
         traffic: { state: "NORMAL", checkedAt: NOW / 1000 - age }
       }))
-    }, NOW - age * 1000);
+    }, NOW - age * 1000, favorites.slice(0, cached));
   }
   assert(configuration.saveCache(storage, cache, KEY));
   const Pebble = new fakes.FakePebble(false);
@@ -58,10 +59,17 @@ function coupled(t, { count = 2, age = 0, cached = count, profile = 0 } = {}) {
   const xhr = fakes.createXHRFactory();
   const watchPackets = [], phonePackets = [], received = [], events = [];
   let phone, runtime, state, cursor = 0;
-  const createPhone = () => companion.createCompanion({
-    Pebble, storage, XHR: xhr.XHR, clock, defer,
-    configurationUrl: "https://config.example.test/index.html"
-  });
+  const createPhone = () => {
+    const instance = companion.createCompanion({
+      Pebble, storage, XHR: xhr.XHR, clock, defer,
+      configurationUrl: "https://config.example.test/index.html"
+    });
+    instance._catalog.lookupJourney = (serviceId, routing, complete) => {
+      complete(null);
+      return { abort() {} };
+    };
+    return instance;
+  };
   function createWatch() {
     runtime = createRuntime(watchStorage, {
       set(callback, delay) { return clock.setTimeout(callback, delay); },
@@ -94,7 +102,7 @@ function coupled(t, { count = 2, age = 0, cached = count, profile = 0 } = {}) {
   }
   function update(next, forceFullSync = false) {
     Pebble.emit("webviewclosed", { response: encodeURIComponent(JSON.stringify({
-      schemaVersion: 1, favorites: next,
+      schemaVersion: 2, favorites: next,
       apiKeyUpdate: { schemaVersion: 1, action: "KEEP" }, forceFullSync
     })) });
     pump();

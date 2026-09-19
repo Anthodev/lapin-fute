@@ -16,6 +16,7 @@ import {
 import { CatalogClientError, createCatalogClient } from "./catalog-client.js";
 import { RECORDED_PREVIEW } from "./preview-fixture.js";
 import { lineBadgeAssetUrl } from "./line-badge-assets.js";
+import { reachableArrivals } from "./generated/journey-patterns.js";
 
 function byId(id) {
   return document.getElementById(id);
@@ -32,6 +33,7 @@ const elements = Object.fromEntries([
   "force-sync-label", "force-sync", "config-footer", "about-open", "about-view", "about-back",
   "about-title", "about-en", "about-fr",
   "add-caption", "sync-caption",
+  "arrival-step", "arrivals-label", "arrival-select", "journey-hint", "configuration-upgrade",
 ].map((id) => [id.replaceAll("-", "_"), byId(id)]));
 
 const opening = parseConfigFragment(window.location.hash);
@@ -44,6 +46,10 @@ let services = [];
 let selectedPlace = null;
 let selectedService = null;
 let serviceController = null;
+let arrivalController = null;
+let arrivalGeneration = 0;
+let arrivals = [];
+let selectedArrival = null;
 let searchGeneration = 0;
 let idSequence = 0;
 let keyRevealed = false;
@@ -128,6 +134,8 @@ function applyCopy() {
     ["favoriteAddCaption", elements.add_caption],
     ["searchLabel", elements.search_label], ["searchHint", elements.search_hint],
     ["servicesLabel", elements.services_label], ["previewTitle", elements.preview_title],
+    ["arrivalsLabel", elements.arrivals_label], ["journeyHint", elements.journey_hint],
+    ["configurationUpgradeRequired", elements.configuration_upgrade],
     ["favoriteNameLabel", elements.favorite_name_label], ["favoriteAdd", elements.favorite_add],
     ["save", elements.save], ["aboutOpen", elements.about_open], ["aboutBack", elements.about_back],
     ["aboutTitle", elements.about_title],
@@ -229,12 +237,6 @@ function renderFavorites() {
   const available = LIMITS.favorites - used;
   setText(elements.favorites_count,
     `${used} ${used === 1 ? copy.favoriteUsed : copy.favoritesUsed} · ${available} ${available === 1 ? copy.favoriteAvailable : copy.favoritesAvailable}`);
-  const sharedQuays = new Map();
-  state.favorites.forEach((favorite) => {
-    if (!Object.hasOwn(favorite, "routing")) return;
-    const quay = favorite.routing.monitoringRef;
-    sharedQuays.set(quay, (sharedQuays.get(quay) ?? 0) + 1);
-  });
 
   state.favorites.forEach((favorite, index) => {
     const item = document.createElement("li");
@@ -253,17 +255,11 @@ function renderFavorites() {
     destination.textContent = favorite.destinationLabel;
     journey.append(stop, destination);
     labels.append(journey);
-    if (!Object.hasOwn(favorite, "routing")) {
+    if (!Object.hasOwn(favorite, "routing") || favorite.arrivalPlaceId == null) {
       const unresolved = document.createElement("span");
       unresolved.className = "unresolved";
       unresolved.textContent = copy.favoriteUnresolved;
       labels.append(unresolved);
-    }
-    if (Object.hasOwn(favorite, "routing") && sharedQuays.get(favorite.routing.monitoringRef) > 1) {
-      const sibling = document.createElement("span");
-      sibling.className = "favorite-sibling";
-      sibling.textContent = copy.siblingQuay;
-      labels.append(sibling);
     }
     const routeRow = document.createElement("div");
     routeRow.className = "favorite-route";
@@ -281,6 +277,7 @@ function renderFavorites() {
     rename.autocomplete = "off";
     rename.maxLength = LIMITS.labelUtf8Bytes;
     rename.value = favorite.displayName ?? "";
+    rename.disabled = !state.editable;
     rename.placeholder = copy.favoriteNamePlaceholder;
     rename.addEventListener("change", () => {
       if (utf8Bytes(rename.value.trim()) <= LIMITS.labelUtf8Bytes) {
@@ -304,17 +301,17 @@ function renderFavorites() {
     // rebuild that a move or removal triggers.
     const actions = document.createElement("div");
     actions.className = "favorite-actions";
-    const moveUpControl = iconButton(copy.favoriteMoveUp, index === 0, ICON_MOVE_UP,
+    const moveUpControl = iconButton(copy.favoriteMoveUp, !state.editable || index === 0, ICON_MOVE_UP,
       () => {
         pendingFavoriteFocus = { id: favorite.id, index, action: "move-up" };
         dispatch({ type: "favorite-move", id: favorite.id, delta: -1 });
       });
-    const moveDownControl = iconButton(copy.favoriteMoveDown, index === state.favorites.length - 1, ICON_MOVE_DOWN,
+    const moveDownControl = iconButton(copy.favoriteMoveDown, !state.editable || index === state.favorites.length - 1, ICON_MOVE_DOWN,
       () => {
         pendingFavoriteFocus = { id: favorite.id, index, action: "move-down" };
         dispatch({ type: "favorite-move", id: favorite.id, delta: 1 });
       });
-    const removeControl = iconButton(copy.favoriteRemove, false, ICON_REMOVE,
+    const removeControl = iconButton(copy.favoriteRemove, !state.editable, ICON_REMOVE,
       () => {
         pendingFavoriteFocus = { id: favorite.id, index, action: "remove" };
         dispatch({ type: "favorite-remove", id: favorite.id });
@@ -339,6 +336,7 @@ function renderFavorites() {
 }
 
 function clearServiceSelection() {
+  clearArrivalSelection();
   if (serviceController !== null) serviceController.abort();
   serviceController = null;
   services = [];
@@ -347,6 +345,42 @@ function clearServiceSelection() {
   elements.service_step.hidden = true;
   elements.preview.hidden = true;
   elements.service_select.replaceChildren();
+}
+
+function clearArrivalSelection() {
+  arrivalGeneration += 1;
+  if (arrivalController !== null) arrivalController.abort();
+  arrivalController = null;
+  arrivals = [];
+  selectedArrival = null;
+  elements.arrival_step.hidden = true;
+  elements.arrival_select.replaceChildren();
+  elements.favorite_name.value = "";
+  renderPreview();
+}
+
+function groupServices(options) {
+  const groups = new Map();
+  for (const service of options) {
+    const key = JSON.stringify([service.routing.monitoringRef, service.routing.lineRef]);
+    let group = groups.get(key);
+    if (group === undefined) {
+      group = { anchor: service, destinations: new Set() };
+      groups.set(key, group);
+    }
+    if (service.serviceId < group.anchor.serviceId) group.anchor = service;
+    group.destinations.add(service.destinationLabel);
+  }
+  const result = Array.from(groups.values());
+  const labelCounts = new Map();
+  for (const group of result) {
+    group.label = `${group.anchor.lineLabel} · ${Array.from(group.destinations).sort().join(" / ")}`;
+    labelCounts.set(group.label, (labelCounts.get(group.label) ?? 0) + 1);
+  }
+  for (const group of result) {
+    if (labelCounts.get(group.label) > 1) group.label += ` · ${group.anchor.routing.monitoringRef}`;
+  }
+  return result;
 }
 
 function renderPlaces() {
@@ -379,14 +413,18 @@ function renderPlaces() {
 }
 
 async function selectPlace(place) {
+  if (!state.editable) return;
+  searchGeneration += 1;
+  catalog.cancelSearch();
   clearServiceSelection();
   selectedPlace = place;
   serviceController = new AbortController();
   const controller = serviceController;
   setText(elements.catalog_status, copy.servicesLoading);
   try {
-    services = await catalog.listServices(place.placeId, controller.signal);
-    if (controller.signal.aborted) return;
+    const options = await catalog.listServices(place.placeId, controller.signal);
+    if (controller.signal.aborted || serviceController !== controller || selectedPlace !== place) return;
+    services = groupServices(options);
     serviceController = null;
     if (services.length === 0) {
       revealSection(elements.add_section);
@@ -398,10 +436,10 @@ async function selectPlace(place) {
     prompt.value = "";
     prompt.textContent = copy.servicesLabel;
     elements.service_select.append(prompt);
-    services.forEach((service, index) => {
+    services.forEach((group, index) => {
       const option = document.createElement("option");
       option.value = String(index);
-      option.textContent = `${service.lineLabel} · ${service.destinationLabel}`;
+      option.textContent = group.label;
       elements.service_select.append(option);
     });
     elements.service_step.hidden = false;
@@ -409,7 +447,7 @@ async function selectPlace(place) {
     setText(elements.catalog_status, "");
     elements.service_select.focus();
   } catch (error) {
-    if (controller.signal.aborted) return;
+    if (controller.signal.aborted || serviceController !== controller) return;
     serviceController = null;
     revealSection(elements.add_section);
     setText(elements.catalog_status, error instanceof CatalogClientError && error.code === "INVALID_SERVICE"
@@ -418,12 +456,20 @@ async function selectPlace(place) {
   }
 }
 
+function currentJourneySelected() {
+  return state.editable && selectedPlace !== null && selectedService !== null
+    && services.some((group) => group.anchor === selectedService)
+    && selectedArrival !== null && arrivals.includes(selectedArrival);
+}
+
 function renderPreview() {
-  elements.preview.hidden = selectedService === null;
-  if (selectedService === null) return;
+  const ready = currentJourneySelected();
+  elements.preview.hidden = !ready;
+  elements.favorite_add.disabled = !ready || state.favorites.length >= LIMITS.favorites;
+  if (!ready) return;
   renderLineBadge(elements.preview_line, selectedService);
   setText(elements.preview_stop, selectedService.stopLabel);
-  setText(elements.preview_destination, selectedService.destinationLabel);
+  setText(elements.preview_destination, selectedArrival.label);
   setText(
     elements.preview_departures,
     `${copy.previewRecorded}: ${RECORDED_PREVIEW.map((entry) => `${entry.minutes} ${copy.minutesShort}`).join(" · ")}`,
@@ -439,30 +485,37 @@ function nextFavoriteId() {
   return candidate;
 }
 
-// Routing recovery: favorites stored without routing keep their place
-// and labels; a known serviceId gains routing via an exact catalog lookup. An
-// absent ID keeps the favorite untouched — the visible marker asks for an
-// explicit re-selection, never an automatic delete.
+// Exact-service recovery fills missing routing and arrival without changing
+// stored presentation. A failed lookup leaves the favorite visibly unresolved.
 const hydrationController = new AbortController();
 
 async function hydrateUnresolvedFavorites() {
-  const unresolved = state.favorites.filter((favorite) => !Object.hasOwn(favorite, "routing"));
-  await Promise.all(unresolved.map(async (unresolvedFavorite) => {
-    let service;
+  if (!state.editable) return;
+  const unresolved = state.favorites.filter((favorite) =>
+    !Object.hasOwn(favorite, "routing") || favorite.arrivalPlaceId === null);
+  await Promise.all(unresolved.map(async (original) => {
+    let routing = original.routing;
+    let arrivalPlaceId = original.arrivalPlaceId;
     try {
-      service = await catalog.lookupService(unresolvedFavorite.serviceId, hydrationController.signal);
+      if (routing === undefined) {
+        const service = await catalog.lookupService(original.serviceId, hydrationController.signal);
+        if (service === null || service.serviceId !== original.serviceId || !isServiceRouting(service.routing)) return;
+        routing = service.routing;
+      }
+      if (arrivalPlaceId === null) {
+        const journey = await catalog.lookupJourney(original.serviceId, routing, hydrationController.signal);
+        if (journey !== null) arrivalPlaceId = journey.service.terminalPlaceId;
+      }
     } catch {
       return;
     }
-    if (service === null) return;
-    const current = state.favorites.find((favorite) => favorite.id === unresolvedFavorite.id);
-    if (current === undefined || Object.hasOwn(current, "routing")) return;
-    // Routing-only recovery: the stored favorite is kept verbatim — labels,
-    // colors, service binding and the watch metadata hash — and only the
-    // validated routing from the exact lookup is attached.
-    if (!isServiceRouting(service.routing)) return;
+    if (hydrationController.signal.aborted || !state.editable) return;
+    const current = state.favorites.find((favorite) => favorite.id === original.id);
+    if (current === undefined || current.serviceId !== original.serviceId
+        || current.arrivalPlaceId !== original.arrivalPlaceId) return;
     const hydrated = copyPhoneFavorite(current);
-    hydrated.routing = { ...service.routing };
+    if (!Object.hasOwn(current, "routing")) hydrated.routing = { ...routing };
+    if (current.arrivalPlaceId === null) hydrated.arrivalPlaceId = arrivalPlaceId;
     dispatch({ type: "favorite-hydrate", id: current.id, favorite: hydrated });
   }));
 }
@@ -488,6 +541,7 @@ elements.key_remove.addEventListener("click", () => {
 });
 
 elements.place_search.addEventListener("input", async () => {
+  if (!state.editable) return;
   const generation = ++searchGeneration;
   clearServiceSelection();
   places = [];
@@ -520,14 +574,63 @@ elements.place_search.addEventListener("input", async () => {
   }
 });
 
-elements.service_select.addEventListener("change", () => {
+elements.service_select.addEventListener("change", async () => {
+  clearArrivalSelection();
+  selectedService = null;
+  setText(elements.catalog_status, "");
+  if (!state.editable || elements.service_select.value === "") return;
   const index = Number(elements.service_select.value);
-  selectedService = Number.isInteger(index) && index >= 0 ? services[index] ?? null : null;
+  selectedService = Number.isInteger(index) && index >= 0 ? services[index]?.anchor ?? null : null;
+  if (selectedService === null) return;
+  const service = selectedService;
+  const generation = arrivalGeneration;
+  const controller = new AbortController();
+  arrivalController = controller;
+  setText(elements.catalog_status, copy.arrivalsLoading);
+  try {
+    const journey = await catalog.lookupJourney(service.serviceId, service.routing, controller.signal);
+    if (controller.signal.aborted || generation !== arrivalGeneration || selectedService !== service) return;
+    arrivalController = null;
+    if (journey?.group == null) {
+      setText(elements.catalog_status, copy.arrivalsUnavailable);
+      return;
+    }
+    arrivals = reachableArrivals(journey.group, service.routing.monitoringRef)
+      .sort((a, b) => a.label.localeCompare(b.label, opening.locale)
+        || (a.placeId < b.placeId ? -1 : a.placeId > b.placeId ? 1 : 0));
+    if (arrivals.length === 0) {
+      setText(elements.catalog_status, copy.arrivalsEmpty);
+      return;
+    }
+    const counts = new Map();
+    for (const arrival of arrivals) counts.set(arrival.label, (counts.get(arrival.label) ?? 0) + 1);
+    const prompt = document.createElement("option");
+    prompt.value = "";
+    prompt.textContent = copy.arrivalsLabel;
+    elements.arrival_select.append(prompt);
+    for (const arrival of arrivals) {
+      const option = document.createElement("option");
+      option.value = arrival.placeId;
+      option.textContent = counts.get(arrival.label) > 1 ? `${arrival.label} · ${arrival.placeId}` : arrival.label;
+      elements.arrival_select.append(option);
+    }
+    elements.arrival_step.hidden = false;
+    setText(elements.catalog_status, "");
+    elements.arrival_select.focus();
+  } catch {
+    if (controller.signal.aborted || generation !== arrivalGeneration || selectedService !== service) return;
+    clearArrivalSelection();
+    setText(elements.catalog_status, copy.arrivalsUnavailable);
+  }
+});
+
+elements.arrival_select.addEventListener("change", () => {
+  selectedArrival = arrivals.find((arrival) => arrival.placeId === elements.arrival_select.value) ?? null;
   renderPreview();
 });
 
 elements.favorite_add.addEventListener("click", () => {
-  if (selectedPlace === null || selectedService === null || !services.includes(selectedService)) {
+  if (!currentJourneySelected() || state.favorites.length >= LIMITS.favorites) {
     setText(elements.catalog_status, copy.invalidService);
     return;
   }
@@ -536,7 +639,7 @@ elements.favorite_add.addEventListener("click", () => {
     setText(elements.catalog_status, copy.invalidService);
     return;
   }
-  const favorite = favoriteFromService(nextFavoriteId(), selectedService, state.favorites.length, name || undefined);
+  const favorite = favoriteFromService(nextFavoriteId(), selectedService, selectedArrival, state.favorites.length, name || undefined);
   if (favorite === null) {
     setText(elements.catalog_status, copy.invalidService);
     return;
@@ -572,6 +675,7 @@ elements.force_sync.addEventListener("change", () => {
 });
 
 elements.save.addEventListener("click", () => {
+  if (!state.editable) return;
   const keyError = apiKeyError(state.keyDraft.value);
   if (keyError !== null) {
     revealSection(elements.prim_section);
@@ -653,10 +757,22 @@ for (const section of sectionElements) {
 // The details toggle event is queued with rendering steps and can be lost
 // to an immediate close, so navigating away flushes the live DOM state.
 window.addEventListener("pagehide", persistSectionStates);
+window.addEventListener("pagehide", () => {
+  searchGeneration += 1;
+  catalog.cancelSearch();
+  clearServiceSelection();
+  hydrationController.abort();
+});
 
 applyCopy();
 renderKey();
 renderFavorites();
+elements.configuration_upgrade.hidden = state.editable;
+for (const element of [
+  elements.key_input, elements.key_toggle, elements.key_remove, elements.place_search,
+  elements.service_select, elements.arrival_select, elements.favorite_name, elements.force_sync, elements.save,
+]) element.disabled = !state.editable;
+renderPreview();
 setText(elements.catalog_status, "");
 document.documentElement.classList.add("ready");
 hydrateUnresolvedFavorites();

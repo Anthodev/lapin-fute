@@ -3,14 +3,15 @@
 var contracts = require("./contracts");
 var CONFIG_STORAGE_KEY = "lapinFuteConfig";
 var RESULTS_STORAGE_KEY = "lapinFuteResults";
-// Phone-local cache version. Version 1 used the obsolete direction-based matcher.
-var CACHE_SCHEMA_VERSION = 2;
+// Phone-local cache version. Earlier caches did not bind results to an arrival.
+var CACHE_SCHEMA_VERSION = 3;
 var INVALID_KEY_STATUS_STORAGE_KEY = "lapinFuteInvalidKeyStatus";
 var CONFIG_RECORD_KEYS = ["schemaVersion", "favorites", "primApiKey", "keyStatus"];
 var CACHE_RECORD_KEYS = ["schemaVersion", "overview", "trafficDetails"];
 var OVERVIEW_ENTRY_KEYS = [
   "favoriteId",
   "serviceId",
+  "arrivalPlaceId",
   "resultStoredAt",
   "result",
   "trafficStoredAt",
@@ -29,6 +30,7 @@ var MAX_SAFE_INTEGER = 9007199254740991;
 var FAVORITE_STRING_KEYS = [
   "id",
   "serviceId",
+  "arrivalPlaceId",
   "displayName",
   "stopLabel",
   "lineLabel",
@@ -45,7 +47,7 @@ var ROUTING_STRING_KEYS = [
 
 function emptyConfiguration() {
   return {
-    schemaVersion: contracts.SCHEMA_VERSION,
+    schemaVersion: contracts.CONFIGURATION_VERSION,
     favorites: [],
     primApiKey: null,
     keyStatus: contracts.KEY_STATUS.MISSING
@@ -54,7 +56,7 @@ function emptyConfiguration() {
 
 function copyConfiguration(value) {
   return {
-    schemaVersion: contracts.SCHEMA_VERSION,
+    schemaVersion: contracts.CONFIGURATION_VERSION,
     favorites: value.favorites.map(contracts.copyPhoneFavorite),
     primApiKey: value.primApiKey,
     keyStatus: value.keyStatus
@@ -114,7 +116,7 @@ function configurationFingerprint(value) {
   var source;
   if (!isStoredConfiguration(value) || value.primApiKey === null) return null;
   source = JSON.stringify({
-    schemaVersion: value.schemaVersion,
+    schemaVersion: contracts.SCHEMA_VERSION,
     favorites: value.favorites.map(function (favorite) {
       var projection = contracts.copyFavorite(favorite);
       delete projection.sortOrder;
@@ -163,7 +165,7 @@ function activeWatchLanguage(Pebble) {
 function isStoredConfiguration(value) {
   if (!contracts.isObject(value)
       || !contracts.hasOnlyKeys(value, CONFIG_RECORD_KEYS)
-      || value.schemaVersion !== contracts.SCHEMA_VERSION
+      || value.schemaVersion !== contracts.CONFIGURATION_VERSION
       || !contracts.isPhoneFavoriteList(value.favorites)) return false;
   if (value.primApiKey === null) {
     return value.keyStatus === contracts.KEY_STATUS.MISSING;
@@ -175,21 +177,29 @@ function isStoredConfiguration(value) {
 }
 
 function recoverStoredConfiguration(value) {
-  if (!contracts.isObject(value) || !Array.isArray(value.favorites)) return null;
+  if (!contracts.isObject(value) || !Array.isArray(value.favorites)
+      || value.schemaVersion !== contracts.SCHEMA_VERSION
+        && value.schemaVersion !== contracts.CONFIGURATION_VERSION) return null;
+  var legacy = value.schemaVersion === contracts.SCHEMA_VERSION;
   // This freshly parsed record is private to restoration. Routing is replaceable
   // catalog enrichment; preserve every other field for ordinary validation.
   value.favorites.forEach(function (favorite) {
+    if (legacy && contracts.isObject(favorite)
+        && !Object.prototype.hasOwnProperty.call(favorite, "arrivalPlaceId")) {
+      favorite.arrivalPlaceId = null;
+    }
     if (contracts.isObject(favorite)
         && Object.prototype.hasOwnProperty.call(favorite, "routing")
         && !contracts.isServiceRouting(favorite.routing)) delete favorite.routing;
   });
+  value.schemaVersion = contracts.CONFIGURATION_VERSION;
   return isStoredConfiguration(value) ? value : null;
 }
 
 function isConfigurationUpdate(value) {
   return contracts.isObject(value)
     && contracts.hasOnlyKeys(value, UPDATE_KEYS)
-    && value.schemaVersion === contracts.SCHEMA_VERSION
+    && value.schemaVersion === contracts.CONFIGURATION_VERSION
     && contracts.isPhoneFavoriteList(value.favorites)
     && contracts.isApiKeyUpdate(value.apiKeyUpdate)
     && (!Object.prototype.hasOwnProperty.call(value, "forceFullSync")
@@ -266,15 +276,21 @@ function isOverviewEntry(value) {
   if (!contracts.isObject(value)
       || !contracts.hasOnlyKeys(value, OVERVIEW_ENTRY_KEYS)
       || !Object.prototype.hasOwnProperty.call(value, "favoriteId")
+      || !Object.prototype.hasOwnProperty.call(value, "serviceId")
+      || !Object.prototype.hasOwnProperty.call(value, "arrivalPlaceId")
       || !Object.prototype.hasOwnProperty.call(value, "trafficStoredAt")
       || !Object.prototype.hasOwnProperty.call(value, "traffic")
       || !contracts.boundedString(value.favoriteId, contracts.LIMITS.idUtf8Bytes)
-      || (Object.prototype.hasOwnProperty.call(value, "serviceId")
-        && !contracts.boundedString(value.serviceId, contracts.LIMITS.idUtf8Bytes))
+      || !contracts.boundedString(value.serviceId, contracts.LIMITS.idUtf8Bytes)
+      || (value.arrivalPlaceId !== null
+        && (typeof value.arrivalPlaceId !== "string"
+          || value.arrivalPlaceId.length !== 47
+          || !/^plc_[A-Za-z0-9_-]{43}$/.test(value.arrivalPlaceId)))
       || !isStoredAt(value.trafficStoredAt)) return false;
   hasResult = Object.prototype.hasOwnProperty.call(value, "result");
   hasResultStoredAt = Object.prototype.hasOwnProperty.call(value, "resultStoredAt");
   if (hasResult !== hasResultStoredAt
+      || (value.arrivalPlaceId === null && hasResult)
       || (hasResult && (!isStoredAt(value.resultStoredAt)
         || !contracts.isDepartureResult(value.result)
         || value.result.favoriteId !== value.favoriteId))) return false;
@@ -333,12 +349,11 @@ function isStoredCache(value) {
 function copyOverviewEntry(entry, requestId) {
   var copy = {
     favoriteId: entry.favoriteId,
+    serviceId: entry.serviceId,
+    arrivalPlaceId: entry.arrivalPlaceId,
     trafficStoredAt: entry.trafficStoredAt,
     traffic: copyTrafficSummary(entry.traffic)
   };
-  if (Object.prototype.hasOwnProperty.call(entry, "serviceId")) {
-    copy.serviceId = entry.serviceId;
-  }
   if (Object.prototype.hasOwnProperty.call(entry, "result")) {
     copy.resultStoredAt = entry.resultStoredAt;
     copy.result = contracts.copyDepartureResult(entry.result, requestId);
@@ -445,6 +460,7 @@ function loadConfiguration(storage) {
   var current = parseStored(storage, CONFIG_STORAGE_KEY);
   var invalidMarker = parseStored(storage, INVALID_KEY_STATUS_STORAGE_KEY).value;
   var loaded;
+  var migration = current.value && current.value.schemaVersion === contracts.SCHEMA_VERSION;
   if (!current.present) return emptyConfiguration();
   loaded = recoverStoredConfiguration(current.value);
   if (loaded === null) return null;
@@ -452,6 +468,7 @@ function loadConfiguration(storage) {
   if (invalidKeyStatusMatches(loaded, invalidMarker)) {
     loaded.keyStatus = contracts.KEY_STATUS.INVALID;
   }
+  if (migration && !saveConfiguration(storage, loaded)) return null;
   return loaded;
 }
 
@@ -495,10 +512,8 @@ function pruneCache(value, favorites) {
     var entry = overviewByFavorite[favorite.id];
     services[favorite.serviceId] = true;
     if (!entry) return;
-    // A rebinding (routing change to another service) invalidates the cached
-    // overview of the old binding; unstamped entries are preserved.
-    if (Object.prototype.hasOwnProperty.call(entry, "serviceId")
-        && entry.serviceId !== favorite.serviceId) return;
+    if (entry.serviceId !== favorite.serviceId
+        || entry.arrivalPlaceId !== favorite.arrivalPlaceId) return;
     normalized.overview.push(copyOverviewEntry(entry));
   });
   value.trafficDetails.forEach(function (entry) {
@@ -527,21 +542,35 @@ function saveCache(storage, value, secret) {
     && verifiedWrite(storage, RESULTS_STORAGE_KEY, copyCache(value));
 }
 
-function mergeOverview(value, favorites, result, storedAt) {
+function mergeOverview(value, favorites, result, storedAt, launchFavorites) {
   var request;
   var favoriteById = Object.create(null);
+  var launchById = Object.create(null);
   var existing = Object.create(null);
   var next;
   if (!isStoredCache(value)
       || !contracts.isPhoneFavoriteList(favorites)
+      || !contracts.isPhoneFavoriteList(launchFavorites)
       || !isStoredAt(storedAt)
       || !contracts.isObject(result)
       || !Array.isArray(result.items)) return null;
+  favorites.forEach(function (favorite) { favoriteById[favorite.id] = favorite; });
+  launchFavorites.forEach(function (favorite) { launchById[favorite.id] = favorite; });
+  if (!result.items.every(function (item) {
+    var favorite;
+    var launched;
+    if (!contracts.isObject(item)) return false;
+    favorite = favoriteById[item.favoriteId];
+    launched = launchById[item.favoriteId];
+    return favorite && launched
+      && favorite.serviceId === launched.serviceId
+      && favorite.arrivalPlaceId === launched.arrivalPlaceId;
+  })) return null;
   request = {
     schemaVersion: contracts.SCHEMA_VERSION,
     requestId: result.requestId,
     language: contracts.WIRE_LANGUAGE.EN,
-    favorites: favorites.filter(function (favorite) {
+    favorites: launchFavorites.filter(function (favorite) {
       return result.items.some(function (item) {
         return contracts.isObject(item) && item.favoriteId === favorite.id;
       });
@@ -550,7 +579,6 @@ function mergeOverview(value, favorites, result, storedAt) {
     })
   };
   if (!contracts.isOverviewResult(result, request)) return null;
-  favorites.forEach(function (favorite) { favoriteById[favorite.id] = favorite; });
   next = pruneCache(value, favorites);
   next.overview.forEach(function (entry) {
     existing[entry.favoriteId] = entry;
@@ -560,10 +588,11 @@ function mergeOverview(value, favorites, result, storedAt) {
     var favorite = favoriteById[item.favoriteId];
     var entry = {
       favoriteId: item.favoriteId,
+      serviceId: favorite.serviceId,
+      arrivalPlaceId: favorite.arrivalPlaceId,
       trafficStoredAt: storedAt,
       traffic: copyTrafficSummary(item.traffic)
     };
-    if (favorite) entry.serviceId = favorite.serviceId;
     if (item.departures.status === "AVAILABLE") {
       entry.resultStoredAt = storedAt;
       entry.result = departureResult(
@@ -666,7 +695,7 @@ function applyConfigurationUpdate(current, update) {
     keyStatus = contracts.KEY_STATUS.MISSING;
   }
   return {
-    schemaVersion: contracts.SCHEMA_VERSION,
+    schemaVersion: contracts.CONFIGURATION_VERSION,
     favorites: update.favorites.map(contracts.copyPhoneFavorite),
     primApiKey: primApiKey,
     keyStatus: keyStatus
@@ -697,7 +726,7 @@ function parseCloseFragment(response) {
   }
   if (!isConfigurationUpdate(parsed)) return null;
   return {
-    schemaVersion: contracts.SCHEMA_VERSION,
+    schemaVersion: contracts.CONFIGURATION_VERSION,
     favorites: parsed.favorites.map(contracts.copyPhoneFavorite),
     apiKeyUpdate: parsed.apiKeyUpdate.action === "REPLACE"
       ? { schemaVersion: contracts.SCHEMA_VERSION, action: "REPLACE", value: parsed.apiKeyUpdate.value }
@@ -708,6 +737,7 @@ function parseCloseFragment(response) {
 
 function configurationPageState(value, language) {
   return {
+    schemaVersion: contracts.CONFIGURATION_VERSION,
     hasKey: value.primApiKey !== null,
     favorites: value.favorites.map(contracts.copyPhoneFavorite),
     language: typeof language === "string" && language.length > 0 ? language : "en"

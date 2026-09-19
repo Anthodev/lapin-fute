@@ -1,10 +1,11 @@
 "use strict";
 
 var contracts = require("./contracts");
+var journeyPatterns = require("./journey-patterns");
 var RFC3339_EXPLICIT_OFFSET = /^([0-9]{4})-([0-9]{2})-([0-9]{2})T([0-9]{2}):([0-9]{2}):([0-9]{2})(?:\.[0-9]+)?(Z|([+-])([0-9]{2}):([0-9]{2}))$/;
 var RETRY_AFTER_DELTA = /^[0-9]+$/;
 var STOP_MONITORING_URL = "https://prim.iledefrance-mobilites.fr/marketplace/stop-monitoring";
-var QUAY_MONITORING_PREFIX = "STIF:StopPoint:Q:";
+var STOP_REF = /^STIF:(?:StopPoint:Q|StopArea:SP):[^:\s\x00-\x1f\x7f]+:$/;
 
 function fail() {
   throw new Error("Invalid PRIM stop-monitoring response");
@@ -76,24 +77,59 @@ function sourceStatus(value) {
   return "UNKNOWN";
 }
 
-function matchTier(visit, routing) {
+function matchesRouting(visit, routing) {
   var monitoringRef = requiredRef(visit.MonitoringRef);
   var journey = visit.MonitoredVehicleJourney;
-  var lineRef;
-  var destinationRef;
   if (!contracts.isObject(journey)) fail();
-  lineRef = requiredRef(journey.LineRef);
+  var lineRef = requiredRef(journey.LineRef);
   if (!contracts.isObject(journey.MonitoredCall)) fail();
-  if (monitoringRef !== routing.monitoringRef || lineRef !== routing.lineRef) return undefined;
-  // SIRI DirectionRef is an operator label, not the catalog's GTFS direction_id.
-  // A StopPoint:Q monitoring ref is a physical one-way quay, and PRIM labels
-  // partial (short-turn) trips with the full-line terminal quay, so a differing
-  // destination pools at tier 1 after the exact matches. StopArea refs (rail)
-  // span both directions and keep the exact destination requirement.
-  destinationRef = requiredRef(journey.DestinationRef);
-  if (destinationRef === routing.destinationRef) return 0;
-  if (routing.monitoringRef.indexOf(QUAY_MONITORING_PREFIX) === 0) return 1;
-  return undefined;
+  return monitoringRef === routing.monitoringRef && lineRef === routing.lineRef;
+}
+
+function appendEvidence(value, output, reference) {
+  var index;
+  if (value === undefined || value === null) return;
+  if (Array.isArray(value)) {
+    for (index = 0; index < value.length; index += 1) {
+      if (typeof value[index] !== "string" && !contracts.isObject(value[index])) fail();
+      appendEvidence(value[index], output, reference);
+    }
+    return;
+  }
+  if (contracts.isObject(value)) {
+    if (typeof value.value !== "string") fail();
+    value = value.value;
+  }
+  if (typeof value !== "string") fail();
+  if (reference) {
+    if (!STOP_REF.test(value) || !contracts.boundedString(value, 256)) fail();
+  } else {
+    if (value === "") return;
+    if (!contracts.boundedString(value, 256) || /[\x00-\x1f\x7f]/.test(value)) fail();
+    if (/^\s*$/.test(value)) return;
+  }
+  output.push(value);
+}
+
+function journeyEvidence(journey) {
+  var evidence = { refs: [], labels: [] };
+  appendEvidence(journey.DestinationRef, evidence.refs, true);
+  appendEvidence(journey.DestinationName, evidence.labels, false);
+  appendEvidence(journey.DestinationShortName, evidence.labels, false);
+  appendEvidence(journey.DestinationDisplay, evidence.labels, false);
+  appendEvidence(journey.MonitoredCall.DestinationDisplay, evidence.labels, false);
+  return evidence;
+}
+
+function isDepartureContext(value, routing) {
+  return contracts.isObject(value) && contracts.hasOnlyKeys(value, ["arrivalPlaceId", "patterns"])
+    && Object.prototype.hasOwnProperty.call(value, "arrivalPlaceId")
+    && Object.prototype.hasOwnProperty.call(value, "patterns")
+    && typeof value.arrivalPlaceId === "string" && value.arrivalPlaceId.length === 47
+    && /^plc_[A-Za-z0-9_-]{43}$/.test(value.arrivalPlaceId)
+    && (value.patterns === null || (contracts.isObject(value.patterns)
+      && value.patterns.lineRef === routing.lineRef && Array.isArray(value.patterns.places)
+      && Array.isArray(value.patterns.terminals) && Array.isArray(value.patterns.patterns)));
 }
 
 function parseMatchedVisit(journey) {
@@ -110,20 +146,20 @@ function parseMatchedVisit(journey) {
   };
 }
 
-// Validate every visit, but retain only the first four, exact-destination
-// matches first and then chronologically. Ties keep source order without
-// relying on an ES5 engine's sort stability.
+// Confirmed journeys first, chronological within each group. Strict comparison
+// preserves source order for ties without depending on ES5 sort stability.
 function insertBounded(visits, visit) {
   var index = visits.length;
   while (index > 0 &&
-      (visits[index - 1].tier > visit.tier ||
-        (visits[index - 1].tier === visit.tier && visits[index - 1].expectedAt > visit.expectedAt))) index -= 1;
+      (visits[index - 1].journeyUncertain > visit.journeyUncertain ||
+        (visits[index - 1].journeyUncertain === visit.journeyUncertain
+          && visits[index - 1].expectedAt > visit.expectedAt))) index -= 1;
   if (index >= contracts.LIMITS.departures) return;
   visits.splice(index, 0, visit);
   if (visits.length > contracts.LIMITS.departures) visits.pop();
 }
 
-function normalizePrimDepartureResponse(value, routing, fetchedAt) {
+function normalizePrimDepartureResponse(value, routing, fetchedAt, context) {
   var serviceDelivery;
   var deliveries;
   var sourceUpdatedAt;
@@ -131,11 +167,11 @@ function normalizePrimDepartureResponse(value, routing, fetchedAt) {
   var responseTimestamp;
   var visits;
   var visit;
-  var tier;
+  var classification;
+  var classify;
   var recordedAt;
   var matched = [];
   var departures = [];
-  var visitCount = 0;
   var realtimeCount = 0;
   var departure;
   var interval;
@@ -143,7 +179,9 @@ function normalizePrimDepartureResponse(value, routing, fetchedAt) {
   var index;
   var offset;
   var next;
-  if (!contracts.isServiceRouting(routing) || !contracts.uint32(fetchedAt)) fail();
+  if (!contracts.isServiceRouting(routing) || !contracts.uint32(fetchedAt)
+      || !isDepartureContext(context, routing)) fail();
+  classify = journeyPatterns.createJourneyClassifier(context.patterns, routing.monitoringRef, context.arrivalPlaceId);
   if (!contracts.isObject(value) || !contracts.isObject(value.Siri)
       || !contracts.isObject(value.Siri.ServiceDelivery)) fail();
   serviceDelivery = value.Siri.ServiceDelivery;
@@ -164,13 +202,13 @@ function normalizePrimDepartureResponse(value, routing, fetchedAt) {
     for (offset = 0; offset < visits.length; offset += 1) {
       visit = visits[offset];
       if (!contracts.isObject(visit)) fail();
-      visitCount += 1;
       recordedAt = epochSeconds(visit.RecordedAtTime);
-      tier = matchTier(visit, routing);
-      if (typeof tier === "undefined") continue;
+      if (!matchesRouting(visit, routing)) continue;
+      classification = classify(journeyEvidence(visit.MonitoredVehicleJourney));
+      if (classification === "INCOMPATIBLE") continue;
       if (typeof sourceUpdatedAt === "undefined" || recordedAt > sourceUpdatedAt) sourceUpdatedAt = recordedAt;
       visit = parseMatchedVisit(visit.MonitoredVehicleJourney);
-      visit.tier = tier;
+      visit.journeyUncertain = classification === "UNCERTAIN";
       insertBounded(matched, visit);
     }
   }
@@ -180,12 +218,13 @@ function normalizePrimDepartureResponse(value, routing, fetchedAt) {
     departure = {
       expectedAt: visit.expectedAt,
       minutes: Math.max(0, Math.ceil((visit.expectedAt - fetchedAt) / 60)),
-      status: visit.status
+      status: visit.status,
+      journeyUncertain: visit.journeyUncertain
     };
     if (typeof visit.aimedAt !== "undefined") departure.aimedAt = visit.aimedAt;
-    if (visit.status !== "CANCELLED") {
+    if (!visit.journeyUncertain && visit.status !== "CANCELLED") {
       for (next = index + 1; next < matched.length; next += 1) {
-        if (matched[next].status !== "CANCELLED") {
+        if (!matched[next].journeyUncertain && matched[next].status !== "CANCELLED") {
           interval = Math.round((matched[next].expectedAt - visit.expectedAt) / 60);
           if (interval > 0) departure.nextIntervalMinutes = interval;
           break;
@@ -221,6 +260,7 @@ function parseRetryAfterSeconds(value) {
 }
 
 module.exports = {
+  isDepartureContext: isDepartureContext,
   normalizePrimDepartureResponse: normalizePrimDepartureResponse,
   buildPrimStopMonitoringUrl: buildPrimStopMonitoringUrl,
   parseRetryAfterSeconds: parseRetryAfterSeconds

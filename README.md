@@ -7,7 +7,7 @@
 <p align="center">
   <strong>Next arrivals and line traffic at a glance, on your Pebble.</strong>
   <br>
-  Keep six favorite stops across Île-de-France and check them without reaching for your phone.
+  Keep six favorite journeys across Île-de-France and check them without reaching for your phone.
 </p>
 
 <p align="center">
@@ -28,7 +28,7 @@
 
 ## About
 
-Lapin Futé puts Île-de-France public-transport arrivals on a Pebble watch. The watch shows a list of favorite stops with their next arrivals, an arrival board for each, and the current service messages for its line. A companion on your phone fetches the data from PRIM, Île-de-France Mobilités' open-data platform, and prepares everything the watch displays; the watch itself never goes online.
+Lapin Futé puts Île-de-France public-transport arrivals on a Pebble watch. The watch shows a list of favorite journeys with their next arrivals, an arrival board for each, and the current service messages for its line. A companion on your phone fetches the data from PRIM, Île-de-France Mobilités' open-data platform, and prepares everything the watch displays; the watch itself never goes online.
 
 <p align="center">
   <img src="assets/emery_01-favorites.png" alt="Lapin Futé favorites on Pebble Time 2" width="45%">
@@ -41,11 +41,14 @@ Lapin Futé puts Île-de-France public-transport arrivals on a Pebble watch. The
 
 ## Features
 
-- **Six favorite stops, five transport modes.** Choose any stop, line, and direction across Métro, RER, Transilien, Tram, and Bus. Favorite stops are renamed and reordered on the phone page, which shows official line badges and colors.
-- **Arrivals at a glance.** The favorites list already shows the next arrivals for each stop; Select opens a full arrival board for one favorite. Countdowns keep ticking on the watch between refreshes.
+> [!NOTE]
+> Departure-to-arrival favorites, the uncertainty flag, and the journey-pattern catalog described below are implemented in this source tree but not published yet. They land together: a rebuilt station catalog, the matching settings page, and a rebuilt watch app are all required. The new on-watch rendering is not natively verified yet; the screenshots above show the currently published release.
+
+- **Six favorite journeys, five transport modes.** A favorite is a departure stop, a line, and a reachable arrival stop, including intermediate stops that no service terminates at. Journeys stay on one line, without connections, across Métro, RER, Transilien, Tram, and Bus. Favorites are renamed and reordered on the phone page, which shows official line badges and colors.
+- **Arrivals at a glance.** The favorites list shows the next arrival for each journey; Select opens its arrival board. Confirmed full-line and short-turn services are combined chronologically. Departures known not to serve the journey are excluded; uncertain departures follow the confirmed ones, marked with `?` and retaining their real times. Conflicting terminal hints can still confirm a journey when every candidate route serves its arrival. Countdowns keep ticking on the watch between refreshes.
 - **Traffic view.** Select again on an arrival board to page through the current service messages for that line.
 - **Refresh when needed.** Open the app, switch favorite, choose Refresh all, or hold Select to request arrivals. Recent results are reused for 60 seconds; after a failed refresh, the last complete result remains visibly stale for at most 15 minutes. There is no periodic network polling.
-- **Clear data states.** The app distinguishes real-time arrivals, mixed real-time and scheduled results, updates in progress, and missing cached data.
+- **Clear data states.** The app distinguishes real-time arrivals, mixed real-time and scheduled results, updates in progress, missing cached data, and trips whose route to your arrival is unconfirmed (`?`).
 - **English and French.** The watch interface and the settings page are both bilingual.
 - **Settings that fit your phone.** Light and dark themes follow your system preference. Collapsible sections keep favorite editing, PRIM access, and watch synchronization easy to reach.
 
@@ -62,7 +65,7 @@ Lapin Futé puts Île-de-France public-transport arrivals on a Pebble watch. The
 
 1. Install [Lapin Futé from RePebble](https://apps.repebble.com/6d6aa01b7ecb4cfea469a183).
 2. In the Pebble mobile app, open Lapin Futé's settings. Under PRIM access, paste a personal access token generated on the [PRIM portal](https://prim.iledefrance-mobilites.fr/fr/mes-jetons-authentification).
-3. Add up to six favorite stops by searching the bundled station catalog; searching and adding work without a token. Save, and your settings sync to the watch.
+3. Add up to six favorite journeys: search the departure stop, pick the line and boarding point, then pick a reachable arrival stop, including intermediate stops. Searching and adding work without a token. Save, and your settings sync to the watch. Favorites saved with an earlier version keep their name, order, and labels; their arrival is filled in automatically from the updated catalog, and until that succeeds they show as unresolved. A settings page opened by an older companion stays read-only until the watch app is updated.
 4. Open Lapin Futé on the watch. Arrivals refresh whenever the app opens, you change favorite, or you hold Select; the phone needs to be connected for fresh data.
 
 Developers can also build and install the app locally using the instructions in [Build from source](#build-from-source).
@@ -101,7 +104,7 @@ npm run build
 LAPIN_FUTE_CONFIG_URL=https://example.org/lapin-fute/ npm run build
 ```
 
-The station catalog is generated ahead of time from open IDFM datasets. With `IDFM_DATASET_TOKEN` in `.env`:
+The station catalog is generated ahead of time from open IDFM datasets. Format 4 embeds each line's journey patterns — stop sequences with boarding and alighting restrictions, plus the terminal aliases the phone matches against announced destinations — and there is no in-place upgrade: an existing catalog must be rebuilt and republished in full. Until that catalog is live, the settings page cannot list arrival stops or resolve migrated favorites, and on the watch a favorite whose arrival never resolved shows no departures while one whose line patterns are missing shows its departures as uncertain. With `IDFM_DATASET_TOKEN` in `.env`:
 
 ```sh
 node --env-file=.env scripts/refresh-catalog.mjs   # download, build, and publish the catalog

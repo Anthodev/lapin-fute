@@ -71,8 +71,8 @@ function departureRecord(view) {
     + layout.fixed(palette, 1) + timestamp(view.trafficCheckedAt) + layout.fixed(departures.length, 1);
   for (var i = 0; i < departures.length; i += 1) {
     var status = contracts.DEPARTURE_STATUS.indexOf(departures[i].status);
-    if (status < 0) throw new TypeError("Invalid departure status");
-    record += timestamp(departures[i].expectedAt) + layout.fixed(status, 1);
+    if (status < 0 || typeof departures[i].journeyUncertain !== "boolean") throw new TypeError("Invalid departure status");
+    record += timestamp(departures[i].expectedAt) + layout.fixed(status | (departures[i].journeyUncertain ? 4 : 0), 1);
   }
   return record;
 }

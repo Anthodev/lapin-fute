@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { nativeHost } from "./native-host.js";
 import { watchModule } from "./xs-host.js";
+import { copy } from "../src/generated/display-copy.js";
 import {
   NOW, NOW_S, appearances, begin, configure, data, departure, harness, latest,
   message, readyDetail, store, trafficDocument, trafficError
@@ -154,4 +155,74 @@ test("retained credential failures outrank traffic loading until matching succes
   h.runtime.request(1, 2);
   data(h, 1, [departure()]);
   h.header(5);
+});
+
+function journeyDepartures(statuses, minutes = statuses.map((_, i) => 10 + i * 10)) {
+  return departure({ palette: 0 }).slice(0, 22) + statuses.length.toString(16)
+    + statuses.map((status, i) => (NOW_S + minutes[i] * 60).toString(16).padStart(8, "0") + status.toString(16)).join("");
+}
+
+for (const profile of [0, 1]) for (const language of ["en", "fr"]) {
+  test(`profile ${profile} ${language}: uncertain detail keeps times, statuses and overview fallback`, async (t) => {
+    const h = await renderHarness(t, profile);
+    configure(h, appearances(1, "fav", { profile, language }), { language });
+    const record = journeyDepartures([4, 5, 6, 7]);
+    data(h, 0, [journeyDepartures([4])]);
+    assert.equal(h.show().filter(row => row.text === "?").length, 1);
+    h.runtime.button("select");
+    // The overview fallback must retain the same uncertainty before detail arrives.
+    let rows = h.show();
+    const legend = language === "fr" ? "? : trajet incertain" : "? : journey uncertain";
+    assert(rows.some(row => row.text === legend));
+    assert(rows.some(row => row.text === "10 min" && row.font === "bold 18px Gothic"));
+    data(h, 1, [record]);
+    rows = h.show();
+    assert.equal(rows.filter(row => row.text === "?").length, profile ? 3 : 4);
+    assert(rows.some(row => row.text === "20 min"));
+    assert(rows.some(row => row.text === "-"));
+    assert(!rows.some(row => row.text === (language === "fr" ? "Puis" : "Then")));
+    assert(rows.some(row => row.text === copy(profile, language, 14, 7) && row.font === "14px Gothic"));
+    assert(rows.some(row => row.text === copy(profile, language, 15, 7) && row.font === "14px Gothic"));
+    assert(!rows.some(row => row.text === copy(profile, language, 48, 7)));
+    assert.equal(rows.some(row => row.text === "40 min"), !profile);
+    h.runtime.button("back");
+    h.runtime.request(0);
+    data(h, 0, [journeyDepartures([6])]);
+    rows = h.show();
+    assert(rows.some(row => row.text === "-"));
+    assert(!rows.some(row => row.text === "?"));
+  });
+
+  test(`profile ${profile} ${language}: mixed groups label uncertainty once without sorting times`, async (t) => {
+    const h = await renderHarness(t, profile);
+    configure(h, appearances(1, "fav", { profile, language }), { language });
+    data(h, 0, [journeyDepartures([0])]);
+    h.runtime.button("select");
+    data(h, 1, [journeyDepartures([0, 4, 4, 4], [10, 30, 20, 40])]);
+    const fills = [];
+    t.mock.method(h.view.application.first, "fillColor", (...args) => fills.push(args));
+    const rows = h.show();
+    assert(rows.some(row => row.text === "10 min" && row.font === "bold 18px Gothic"));
+    assert.equal(rows.filter(row => row.text === (language === "fr" ? "Trajet incertain" : "Uncertain trip")).length, 1);
+    assert.equal(rows.filter(row => row.text === "?").length, profile ? 2 : 3);
+    assert.deepEqual(rows.filter(row => /^\d+ min$/u.test(row.text)).map(row => row.text),
+      profile ? ["10 min", "30 min", "20 min"] : ["10 min", "30 min", "20 min", "40 min"]);
+    assert(!rows.some(row => row.text === (language === "fr" ? "Puis" : "Then")));
+    assert(fills.some(([, x, y, width, height]) => x === (profile ? 48 : 8)
+      && y === (profile ? 162 : 137) && width === (profile ? 164 : 184) && height === 1),
+    "the uncertain group starts with a separator even on the first following row");
+  });
+}
+
+test("Gabbro ignores an uncertain fourth departure outside the visible detail", async (t) => {
+  const h = await renderHarness(t, 1);
+  configure(h, appearances(1, "fav", { profile: 1 }));
+  data(h, 0, [journeyDepartures([0])]);
+  h.runtime.button("select");
+  data(h, 1, [journeyDepartures([0, 0, 0, 4])]);
+  const rows = h.show();
+  assert(rows.some(row => row.text === "10" && row.font === "bold 36px Gothic"));
+  assert(rows.some(row => row.text === "Puis"));
+  assert.deepEqual(rows.filter(row => /^\d+ min$/u.test(row.text)).map(row => row.text), ["20 min", "30 min"]);
+  assert(!rows.some(row => row.text.includes("?") || row.text.includes("incertain")));
 });

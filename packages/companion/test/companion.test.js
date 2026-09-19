@@ -16,17 +16,24 @@ var EPOCH = "000000000000001";
 function phoneFavorite(number, line) {
   return Object.assign({}, fixture.favorite, {
     id: "favorite-" + number, serviceId: "svc_" + String(number).repeat(43), sortOrder: number - 1,
-    routing: { monitoringRef: "IDFM:SP:" + number, lineRef: "IDFM:C" + (line || number), destinationRef: "IDFM:DST" + number }
+    arrivalPlaceId: "plc_" + String(number).repeat(43),
+    routing: { monitoringRef: "IDFM:SP:" + number, lineRef: "IDFM:C" + (line || number), destinationRef: "STIF:StopPoint:Q:DST" + number + ":" }
   });
 }
 var FIRST = phoneFavorite(1);
 var SECOND = phoneFavorite(2);
 var THIRD = phoneFavorite(3);
 
+function withoutRouting(favorite) {
+  var copy = contracts.copyPhoneFavorite(favorite);
+  delete copy.routing;
+  return copy;
+}
+
 function configuredStorage(favorites, status) {
   var storage = new fakes.FakeStorage();
   assert.equal(configuration.saveConfiguration(storage, {
-    schemaVersion: 1, favorites: favorites || [FIRST], primApiKey: TEST_KEY,
+    schemaVersion: 2, favorites: favorites || [FIRST], primApiKey: TEST_KEY,
     keyStatus: typeof status === "number" ? status : contracts.KEY_STATUS.CONFIGURED
   }), true);
   storage.writes.length = 0;
@@ -46,6 +53,13 @@ function harness(options) {
     clock: target.clock, defer: target.defer,
     configurationUrl: typeof options.configurationUrl === "string" ? options.configurationUrl : "https://config.example.test/index.html"
   });
+  // Transport tests isolate journey availability from PRIM normalization.
+  // Dedicated journey tests below keep the real catalogue client.
+  if (!options.realCatalog) target.companion._catalog.lookupJourney = function (serviceId, routing, complete) {
+    var favorite = target.companion._configuration.favorites.find(function (item) { return item.serviceId === serviceId; });
+    complete({ service: { terminalPlaceId: favorite.arrivalPlaceId }, group: null });
+    return { abort: function () {} };
+  };
   return target;
 }
 
@@ -66,7 +80,7 @@ function acknowledgeConfiguration(target, mask) {
   assert.ok(begin, "HELLO must precede configuration inventory");
   target.binding = begin;
   emit(target, {
-    SCHEMA_VERSION: 2, MESSAGE_TYPE: T.CONFIG_NEED, REQUEST_ID: begin.REQUEST_ID,
+    SCHEMA_VERSION: 3, MESSAGE_TYPE: T.CONFIG_NEED, REQUEST_ID: begin.REQUEST_ID,
     DISPLAY_GENERATION: begin.DISPLAY_GENERATION, DISPLAY_PROFILE: target.profile, CLOCK_12H: 0,
     CONFIG_NEED_MASK: typeof mask === "number" ? mask : (1 << begin.ITEM_COUNT) - 1
   });
@@ -75,14 +89,14 @@ function acknowledgeConfiguration(target, mask) {
 function ready(target, mask) {
   target.Pebble.emit("ready");
   drain(target);
-  emit(target, { SCHEMA_VERSION: 2, MESSAGE_TYPE: T.DISPLAY_HELLO,
+  emit(target, { SCHEMA_VERSION: 3, MESSAGE_TYPE: T.DISPLAY_HELLO,
     REQUEST_ID: "w" + EPOCH, WATCH_SESSION_ID: "w" + EPOCH, DISPLAY_EPOCH: EPOCH,
     DISPLAY_PROFILE: target.profile, CLOCK_12H: 0 });
   acknowledgeConfiguration(target, mask);
 }
 function sendRequest(target, label, type, favorite, trigger) {
   var id = EPOCH + "r" + (++target.sequence).toString(16).padStart(8, "0");
-  var message = { SCHEMA_VERSION: 2, MESSAGE_TYPE: type, REQUEST_ID: id,
+  var message = { SCHEMA_VERSION: 3, MESSAGE_TYPE: type, REQUEST_ID: id,
     DISPLAY_GENERATION: target.binding.DISPLAY_GENERATION };
   target.ids[label] = id;
   if (favorite) message.FAVORITE_ID = favorite.id;
@@ -132,7 +146,8 @@ function row(record) {
   var value = function (offset, width) { return parseInt(record.slice(offset, offset + width), 16); };
   var departures = [];
   for (var index = 0; index < value(22, 1); index += 1) {
-    departures.push({ expectedAt: value(23 + index * 9, 8), status: value(31 + index * 9, 1) });
+    var status = value(31 + index * 9, 1);
+    departures.push({ expectedAt: value(23 + index * 9, 8), status: status & 3, journeyUncertain: !!(status & 4) });
   }
   return { hasData: !!(value(0, 2) & 1), stale: !!(value(0, 2) & 2), fetchedAt: value(2, 8),
     caption: value(10, 1), error: value(11, 2), traffic: value(13, 1), checkedAt: value(14, 8), departures: departures };
@@ -151,7 +166,7 @@ function seedOverview(storage, favorites, clock, offsets) {
     return { favoriteId: favorite.id, departures: { status: "AVAILABLE", data: snapshot(favorite, clock, offsets && offsets[index]) },
       traffic: { state: "NORMAL", checkedAt: Math.floor(clock.now() / 1000) } };
   }) };
-  var cache = configuration.mergeOverview(configuration.emptyCache(), favorites, result, Math.floor(clock.now()));
+  var cache = configuration.mergeOverview(configuration.emptyCache(), favorites, result, Math.floor(clock.now()), favorites);
   assert.notEqual(cache, null);
   assert.equal(configuration.saveCache(storage, cache, TEST_KEY), true);
   storage.writes.length = 0;
@@ -194,7 +209,7 @@ function resolveProduction(target, favorites) {
   });
 }
 function closeWith(target, action, favorites, value, forceFull) {
-  var update = { schemaVersion: 1, favorites: favorites, apiKeyUpdate: { schemaVersion: 1, action: action } };
+  var update = { schemaVersion: 2, favorites: favorites, apiKeyUpdate: { schemaVersion: 1, action: action } };
   if (action === "REPLACE") update.apiKeyUpdate.value = value;
   if (forceFull) update.forceFullSync = true;
   target.Pebble.emit("webviewclosed", { response: "pebblejs://close#" + encodeURIComponent(JSON.stringify(update)) });
@@ -203,7 +218,7 @@ function closeWith(target, action, favorites, value, forceFull) {
 test("Core Android decoded close responses preserve favorites with line colors", function () {
   var target = harness({ storage: configuredStorage([]) });
   var update = {
-    schemaVersion: 1,
+    schemaVersion: 2,
     favorites: [Object.assign({}, FIRST, { sortOrder: 0 })],
     apiKeyUpdate: { schemaVersion: 1, action: "KEEP" }
   };
@@ -233,13 +248,13 @@ test("ready coalesces and an early APP_OPEN waits for the sent COMMIT's transpor
   target.Pebble.emit("ready"); target.Pebble.emit("ready"); drain(target);
   assert.equal(messages(target, T.DISPLAY_READY).length, 1);
   assert.equal(messages(target, T.CONFIG_BEGIN).length, 0);
-  emit(target, { SCHEMA_VERSION: 2, MESSAGE_TYPE: T.DISPLAY_HELLO, REQUEST_ID: "w" + EPOCH,
+  emit(target, { SCHEMA_VERSION: 3, MESSAGE_TYPE: T.DISPLAY_HELLO, REQUEST_ID: "w" + EPOCH,
     WATCH_SESSION_ID: "w" + EPOCH, DISPLAY_EPOCH: EPOCH, DISPLAY_PROFILE: 0, CLOCK_12H: 0 });
   drain(target);
   var begin = messages(target, T.CONFIG_BEGIN)[0];
   target.binding = begin;
   assert.equal(messages(target, T.FAVORITE).length, 0);
-  emit(target, { SCHEMA_VERSION: 2, MESSAGE_TYPE: T.CONFIG_NEED, REQUEST_ID: begin.REQUEST_ID,
+  emit(target, { SCHEMA_VERSION: 3, MESSAGE_TYPE: T.CONFIG_NEED, REQUEST_ID: begin.REQUEST_ID,
     DISPLAY_GENERATION: begin.DISPLAY_GENERATION, CONFIG_NEED_MASK: 1, DISPLAY_PROFILE: 0, CLOCK_12H: 0 });
   target.Pebble.ack(); target.defer.runNext();
   assert.equal(target.Pebble.sent.at(-1).MESSAGE_TYPE, T.CONFIG_COMMIT);
@@ -423,7 +438,7 @@ test("the failure table deterministically projects unconfigured, stale, or unava
     if (failure.keyStatus === contracts.KEY_STATUS.MISSING) {
       storage = new fakes.FakeStorage();
       assert.equal(configuration.saveConfiguration(storage, {
-        schemaVersion: 1, favorites: [FIRST], primApiKey: null, keyStatus: contracts.KEY_STATUS.MISSING
+        schemaVersion: 2, favorites: [FIRST], primApiKey: null, keyStatus: contracts.KEY_STATUS.MISSING
       }), true);
     } else storage = configuredStorage([FIRST], failure.keyStatus);
     if (!failure.noCache) seedOverview(storage, [FIRST], clock);
@@ -613,7 +628,7 @@ test("explicit FULL is one-shot, sends complete inventory, and is not persisted"
 });
 
 test("unresolved routing uses a pinned public revision once per service without metadata resynchronization", function () {
-  var unresolved = contracts.copyFavorite(FIRST), duplicate = Object.assign({}, unresolved, { id: "unresolved-copy", sortOrder: 1 });
+  var unresolved = withoutRouting(FIRST), duplicate = Object.assign({}, unresolved, { id: "unresolved-copy", sortOrder: 1 });
   var storage = configuredStorage([unresolved, duplicate]), target = harness({ storage: storage });
   ready(target); var before = messages(target, T.CONFIG_BEGIN).length;
   sendOverview(target, "hydrate");
@@ -638,7 +653,7 @@ test("obsolete routing preserves valid favorite/key data, rehydrates exactly, an
   storage.setItem(configuration.RESULTS_STORAGE_KEY, JSON.stringify(cache));
   assert.equal(configuration.isConfigurationUpdate({ schemaVersion: 1, favorites: record.favorites, apiKeyUpdate: { schemaVersion: 1, action: "KEEP" } }), false);
   var target = harness({ storage: storage, clock: clock }); ready(target);
-  assert.deepEqual(configuration.loadConfiguration(storage).favorites, [contracts.copyFavorite(FIRST)]);
+  assert.deepEqual(configuration.loadConfiguration(storage).favorites, [withoutRouting(FIRST)]);
   assert.equal(configuration.loadConfiguration(storage).primApiKey, TEST_KEY);
   sendDetail(target, "obsolete-cache", FIRST, contracts.REQUEST_TRIGGER.CACHE_ONLY);
   assert.equal(requests(target, "static").length, 0); assert.equal(rows(target, "obsolete-cache")[0].error, 6);
@@ -660,44 +675,43 @@ test("routing recovery keeps invalid-key journal authority and rejects unrelated
   storage.setItem(configuration.CONFIG_STORAGE_KEY, JSON.stringify(record));
   var recovered = configuration.loadConfiguration(storage);
   assert.equal(recovered.keyStatus, contracts.KEY_STATUS.INVALID); assert.equal(recovered.primApiKey, TEST_KEY);
-  assert.deepEqual(recovered.favorites, [contracts.copyFavorite(FIRST)]);
+  assert.deepEqual(recovered.favorites, [withoutRouting(FIRST)]);
   record.favorites[0].unexpected = true; storage.setItem(configuration.CONFIG_STORAGE_KEY, JSON.stringify(record));
   assert.equal(configuration.loadConfiguration(storage), null);
 });
 
-test("failed routing persistence retains durable bytes and usable hydrated session state", function () {
-  var storage = configuredStorage([contracts.copyFavorite(FIRST)]), bytes = storage.getItem(configuration.CONFIG_STORAGE_KEY), write = storage.setItem;
+test("failed routing persistence retains durable bytes and refuses unpersisted departure bindings", function () {
+  var unresolved = withoutRouting(FIRST);
+  var storage = configuredStorage([unresolved]), bytes = storage.getItem(configuration.CONFIG_STORAGE_KEY), write = storage.setItem;
   var target = harness({ storage: storage }); ready(target);
   storage.setItem = function (key, value) { if (key === configuration.CONFIG_STORAGE_KEY) throw new Error("storage full"); write.call(this, key, value); };
-  sendOverview(target, "hydrated-memory"); resolveRouting(target, FIRST); resolveProduction(target, [FIRST]);
+  sendOverview(target, "hydrated-memory"); resolveRouting(target, FIRST);
   assert.equal(storage.getItem(configuration.CONFIG_STORAGE_KEY), bytes);
-  target.clock.advance(60000); sendOverview(target, "memory-routing", contracts.REQUEST_TRIGGER.MANUAL_SELECT);
-  assert.equal(requests(target, "static").length, 2);
-  assert.equal(requests(target, "departures").length, 2);
-  resolveProduction(target, [FIRST]); assert.equal(rows(target, "memory-routing")[0].error, 0);
+  assert.equal(requests(target, "departures").length, 0);
+  assert.equal(rows(target, "hydrated-memory")[0].error, 4);
+  assert.deepEqual(target.companion._configuration.favorites, [unresolved]);
   target.companion.stop();
 });
 
-test("oversized hydrated routing serves one flight without making settings or credentials unrecoverable", function () {
-  var unresolved = contracts.copyFavorite(FIRST), oversized = Object.assign({}, FIRST, {
+test("oversized hydrated routing cannot create an unpersisted departure binding", function () {
+  var unresolved = withoutRouting(FIRST), oversized = Object.assign({}, FIRST, {
     routing: Object.assign({}, FIRST.routing, { destinationRef: "IDFM:DST" + "x".repeat(33000) })
   });
   var storage = configuredStorage([unresolved]), original = storage.getItem(configuration.CONFIG_STORAGE_KEY), target = harness({ storage: storage });
   ready(target); sendOverview(target, "oversized-routing"); resolveRouting(target, oversized);
   assert.equal(storage.getItem(configuration.CONFIG_STORAGE_KEY), original);
+  assert.equal(requests(target, "departures").length, 0);
+  assert.equal(rows(target, "oversized-routing")[0].error, 4);
   target.Pebble.emit("showConfiguration");
   var opening = target.Pebble.openedUrls[0].split("#")[1];
   assert.ok(opening.length <= configuration.MAX_CLOSE_RESPONSE_LENGTH);
   assert.deepEqual(JSON.parse(decodeURIComponent(opening)).favorites, [unresolved]);
   assert.equal(configuration.loadConfiguration(storage).primApiKey, TEST_KEY);
-  resolveProduction(target, [oversized]); assert.equal(rows(target, "oversized-routing")[0].error, 0);
-  target.clock.advance(60000); sendOverview(target, "routing-is-flight-only", contracts.REQUEST_TRIGGER.MANUAL_SELECT);
-  assert.equal(requests(target, "static").length, 3); assert.equal(storage.getItem(configuration.CONFIG_STORAGE_KEY), original);
   target.companion.stop();
 });
 
 test("unresolved service IDs remain editable and canceled catalog lookups cannot launch PRIM", function () {
-  var unresolved = contracts.copyFavorite(FIRST), target = harness({ storage: configuredStorage([unresolved]) });
+  var unresolved = withoutRouting(FIRST), target = harness({ storage: configuredStorage([unresolved]) });
   ready(target); sendOverview(target, "unresolved"); respond(target, requests(target, "static")[0], 404, "");
   assert.equal(requests(target, "departures").length, 0); assert.equal(rows(target, "unresolved")[0].error, 4);
   assert.deepEqual(configuration.loadConfiguration(target.storage).favorites, [unresolved]);
@@ -710,11 +724,11 @@ test("unresolved service IDs remain editable and canceled catalog lookups cannot
 });
 
 test("a stalled catalog lookup terminates as INVALID_SERVICE without PRIM or polling", function () {
-  var target = harness({ storage: configuredStorage([contracts.copyFavorite(FIRST)]) });
+  var target = harness({ storage: configuredStorage([withoutRouting(FIRST)]) });
   ready(target); sendOverview(target, "catalog-deadline"); target.clock.advance(contracts.LIMITS.httpTimeoutMs);
   assert.equal(requests(target, "static")[0].aborted, true); assert.equal(rows(target, "catalog-deadline")[0].error, 4);
   target.clock.advance(60000); assert.equal(target.xhr.instances.length, 1);
-  assert.deepEqual(configuration.loadConfiguration(target.storage).favorites, [contracts.copyFavorite(FIRST)]);
+  assert.deepEqual(configuration.loadConfiguration(target.storage).favorites, [withoutRouting(FIRST)]);
   target.companion.stop();
 });
 
@@ -728,7 +742,7 @@ test("stopping a six-favorite refresh cancels all pending PRIM work", function (
 });
 
 test("catalog revision mismatch cannot hydrate favorites or send credentials to the static host", function () {
-  var target = harness({ storage: configuredStorage([contracts.copyFavorite(FIRST)]) });
+  var target = harness({ storage: configuredStorage([withoutRouting(FIRST)]) });
   ready(target); sendOverview(target, "revision-mismatch");
   respond(target, requests(target, "static")[0], 200, { schemaVersion: 1, revision: REVISION });
   respond(target, requests(target, "static")[1], 200, { schemaVersion: 1, revision: "b".repeat(64), service: serviceRow(FIRST) });
@@ -906,4 +920,239 @@ test("generated bootstrap starts the real companion and answers SDK readiness wi
   assert.deepEqual(Pebble.sent[1], { "15025": 1 });
   Pebble.ack(); clock.advance(0);
   assert.equal(Pebble.maxInFlight, 1); assert.equal(clock.delays.includes(250), false);
+});
+
+function journeyFavorite(number) {
+  var favorite = phoneFavorite(number || 1);
+  favorite.routing = {
+    monitoringRef: "STIF:StopPoint:Q:origin:",
+    lineRef: "STIF:Line::C01246:",
+    destinationRef: "STIF:StopPoint:Q:terminal:"
+  };
+  return favorite;
+}
+
+function journeyDocuments(favorite, terminalPlaceId) {
+  var groupId = "grp_" + "g".repeat(43), terminalId = "term_" + "t".repeat(43);
+  var origin = "plc_" + "o".repeat(43);
+  var rows = [
+    { kind: "place", placeId: origin, label: "Origin" },
+    { kind: "place", placeId: terminalPlaceId, label: "Arrival" },
+    { kind: "terminal", terminalId: terminalId, terminalPlaceId: terminalPlaceId,
+      refs: [favorite.routing.destinationRef], labels: ["Arrival"] },
+    { kind: "pattern", patternId: "pat_" + "p".repeat(43), terminalId: terminalId, stops: [
+      { stopRef: favorite.routing.monitoringRef, placeId: origin, pickupType: 0, dropOffType: 0 },
+      { stopRef: favorite.routing.destinationRef, placeId: terminalPlaceId, pickupType: 0, dropOffType: 0 }
+    ] }
+  ];
+  return {
+    service: { schemaVersion: 1, revision: REVISION, serviceId: favorite.serviceId, groupId: groupId,
+      lineMode: favorite.lineMode, routing: favorite.routing, terminalPlaceId: terminalPlaceId },
+    index: { schemaVersion: 1, revision: REVISION, groupId: groupId, lineMode: favorite.lineMode,
+      lineRef: favorite.routing.lineRef, pageCount: 1, rowCount: rows.length, patternCount: 1 },
+    page: { schemaVersion: 1, revision: REVISION, groupId: groupId, page: 0, nextPage: null, rows: rows }
+  };
+}
+
+function resolveJourney(target, documents, missingGroup) {
+  respond(target, requests(target, "static").at(-1), 200, {
+    schemaVersion: 1, revision: REVISION, sourceRevision: "source", createdAt: "2026-09-05T00:00:00Z", attribution: []
+  });
+  respond(target, requests(target, "static").at(-1), 200, documents.service);
+  if (missingGroup) respond(target, requests(target, "static").at(-1), 404, "");
+  else {
+    respond(target, requests(target, "static").at(-1), 200, documents.index);
+    respond(target, requests(target, "static").at(-1), 200, documents.page);
+  }
+}
+
+function captureDepartures(target) {
+  var calls = [];
+  target.companion._prim.departures = function (request, complete) {
+    var call = { request: request, complete: complete, aborted: false };
+    calls.push(call);
+    return { abort: function () { call.aborted = true; } };
+  };
+  return calls;
+}
+
+function finishCaptured(target, call, favorite, seconds) {
+  var data = snapshot(favorite, target.clock);
+  data.departures = [{
+    expectedAt: data.fetchedAt + seconds, minutes: seconds / 60, status: "ON_TIME", journeyUncertain: false
+  }];
+  call.complete({ status: "AVAILABLE", data: data });
+}
+
+test("journey flights migrate a single null arrival through real annexes before PRIM and preserve labels", function () {
+  var resolved = journeyFavorite(), favorite = Object.assign({}, resolved, { arrivalPlaceId: null, destinationLabel: "Historic label" });
+  var target = harness({ storage: configuredStorage([favorite]), realCatalog: true });
+  ready(target);
+  var calls = captureDepartures(target);
+  sendOverview(target, "cache-only-null", contracts.REQUEST_TRIGGER.CACHE_ONLY);
+  assert.equal(target.xhr.instances.length, 0);
+  assert.equal(rows(target, "cache-only-null")[0].error, 6);
+  sendOverview(target, "migrated");
+  assert.equal(calls.length, 0);
+  resolveJourney(target, journeyDocuments(resolved, resolved.arrivalPlaceId));
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].request.context.arrivalPlaceId, resolved.arrivalPlaceId);
+  assert.equal(calls[0].request.context.patterns.patterns.length, 1);
+  var saved = configuration.loadConfiguration(target.storage).favorites[0];
+  assert.equal(saved.arrivalPlaceId, resolved.arrivalPlaceId);
+  assert.equal(saved.destinationLabel, "Historic label");
+  finishCaptured(target, calls[0], resolved, 180);
+  respond(target, requests(target, "traffic")[0], 200, trafficBody([resolved]));
+  assert.equal(rows(target, "migrated")[0].departures[0].expectedAt, Math.floor(target.clock.now() / 1000) + 180);
+  sendDetail(target, "migrated-detail", favorite, contracts.REQUEST_TRIGGER.CACHE_ONLY);
+  assert.equal(rows(target, "migrated-detail")[0].hasData, true);
+  assert.equal(configuration.loadCache(target.storage, [saved]).overview[0].arrivalPlaceId, resolved.arrivalPlaceId);
+  target.companion.stop();
+});
+
+test("journey flights retain unresolved arrival when persistence fails and never call departures", function () {
+  var resolved = journeyFavorite(), favorite = Object.assign({}, resolved, { arrivalPlaceId: null });
+  var storage = configuredStorage([favorite]), target = harness({ storage: storage, realCatalog: true });
+  var bytes = storage.getItem(configuration.CONFIG_STORAGE_KEY), write = storage.setItem;
+  ready(target);
+  var calls = captureDepartures(target);
+  storage.setItem = function (key, value) {
+    if (key === configuration.CONFIG_STORAGE_KEY) throw new Error("full");
+    write.call(this, key, value);
+  };
+  sendOverview(target, "failed-migration");
+  resolveJourney(target, journeyDocuments(resolved, resolved.arrivalPlaceId), true);
+  respond(target, requests(target, "traffic")[0], 200, trafficBody([resolved]));
+  assert.equal(calls.length, 0);
+  assert.equal(storage.getItem(configuration.CONFIG_STORAGE_KEY), bytes);
+  assert.equal(rows(target, "failed-migration")[0].error, 4);
+  assert.equal(target.companion._configuration.favorites[0].arrivalPlaceId, null);
+  target.companion.stop();
+});
+
+test("journey flights distinguish unavailable groups from unreachable arrivals for every mode", function () {
+  ["BUS", "METRO", "TRAM", "RER", "TRANSILIEN"].forEach(function (mode) {
+    [false, true].forEach(function (missing) {
+      var favorite = Object.assign({}, journeyFavorite(), { lineMode: mode });
+      var target = harness({ storage: configuredStorage([favorite]), realCatalog: true });
+      ready(target);
+      var calls = captureDepartures(target);
+      sendDetail(target, "group-result", favorite);
+      resolveJourney(target, journeyDocuments(favorite, SECOND.arrivalPlaceId), missing);
+      assert.equal(calls.length, missing ? 1 : 0, mode);
+      if (missing) {
+        assert.equal(calls[0].request.context.patterns, null);
+        assert.equal(calls[0].request.context.arrivalPlaceId, favorite.arrivalPlaceId);
+        finishCaptured(target, calls[0], favorite, 120);
+      }
+      respond(target, requests(target, "traffic")[0], 200, trafficBody([favorite]));
+      assert.equal(rows(target, "group-result")[0].error, missing ? 0 : 4);
+      target.companion.stop();
+    });
+  });
+});
+
+test("journey flights keep distinct arrivals independent while exact duplicate journeys share work", function () {
+  var second = Object.assign({}, FIRST, { id: "arrival-two", arrivalPlaceId: SECOND.arrivalPlaceId, sortOrder: 1 });
+  var duplicate = Object.assign({}, FIRST, { id: "duplicate", sortOrder: 2 });
+  var favorites = [FIRST, second, duplicate], target = harness({ storage: configuredStorage(favorites) });
+  ready(target);
+  var calls = captureDepartures(target);
+  sendOverview(target, "distinct");
+  assert.equal(calls.length, 2);
+  finishCaptured(target, calls[0], FIRST, 120);
+  finishCaptured(target, calls[1], second, 300);
+  respond(target, requests(target, "traffic")[0], 200, trafficBody(favorites));
+  var values = rows(target, "distinct").map(function (item) { return item.departures[0].expectedAt; });
+  assert.deepEqual(values, [Math.floor(target.clock.now() / 1000) + 120, Math.floor(target.clock.now() / 1000) + 300, Math.floor(target.clock.now() / 1000) + 120]);
+  sendDetail(target, "second-detail", second, contracts.REQUEST_TRIGGER.CACHE_ONLY);
+  assert.equal(rows(target, "second-detail")[0].departures[0].expectedAt, values[1]);
+  assert.equal(requests(target, "traffic").length, 1);
+  target.companion.stop();
+});
+
+test("journey flights reject fresh detail cache and late results after an arrival-only edit", function () {
+  var storage = configuredStorage(), clock = new fakes.FakeClock();
+  seedOverview(storage, [FIRST], clock);
+  var target = harness({ storage: storage, clock: clock });
+  ready(target);
+  var calls = captureDepartures(target);
+  clock.advance(60000); sendDetail(target, "old-arrival", FIRST);
+  var changed = Object.assign({}, FIRST, { arrivalPlaceId: SECOND.arrivalPlaceId });
+  closeWith(target, "KEEP", [changed]); acknowledgeConfiguration(target, 0);
+  assert.equal(calls[0].aborted, true);
+  finishCaptured(target, calls[0], FIRST, 120);
+  sendDetail(target, "new-cache-only", changed, contracts.REQUEST_TRIGGER.CACHE_ONLY);
+  assert.equal(rows(target, "new-cache-only")[0].hasData, false);
+  assert.equal(rows(target, "new-cache-only")[0].error, 6);
+  assert.equal(configuration.loadCache(storage, [changed]).overview.length, 0);
+  var replacementCalls = captureDepartures(target);
+  sendDetail(target, "new-arrival", changed);
+  assert.equal(replacementCalls.length, 1);
+  assert.equal(replacementCalls[0].request.context.arrivalPlaceId, changed.arrivalPlaceId);
+  target.companion.stop();
+});
+
+test("journey flights ignore late annex callbacks after an arrival-only edit", function () {
+  var unresolved = Object.assign({}, FIRST, { arrivalPlaceId: null });
+  var target = harness({ storage: configuredStorage([unresolved]) }), callback, canceled = false;
+  target.companion._catalog.lookupJourney = function (serviceId, routing, complete) {
+    callback = complete;
+    return { abort: function () { canceled = true; } };
+  };
+  ready(target);
+  var calls = captureDepartures(target);
+  sendOverview(target, "old-annex");
+  var changed = Object.assign({}, FIRST, { arrivalPlaceId: SECOND.arrivalPlaceId });
+  closeWith(target, "KEEP", [changed]); acknowledgeConfiguration(target, 0);
+  callback({ service: { terminalPlaceId: FIRST.arrivalPlaceId }, group: null });
+  assert.equal(canceled, true);
+  assert.equal(calls.length, 0);
+  assert.equal(configuration.loadConfiguration(target.storage).favorites[0].arrivalPlaceId, SECOND.arrivalPlaceId);
+  assert.equal(transfers(target, "old-annex").length, 0);
+  target.companion.stop();
+});
+
+test("journey flights cover joined demand by arrival and reuse only line traffic", function () {
+  var second = Object.assign({}, FIRST, { id: "second-arrival", arrivalPlaceId: SECOND.arrivalPlaceId, sortOrder: 1 });
+  var favorites = [FIRST, second], target = harness({ storage: configuredStorage(favorites) });
+  ready(target);
+  var calls = captureDepartures(target);
+  sendDetail(target, "first-journey", FIRST); sendOverview(target, "joined-journeys");
+  assert.equal(calls.length, 1);
+  finishCaptured(target, calls[0], FIRST, 120);
+  respond(target, requests(target, "traffic")[0], 200, trafficBody(favorites));
+  assert.equal(rows(target, "first-journey")[0].error, 0);
+  assert.equal(calls.length, 2);
+  assert.equal(calls[1].request.context.arrivalPlaceId, second.arrivalPlaceId);
+  assert.equal(transfers(target, "joined-journeys").length, 0);
+  calls[1].complete({ status: "UNAVAILABLE", error: {
+    code: "SOURCE_UNAVAILABLE", occurredAt: Math.floor(target.clock.now() / 1000)
+  } });
+  assert.deepEqual(rows(target, "joined-journeys").map(function (item) { return item.error; }), [0, 7]);
+  assert.equal(requests(target, "traffic").length, 1);
+  target.companion.stop();
+});
+
+test("journey flights skip static loading for fresh cache and reject mismatched detail cache", function () {
+  var storage = configuredStorage(), clock = new fakes.FakeClock();
+  var cache = seedOverview(storage, [FIRST], clock);
+  var target = harness({ storage: storage, clock: clock, realCatalog: true });
+  ready(target); sendOverview(target, "fresh"); sendDetail(target, "fresh-detail", FIRST);
+  assert.equal(target.xhr.instances.length, 0);
+  assert.equal(rows(target, "fresh-detail")[0].hasData, true);
+  // A retained result must not become usable merely because the favorite ID
+  // and display labels survived an arrival edit.
+  var changed = Object.assign({}, FIRST, { arrivalPlaceId: SECOND.arrivalPlaceId });
+  closeWith(target, "KEEP", [changed]); acknowledgeConfiguration(target, 0);
+  target.companion._cache = cache;
+  sendDetail(target, "wrong-arrival-cache", changed, contracts.REQUEST_TRIGGER.CACHE_ONLY);
+  assert.equal(rows(target, "wrong-arrival-cache")[0].hasData, false);
+  assert.equal(rows(target, "wrong-arrival-cache")[0].error, 6);
+  sendOverview(target, "wrong-arrival-overview", contracts.REQUEST_TRIGGER.CACHE_ONLY);
+  assert.equal(rows(target, "wrong-arrival-overview")[0].hasData, false);
+  assert.equal(target.xhr.instances.length, 0);
+  sendDetail(target, "changed-arrival-refresh", changed);
+  assert.equal(requests(target, "static").length, 1);
+  target.companion.stop();
 });

@@ -73,7 +73,7 @@ for (const profile of [0, 1]) {
     // A full native outbox leaves exactly four queued responses. The fifth is
     // an explicit failure, not a fifth retained dictionary or retry timer.
     for (let index = 0; index < 5; index++) {
-      host.message.deliver(new Map([[0, 2], [1, 21], [2, "pqueue" + index]]));
+      host.message.deliver(new Map([[0, 3], [1, 21], [2, "pqueue" + index]]));
     }
     assert.equal(state.handshakeFailed, true);
     for (let index = 0; index < 5; index++) host.message.writable();
