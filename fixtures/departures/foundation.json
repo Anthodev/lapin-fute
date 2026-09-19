@@ -25,12 +25,14 @@
         "aimedAt": 1788000100,
         "minutes": 2,
         "status": "DELAYED",
+        "journeyUncertain": false,
         "nextIntervalMinutes": 4
       },
       {
         "expectedAt": 1788000360,
         "minutes": 6,
-        "status": "ON_TIME"
+        "status": "ON_TIME",
+        "journeyUncertain": false
       }
     ]
   }

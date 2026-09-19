@@ -46,6 +46,33 @@ function createConfigurationSync(options) {
     return active !== null && active.phase === "COMMITTING" && matches(active, request);
   }
 
+  function enrichPhoneFavorites(favorites, lifecycleGeneration) {
+    if (!contracts.isPhoneFavoriteList(favorites)) return;
+    [active, committed, previous].forEach(function (target) {
+      if (!target || target.lifecycleGeneration !== lifecycleGeneration) return;
+      target.favorites.forEach(function (favorite) {
+        var index;
+        var source;
+        for (index = 0; index < favorites.length; index += 1) {
+          source = favorites[index];
+          if (source.id !== favorite.id || source.serviceId !== favorite.serviceId) continue;
+          if (favorite.arrivalPlaceId === null && source.arrivalPlaceId !== null) {
+            favorite.arrivalPlaceId = source.arrivalPlaceId;
+          }
+          if (!Object.prototype.hasOwnProperty.call(favorite, "routing")
+              && Object.prototype.hasOwnProperty.call(source, "routing")) {
+            favorite.routing = {
+              monitoringRef: source.routing.monitoringRef,
+              lineRef: source.routing.lineRef,
+              destinationRef: source.routing.destinationRef
+            };
+          }
+          break;
+        }
+      });
+    });
+  }
+
   function hello(message) {
     var decoded = codec.decodeHello(message);
     if (decoded === null) return { consumed: false, changed: false };
@@ -198,6 +225,7 @@ function createConfigurationSync(options) {
   return {
     binding: binding, ready: ready, hello: hello, synchronize: synchronize, receive: receive,
     resolveDataBinding: resolveDataBinding, pendingDataBinding: pendingDataBinding,
+    enrichPhoneFavorites: enrichPhoneFavorites,
     discardTransaction: discardTransaction, clear: clear
   };
 }

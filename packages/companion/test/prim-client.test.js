@@ -12,7 +12,18 @@ var KEY_A = "test-personal-key-a";
 var KEY_B = "test-personal-key-b";
 var DEPARTURE_MS = Date.parse("2026-01-15T08:30:00Z");
 var TRAFFIC_MS = Date.parse("2026-01-15T09:00:00Z");
-var ROUTING = { monitoringRef: "IDFM:SP:1001", lineRef: "IDFM:C1001", destinationRef: "IDFM:1001DST" };
+var ROUTING = { monitoringRef: "IDFM:SP:1001", lineRef: "IDFM:C1001", destinationRef: "STIF:StopPoint:Q:1001DST:" };
+var ARRIVAL = "plc_" + "c".repeat(43);
+var ORIGIN = "plc_" + "a".repeat(43);
+var CONTEXT = { arrivalPlaceId: ARRIVAL, patterns: {
+  revision: "a".repeat(64), groupId: "grp_" + "g".repeat(43), lineMode: "BUS", lineRef: ROUTING.lineRef,
+  places: [{ kind: "place", placeId: ORIGIN, label: "Origin" }, { kind: "place", placeId: ARRIVAL, label: "Arrival" }],
+  terminals: [{ kind: "terminal", terminalId: "full", terminalPlaceId: ARRIVAL, refs: [ROUTING.destinationRef], labels: ["Arrival"] }],
+  patterns: [{ kind: "pattern", patternId: "full", terminalId: "full", stops: [
+    { stopRef: ROUTING.monitoringRef, placeId: ORIGIN, pickupType: 0, dropOffType: 0 },
+    { stopRef: null, placeId: ARRIVAL, pickupType: 0, dropOffType: 0 }
+  ] }]
+} };
 
 function clone(value) {
   return JSON.parse(JSON.stringify(value));
@@ -96,7 +107,7 @@ function portableFactory() {
 test("departures issue only the fixed PRIM GET and deliver a binding-free snapshot asynchronously", function () {
   var h = harness();
   var result = collect();
-  h.client.departures({ routing: ROUTING, apiKey: KEY_A }, result.complete);
+  h.client.departures({ routing: ROUTING, apiKey: KEY_A, context: CONTEXT }, result.complete);
   var xhr = h.transport.instances[0];
   assert.equal(xhr.method, "GET");
   assert.equal(xhr.url, "https://prim.iledefrance-mobilites.fr/marketplace/stop-monitoring?MonitoringRef=IDFM%3ASP%3A1001&LineRef=IDFM%3AC1001");
@@ -125,6 +136,14 @@ test("client executes byte decoding and both parsers without modern runtime coll
     schemaVersion: 1, state: "DELAYED", checkedAt: TRAFFIC_MS / 1000,
     title: "Métro 2 : ralentissements", text: "Le trafic est ralenti & les temps d’attente sont allongés."
   } }]);
+  result = collect();
+  h.client.departures({ routing: ROUTING, apiKey: KEY_A, context: CONTEXT }, result.complete);
+  h.transport.instances[1].respond(200, departureFixture());
+  h.clock.advance(0);
+  assert.deepEqual(clone(result.values[0].data.departures.map(function (entry) {
+    return [entry.expectedAt, entry.journeyUncertain, entry.nextIntervalMinutes];
+  })), [[Date.parse("2026-01-15T08:32:00Z") / 1000, false, 6],
+    [Date.parse("2026-01-15T08:38:00Z") / 1000, false, null]]);
 });
 
 test("synchronous XHR completion or construction failure still settles later and only once", function () {
@@ -138,7 +157,7 @@ test("synchronous XHR completion or construction failure still settles later and
   };
   var h = harness(DEPARTURE_MS, factory);
   var result = collect();
-  var handle = h.client.departures({ routing: ROUTING, apiKey: KEY_A }, result.complete);
+  var handle = h.client.departures({ routing: ROUTING, apiKey: KEY_A, context: CONTEXT }, result.complete);
   assert.equal(result.values.length, 0);
   h.clock.advance(0);
   assert.equal(result.values.length, 1);
@@ -149,7 +168,7 @@ test("synchronous XHR completion or construction failure still settles later and
 
   h = harness(DEPARTURE_MS, { XHR: function () { throw new Error(KEY_A); } });
   result = collect();
-  h.client.departures({ routing: ROUTING, apiKey: KEY_A }, result.complete);
+  h.client.departures({ routing: ROUTING, apiKey: KEY_A, context: CONTEXT }, result.complete);
   assert.equal(result.values.length, 0);
   h.clock.advance(0);
   assertError(result.values[0], "SOURCE_UNAVAILABLE", DEPARTURE_MS);
@@ -158,7 +177,7 @@ test("synchronous XHR completion or construction failure still settles later and
 test("abort is final before completion and between completion and deferred delivery", function () {
   var h = harness();
   var result = collect();
-  var handle = h.client.departures({ routing: ROUTING, apiKey: KEY_A }, result.complete);
+  var handle = h.client.departures({ routing: ROUTING, apiKey: KEY_A, context: CONTEXT }, result.complete);
   var xhr = h.transport.instances[0];
   var lateLoad = xhr.onload;
   var lateError = xhr.onerror;
@@ -169,7 +188,7 @@ test("abort is final before completion and between completion and deferred deliv
   h.clock.advance(10000);
   assert.equal(xhr.aborts, 1);
   assert.deepEqual(result.values, []);
-  handle = h.client.departures({ routing: ROUTING, apiKey: KEY_A }, result.complete);
+  handle = h.client.departures({ routing: ROUTING, apiKey: KEY_A, context: CONTEXT }, result.complete);
   xhr = h.transport.instances[1];
   xhr.respond(200, departureFixture());
   handle.abort();
@@ -180,7 +199,7 @@ test("abort is final before completion and between completion and deferred deliv
 test("watchdog timeout and pypkjs event-only network failure produce one safe error", function () {
   var h = harness();
   var result = collect();
-  h.client.departures({ routing: ROUTING, apiKey: KEY_A }, result.complete);
+  h.client.departures({ routing: ROUTING, apiKey: KEY_A, context: CONTEXT }, result.complete);
   var xhr = h.transport.instances[0];
   var lateLoad = xhr.onload;
   h.clock.advance(contracts.LIMITS.httpTimeoutMs);
@@ -189,7 +208,7 @@ test("watchdog timeout and pypkjs event-only network failure produce one safe er
   assert.deepEqual(result.values.length, 1);
   assertError(result.values[0], "SOURCE_UNAVAILABLE", DEPARTURE_MS + contracts.LIMITS.httpTimeoutMs);
   result = collect();
-  h.client.departures({ routing: ROUTING, apiKey: KEY_A }, result.complete);
+  h.client.departures({ routing: ROUTING, apiKey: KEY_A, context: CONTEXT }, result.complete);
   h.transport.instances[1].networkError();
   h.clock.advance(0);
   assertError(result.values[0], "SOURCE_UNAVAILABLE", h.clock.now());
@@ -214,15 +233,15 @@ test("HTTP authentication and quota failures retain semantic codes and bounded R
 test("missing routing and malformed keys never start transport and remain abortable", function () {
   var h = harness();
   var result = collect();
-  h.client.departures({ routing: null, apiKey: KEY_A }, result.complete);
+  h.client.departures({ routing: null, apiKey: KEY_A, context: CONTEXT }, result.complete);
   h.clock.advance(0);
   assertError(result.values[0], "INVALID_SERVICE", DEPARTURE_MS);
   result = collect();
-  var handle = h.client.departures({ routing: ROUTING, apiKey: "" }, result.complete);
+  var handle = h.client.departures({ routing: ROUTING, apiKey: "", context: CONTEXT }, result.complete);
   handle.abort();
   h.clock.advance(0);
   assert.deepEqual(result.values, []);
-  h.client.departures({ routing: ROUTING, apiKey: "bad\nheader" }, result.complete);
+  h.client.departures({ routing: ROUTING, apiKey: "bad\nheader", context: CONTEXT }, result.complete);
   h.clock.advance(0);
   assertError(result.values[0], "API_KEY_INVALID", DEPARTURE_MS);
   assert.equal(h.transport.instances.length, 0);
@@ -232,18 +251,52 @@ test("routing is copied at dispatch and credentials cannot be embedded in reques
   var h = harness();
   var result = collect();
   var refs = clone(ROUTING);
-  h.client.departures({ routing: refs, apiKey: KEY_A }, result.complete);
-  refs.destinationRef = "another-destination";
+  var context = clone(CONTEXT);
+  h.client.departures({ routing: refs, apiKey: KEY_A, context: context }, result.complete);
+  refs.monitoringRef = "another-stop";
+  context.arrivalPlaceId = ORIGIN;
+  context.patterns = null;
   h.transport.instances[0].respond(200, departureFixture());
   h.clock.advance(0);
   assert.equal(result.values[0].status, "AVAILABLE");
+  assert.deepEqual(result.values[0].data.departures.map(function (entry) {
+    return [entry.minutes, entry.journeyUncertain, entry.nextIntervalMinutes];
+  }), [[2, false, 6], [8, false, undefined]]);
   refs = clone(ROUTING);
   refs.monitoringRef = "IDFM:" + encodeURIComponent(encodeURIComponent(KEY_A));
   result = collect();
-  h.client.departures({ routing: refs, apiKey: KEY_A }, result.complete);
+  h.client.departures({ routing: refs, apiKey: KEY_A, context: CONTEXT }, result.complete);
   h.clock.advance(0);
   assertError(result.values[0], "INVALID_SERVICE", DEPARTURE_MS);
   assert.equal(h.transport.instances.length, 1);
+});
+
+test("missing or malformed departure contexts reject before HTTP; unavailable patterns retain uncertain times", function () {
+  [undefined, null, {}, { arrivalPlaceId: null, patterns: null }, { arrivalPlaceId: ARRIVAL },
+    { arrivalPlaceId: "plc_bad", patterns: null }, { arrivalPlaceId: ARRIVAL, patterns: {} }].forEach(function (context) {
+    var h = harness(), result = collect();
+    h.client.departures({ routing: ROUTING, apiKey: KEY_A, context: context }, result.complete);
+    h.clock.advance(0);
+    assertError(result.values[0], "INVALID_SERVICE", DEPARTURE_MS);
+    assert.equal(h.transport.instances.length, 0);
+  });
+  var h = harness(), result = collect();
+  h.client.departures({ routing: ROUTING, apiKey: KEY_A, context: { arrivalPlaceId: ARRIVAL, patterns: null } }, result.complete);
+  h.transport.instances[0].respond(200, departureFixture());
+  h.clock.advance(0);
+  assert.deepEqual(result.values[0].data.departures.map(function (entry) {
+    return [entry.minutes, entry.journeyUncertain, entry.nextIntervalMinutes];
+  }), [[2, true, undefined], [8, true, undefined]]);
+});
+
+test("malformed SIRI evidence maps to INVALID_RESPONSE instead of an arbitrary journey", function () {
+  var h = harness(), result = collect(), payload = departureFixture();
+  payload.Siri.ServiceDelivery.StopMonitoringDelivery[0].MonitoredStopVisit[0]
+    .MonitoredVehicleJourney.MonitoredCall.DestinationDisplay = { value: 5 };
+  h.client.departures({ routing: ROUTING, apiKey: KEY_A, context: CONTEXT }, result.complete);
+  h.transport.instances[0].respond(200, payload);
+  h.clock.advance(0);
+  assertError(result.values[0], "INVALID_RESPONSE", DEPARTURE_MS);
 });
 
 test("malformed UTF-8, missing byte responses and oversized bodies never enter normalized output", function () {
@@ -255,21 +308,21 @@ test("malformed UTF-8, missing byte responses and oversized bodies never enter n
     var result = collect();
     var prefix = Buffer.from('{"ignored":"');
     var suffix = Buffer.from('",' + JSON.stringify(departureFixture()).slice(1));
-    h.client.departures({ routing: ROUTING, apiKey: KEY_A }, result.complete);
+    h.client.departures({ routing: ROUTING, apiKey: KEY_A, context: CONTEXT }, result.complete);
     h.transport.instances[0].respondBytes(200, Buffer.concat([prefix, Buffer.from(bytes), suffix]));
     h.clock.advance(0);
     assertError(result.values[0], "INVALID_RESPONSE", DEPARTURE_MS);
   });
   var h = harness();
   var result = collect();
-  h.client.departures({ routing: ROUTING, apiKey: KEY_A }, result.complete);
+  h.client.departures({ routing: ROUTING, apiKey: KEY_A, context: CONTEXT }, result.complete);
   var oversizedJson = Buffer.from(JSON.stringify(departureFixture()));
   h.transport.instances[0].respondBytes(200, Buffer.concat([oversizedJson,
     Buffer.alloc(contracts.LIMITS.httpResponseBytes + 1 - oversizedJson.length, 32)]));
   h.clock.advance(0);
   assertError(result.values[0], "INVALID_RESPONSE", DEPARTURE_MS);
   result = collect();
-  h.client.departures({ routing: ROUTING, apiKey: KEY_A }, result.complete);
+  h.client.departures({ routing: ROUTING, apiKey: KEY_A, context: CONTEXT }, result.complete);
   var xhr = h.transport.instances[1];
   xhr.status = 200;
   xhr.responseText = JSON.stringify(departureFixture());
@@ -284,7 +337,7 @@ test("a BOM and a byte-exact maximum response remain valid", function () {
   var json = Buffer.from(JSON.stringify(departureFixture()));
   var bytes = Buffer.concat([Buffer.from([239, 187, 191]), json,
     Buffer.alloc(contracts.LIMITS.httpResponseBytes - json.length - 3, 32)]);
-  h.client.departures({ routing: ROUTING, apiKey: KEY_A }, result.complete);
+  h.client.departures({ routing: ROUTING, apiKey: KEY_A, context: CONTEXT }, result.complete);
   h.transport.instances[0].respondBytes(200, bytes);
   h.clock.advance(0);
   assert.equal(result.values[0].status, "AVAILABLE");
@@ -424,9 +477,9 @@ test("eight shared transport slots bound departures and traffic without starting
   var result = collect();
   var handles = [];
   var index;
-  for (index = 0; index < 8; index += 1) handles.push(h.client.departures({ routing: ROUTING, apiKey: KEY_A }, result.complete));
+  for (index = 0; index < 8; index += 1) handles.push(h.client.departures({ routing: ROUTING, apiKey: KEY_A, context: CONTEXT }, result.complete));
   var cancelled = requestTraffic(h, "IDFM:C100", result);
-  var queued = h.client.departures({ routing: ROUTING, apiKey: KEY_A }, result.complete);
+  var queued = h.client.departures({ routing: ROUTING, apiKey: KEY_A, context: CONTEXT }, result.complete);
   assert.equal(h.transport.instances.length, 8);
   cancelled.abort();
   handles[0].abort();
@@ -446,7 +499,7 @@ test("aborting a lifecycle batch never starts its queued bulk request", function
   var handles = [];
   var index;
   for (index = 0; index < 8; index += 1) {
-    handles.push(h.client.departures({ routing: ROUTING, apiKey: KEY_A }, result.complete));
+    handles.push(h.client.departures({ routing: ROUTING, apiKey: KEY_A, context: CONTEXT }, result.complete));
   }
   handles.push(requestTraffic(h, "IDFM:C100", result));
   assert.equal(h.transport.instances.length, 8);

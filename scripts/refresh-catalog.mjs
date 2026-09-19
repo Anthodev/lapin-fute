@@ -48,7 +48,7 @@ const CSV_SOURCES = [
     dataset: "arrets",
     url: IDFM_CATALOG_SOURCE_URL.arrets,
     restricted: false,
-    requiredFields: ["arrid", "zdaid"],
+    requiredFields: ["arrid", "zdaid", "arrname"],
   },
   {
     key: "zones",

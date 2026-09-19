@@ -3,6 +3,7 @@ import { existsSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { generateDisplayCopy } from "./generate-display-copy.mjs";
+import { generateJourneyPatterns } from "./generate-journey-patterns.mjs";
 
 function run(command, args) {
   const result = spawnSync(command, args, { cwd: root, stdio: "inherit" });
@@ -12,6 +13,7 @@ function run(command, args) {
 
 const root = fileURLToPath(new URL("..", import.meta.url));
 generateDisplayCopy();
+generateJourneyPatterns();
 const suites = [];
 for (const entry of readdirSync(join(root, "packages"), { withFileTypes: true })) {
   if (!entry.isDirectory()) continue;

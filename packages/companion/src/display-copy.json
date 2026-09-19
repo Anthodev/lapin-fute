@@ -233,5 +233,15 @@
     "token": "retry",
     "en": "Select: retry.",
     "fr": "Select : réessayer."
+  },
+  {
+    "token": "journeyUncertainLegend",
+    "en": "? : journey uncertain",
+    "fr": "? : trajet incertain"
+  },
+  {
+    "token": "journeyUncertainShort",
+    "en": "Uncertain trip",
+    "fr": "Trajet incertain"
   }
 ]

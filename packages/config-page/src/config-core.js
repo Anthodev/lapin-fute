@@ -9,11 +9,30 @@
 // The opening fragment carries only the non-secret hasKey flag plus the watch
 // language and the current favorites list.
 //
-// Canonical contract: packages/contracts/src/index.ts (schemaVersion 1). The
-// mirrored constants below are asserted equal to the canonical module by
-// test/config-page.test.ts; never change one side without the other.
+// Canonical contract: packages/contracts/src/index.ts. Domain objects, the
+// favorites nested inside every envelope, and ApiKeyUpdate keep
+// SCHEMA_VERSION 1. Only the stored configuration and the page open/close
+// envelopes use CONFIGURATION_VERSION 2; a close fragment on the old version
+// is always rejected by the phone, so an outdated page can never wipe the
+// stored configuration. The mirrored constants below are asserted equal to
+// the canonical module by test/config-page.test.ts; never change one side
+// without the other.
+
+// Shared journey helper, browser build: the generated wrapper of the
+// canonical CommonJS module (packages/companion/src/journey-patterns.js).
+// Arrival labels are truncated by exactly the rule the phone applies, and
+// journey text bounds stay aligned with the catalog admission limits.
+import { JOURNEY_LIMITS, arrivalLabel } from "./generated/journey-patterns.js";
 
 export const SCHEMA_VERSION = 1;
+
+// Version of the stored configuration and of the opening/closing page
+// envelopes only. Never used for domain objects.
+export const CONFIGURATION_VERSION = 2;
+
+// Journey place identities are catalog-computed plc_ + SHA-256 base64url;
+// the page only validates their form.
+const PLACE_ID = /^plc_[A-Za-z0-9_-]{43}$/;
 
 export const LIMITS = {
   apiKeyUtf8Bytes: 512,
@@ -27,6 +46,24 @@ export const LIMITS = {
 };
 
 const FAVORITE_FIELDS = [
+  "schemaVersion",
+  "id",
+  "serviceId",
+  "displayName",
+  "stopLabel",
+  "lineLabel",
+  "destinationLabel",
+  "arrivalPlaceId",
+  "lineMode",
+  "lineColor",
+  "lineTextColor",
+  "routing",
+  "sortOrder",
+];
+
+// A pre-journey (v1) PhoneFavorite as carried by an old opening fragment:
+// exactly the previous fields plus optional routing, never arrivalPlaceId.
+const LEGACY_FAVORITE_FIELDS = [
   "schemaVersion",
   "id",
   "serviceId",
@@ -98,16 +135,21 @@ export const COPY = {
     favoritesAvailable: "available",
     favoritesEmpty: "No favorites yet. Search for a stop to add one.",
     favoriteAddTitle: "Add a favorite",
-    favoriteAddCaption: "Stop, line and direction",
-    searchLabel: "Stop or station",
+    favoriteAddCaption: "Departure, line and arrival",
+    searchLabel: "Departure stop or station",
     searchPlaceholder: "Search by name",
     searchHint: "Enter at least 2 characters.",
     searchLoading: "Searching…",
     searchNoResults: "No matching stop or station.",
     backendUnavailable: "The service catalog is unavailable. Your edits are safe; try again.",
     invalidService: "This service is no longer available. Search again.",
-    servicesLoading: "Loading lines and directions…",
-    servicesLabel: "Line and direction",
+    servicesLoading: "Loading lines…",
+    servicesLabel: "Line and boarding point",
+    arrivalsLabel: "Arrival stop or station",
+    arrivalsLoading: "Loading arrival stops…",
+    arrivalsEmpty: "No arrival is available from this boarding point.",
+    arrivalsUnavailable: "Arrival stops are unavailable. Select the line again to try again.",
+    journeyHint: "Full and short-turn services that serve your arrival are combined.",
     servicesEmpty: "No service is available for this stop.",
     previewRecorded: "Recorded example",
     minutesShort: "min",
@@ -121,7 +163,6 @@ export const COPY = {
     favoriteRename: "Rename",
     favoriteRemove: "Remove",
     favoriteUnresolved: "Not found in the catalog anymore: remove it, then search for the stop again.",
-    siblingQuay: "Shares this quay and direction: passages are pooled and each favorite prioritizes its own destination.",
     renamePrompt: "Favorite name",
     save: "Save settings",
     aboutOpen: "About",
@@ -132,6 +173,7 @@ export const COPY = {
     syncHint: "The watch normally receives only what changed. Tick this to resend everything if the watch shows outdated favorites.",
     forceSyncLabel: "Force a full synchronization at the next save",
     saveTooLarge: "These settings are too large to transfer. Remove the favorite with the longest entry and add it again.",
+    configurationUpgradeRequired: "Update Lapin Futé on your Pebble to edit these settings.",
   },
   fr: {
     pageTitle: "Réglages Lapin Futé",
@@ -162,16 +204,21 @@ export const COPY = {
     favoritesAvailable: "disponibles",
     favoritesEmpty: "Aucun favori. Recherchez un arrêt pour en ajouter un.",
     favoriteAddTitle: "Ajouter un favori",
-    favoriteAddCaption: "Arrêt, ligne et direction",
-    searchLabel: "Arrêt ou gare",
+    favoriteAddCaption: "Départ, ligne et arrivée",
+    searchLabel: "Arrêt ou gare de départ",
     searchPlaceholder: "Rechercher par nom",
     searchHint: "Saisissez au moins 2 caractères.",
     searchLoading: "Recherche…",
     searchNoResults: "Aucun arrêt ni gare ne correspond.",
     backendUnavailable: "Le catalogue est indisponible. Vos modifications sont conservées ; réessayez.",
     invalidService: "Ce service n’est plus disponible. Relancez la recherche.",
-    servicesLoading: "Chargement des lignes et directions…",
-    servicesLabel: "Ligne et direction",
+    servicesLoading: "Chargement des lignes…",
+    servicesLabel: "Ligne et point de départ",
+    arrivalsLabel: "Arrêt ou gare d’arrivée",
+    arrivalsLoading: "Chargement des arrêts d’arrivée…",
+    arrivalsEmpty: "Aucune arrivée n’est disponible depuis ce point de départ.",
+    arrivalsUnavailable: "Les arrêts d’arrivée sont indisponibles. Resélectionnez la ligne pour réessayer.",
+    journeyHint: "Les passages des services complets et partiels desservant votre arrivée sont réunis.",
     servicesEmpty: "Aucun service n’est disponible pour cet arrêt.",
     previewRecorded: "Exemple enregistré",
     minutesShort: "min",
@@ -186,7 +233,6 @@ export const COPY = {
     favoriteRemove: "Supprimer",
     renamePrompt: "Nom du favori",
     favoriteUnresolved: "Introuvable dans le catalogue : supprimez-le, puis recherchez à nouveau l’arrêt.",
-    siblingQuay: "Partage ce quai et ce sens : les passages sont mutualisés et chaque favori priorise sa destination.",
     save: "Enregistrer les réglages",
     aboutOpen: "À propos",
     aboutBack: "Retour aux réglages",
@@ -196,6 +242,7 @@ export const COPY = {
     syncHint: "La montre ne reçoit normalement que les changements. Cochez cette case pour tout renvoyer si la montre affiche des favoris obsolètes.",
     forceSyncLabel: "Forcer une synchronisation complète au prochain enregistrement",
     saveTooLarge: "Ces réglages sont trop volumineux pour être transférés. Supprimez le favori comportant l’entrée la plus longue, puis rajoutez-le.",
+    configurationUpgradeRequired: "Mettez à jour Lapin Futé sur votre Pebble pour modifier ces réglages.",
   },
 };
 
@@ -203,11 +250,13 @@ export function copyFor(language) {
   return COPY[selectLocale(language)];
 }
 
-// --- Favorites ---------------------------------------------------------------
+// --- Favorites ----------------------------------------------------------------
 
-export function isFavoriteShape(value) {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
-  if (!Object.keys(value).every((field) => FAVORITE_FIELDS.includes(field))) return false;
+// Shared value checks for both favorite generations. `hasArrival` selects the
+// journey contract: a current favorite carries a required arrivalPlaceId that
+// is either null (not yet resolved) or a catalog plc_ identity; a legacy
+// favorite never carries the field at all.
+function favoriteValuesValid(value, hasArrival) {
   const hasLineMode = Object.hasOwn(value, "lineMode");
   const hasLineColor = Object.hasOwn(value, "lineColor");
   const hasLineTextColor = Object.hasOwn(value, "lineTextColor");
@@ -220,13 +269,34 @@ export function isFavoriteShape(value) {
     boundedString(value.stopLabel, LIMITS.labelUtf8Bytes) &&
     boundedString(value.lineLabel, LIMITS.labelUtf8Bytes) &&
     boundedString(value.destinationLabel, LIMITS.labelUtf8Bytes) &&
+    (!hasArrival || value.arrivalPlaceId === null ||
+      (typeof value.arrivalPlaceId === "string" && value.arrivalPlaceId.length === 47 && PLACE_ID.test(value.arrivalPlaceId))) &&
     (!hasLineMode || (
       TRANSPORT_MODES.includes(value.lineMode) &&
       isLineColor(value.lineColor) &&
       isLineColor(value.lineTextColor)
     )) &&
-    Number.isInteger(value.sortOrder)
+    Number.isInteger(value.sortOrder) && value.sortOrder >= 0 && value.sortOrder < LIMITS.favorites
   );
+}
+
+export function isFavoriteShape(value) {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
+  if (!Object.keys(value).every((field) => FAVORITE_FIELDS.includes(field))) return false;
+  // The field is required and present-but-undefined is rejected: a v2 favorite
+  // without a usable arrival value is invalid, never silently migrated.
+  if (!Object.hasOwn(value, "arrivalPlaceId") || value.arrivalPlaceId === undefined) return false;
+  return favoriteValuesValid(value, true);
+}
+
+// JourneyPlace as published in catalog journey groups: the arrival value the
+// page passes to favoriteFromService. Only the form is checked here; the
+// group-level referential integrity is the catalog's contract.
+export function isJourneyPlace(value) {
+  return exactFields(value, ["kind", "placeId", "label"], ["kind", "placeId", "label"])
+    && value.kind === "place"
+    && typeof value.placeId === "string" && value.placeId.length === 47 && PLACE_ID.test(value.placeId)
+    && boundedString(value.label, JOURNEY_LIMITS.textUtf8Bytes);
 }
 
 // --- Service routing -----------------------------------------------------------
@@ -243,12 +313,35 @@ export function isServiceRouting(value) {
 
 // PhoneFavorite: a Favorite that may carry routing. Missing routing marks a
 // routing-unresolved favorite and stays fully valid; a present routing must be
-// exactly valid (present-but-undefined is rejected, mirroring lineMode).
+// exactly valid (present-but-undefined is rejected, mirroring lineMode). The
+// arrival is part of the shape itself: null means not yet resolved, never a
+// legacy absence.
 
 export function isPhoneFavorite(value) {
   if (!isFavoriteShape(value)) return false;
   if (!Object.hasOwn(value, "routing")) return true;
   return isServiceRouting(value.routing);
+}
+
+function isPhoneFavoriteList(value) {
+  if (!Array.isArray(value) || value.length > LIMITS.favorites) return false;
+  const seen = new Set();
+  for (const favorite of value) {
+    if (!isPhoneFavorite(favorite) || seen.has(favorite.id)) return false;
+    seen.add(favorite.id);
+  }
+  return true;
+}
+
+// Pre-journey favorite for read-only display of an old opening fragment. The
+// field set is exactly the historical one: an arrivalPlaceId key, even a valid
+// one, makes the entry not-legacy and it is never shown from a v1 fragment.
+
+function isLegacyFavorite(value) {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
+  if (!Object.keys(value).every((field) => LEGACY_FAVORITE_FIELDS.includes(field))) return false;
+  if (!favoriteValuesValid(value, false)) return false;
+  return !Object.hasOwn(value, "routing") || isServiceRouting(value.routing);
 }
 
 // Storage/payload copy for the phone: unlike the watch projection this keeps a
@@ -327,8 +420,16 @@ export function isServiceOptionsResult(value, placeId) {
     && value.services.every(isServiceOption);
 }
 
-export function favoriteFromService(id, service, sortOrder, displayName = undefined) {
+// Builds a journey favorite from a selected catalog service and the arrival
+// chosen among reachableArrivals(group, routing.monitoringRef). The arrival is
+// mandatory and must be a resolved JourneyPlace: no caller ever creates a null
+// arrival here. destinationLabel displays the chosen arrival (truncated by the
+// shared helper exactly as the phone truncates it for storage), while the
+// service still anchors catalog lookups through its routing copy.
+
+export function favoriteFromService(id, service, arrival, sortOrder, displayName = undefined) {
   if (!boundedString(id, LIMITS.idUtf8Bytes) || !isServiceOption(service)
+      || !isJourneyPlace(arrival)
       || !Number.isInteger(sortOrder) || sortOrder < 0) return null;
   const favorite = {
     schemaVersion: SCHEMA_VERSION,
@@ -336,11 +437,12 @@ export function favoriteFromService(id, service, sortOrder, displayName = undefi
     serviceId: service.serviceId,
     stopLabel: service.stopLabel,
     lineLabel: service.lineLabel,
-    destinationLabel: service.destinationLabel,
+    destinationLabel: arrivalLabel(arrival.label),
     lineMode: service.lineMode,
     lineColor: service.lineColor,
     lineTextColor: service.lineTextColor,
     routing: { ...service.routing },
+    arrivalPlaceId: arrival.placeId,
     sortOrder,
   };
   if (displayName !== undefined && boundedString(displayName, LIMITS.labelUtf8Bytes)) {
@@ -354,16 +456,31 @@ function renumber(favorites) {
 }
 
 // --- Opening fragment --------------------------------------------------------
-// Expected shape (all values non-secret):
-//   #<encodeURIComponent(JSON.stringify({ hasKey, favorites, language }))>
+// Expected shapes (all values non-secret):
+//   #<encodeURIComponent(JSON.stringify({ schemaVersion: 2, hasKey, favorites, language }))>
+//   #<encodeURIComponent(JSON.stringify({ hasKey, favorites, language }))>   (old phone)
 // hasKey is the only credential-related field; the stored key itself is never
-// present. Any other top-level shape is rejected before it can enter page state.
+// present. A complete v2 envelope with only valid favorites opens an editable
+// session. Any older (or unversioned) envelope is decoded for read-only
+// display only: it is never hydrated, never converted, and never editable —
+// the watch app must be updated. An absent or malformed fragment is likewise
+// non-editable; previews always pass a real v2 envelope.
 
 export const MAX_OPENING_FRAGMENT_LENGTH = 32768;
-const OPENING_FIELDS = ["hasKey", "favorites", "language"];
+const OPENING_FIELDS = ["schemaVersion", "hasKey", "favorites", "language"];
 
 function emptyOpeningState() {
-  return { hasKey: false, language: "en", locale: "en", favorites: [] };
+  return { hasKey: false, language: "en", locale: "en", favorites: [], editable: false };
+}
+
+function openingState(hasKey, language, favorites, editable) {
+  return {
+    hasKey,
+    language,
+    locale: selectLocale(language),
+    favorites,
+    editable,
+  };
 }
 
 export function parseConfigFragment(hash) {
@@ -380,17 +497,39 @@ export function parseConfigFragment(hash) {
     return emptyOpeningState();
   }
   if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return emptyOpeningState();
-  if (Object.keys(parsed).length !== OPENING_FIELDS.length
-      || !Object.keys(parsed).every((field) => OPENING_FIELDS.includes(field))) return emptyOpeningState();
   if (typeof parsed.hasKey !== "boolean"
       || !Array.isArray(parsed.favorites)
       || typeof parsed.language !== "string") return emptyOpeningState();
-  return {
-    hasKey: parsed.hasKey,
-    language: parsed.language,
-    locale: selectLocale(parsed.language),
-    favorites: parsed.favorites.filter(isPhoneFavorite).map(copyPhoneFavorite),
-  };
+  if (!Object.keys(parsed).every((field) => OPENING_FIELDS.includes(field))) return emptyOpeningState();
+  if (parsed.schemaVersion === CONFIGURATION_VERSION) {
+    // An invalid v2 favorite never yields an editable subset: the session
+    // stays read-only, and only entries that are individually valid are
+    // displayed.
+    if (!isPhoneFavoriteList(parsed.favorites)) {
+      return openingState(
+        parsed.hasKey,
+        parsed.language,
+        parsed.favorites.filter(isPhoneFavorite).map(copyPhoneFavorite),
+        false,
+      );
+    }
+    return openingState(
+      parsed.hasKey,
+      parsed.language,
+      parsed.favorites.map(copyPhoneFavorite),
+      true,
+    );
+  }
+  if (parsed.schemaVersion === undefined || parsed.schemaVersion === SCHEMA_VERSION) {
+    // Old or unversioned phone: read-only favorites display, nothing else.
+    return openingState(
+      parsed.hasKey,
+      parsed.language,
+      parsed.favorites.filter(isLegacyFavorite).map(copyPhoneFavorite),
+      false,
+    );
+  }
+  return emptyOpeningState();
 }
 
 // --- State -------------------------------------------------------------------
@@ -403,26 +542,35 @@ export function initialConfigState(query) {
     keyDraft: { ...EMPTY_KEY_DRAFT },
     favorites: query.favorites,
     forceFullSync: false,
+    // Fail closed: only an explicitly editable session (a complete v2
+    // opening) may mutate anything or save.
+    editable: query.editable === true,
   };
 }
 
 // Last intent wins: typing a non-empty draft cancels a pending removal, and
 // requesting removal clears the draft. Favorite edits renumber sortOrder over
-// the whole list so display order stays dense and atomic.
+// the whole list so display order stays dense and atomic. A read-only session
+// (legacy, unversioned, malformed opening, or any invalid v2 favorite) stays
+// inert regardless of what the DOM enables.
 
 export function reduceConfigState(state, action) {
   switch (action.type) {
     case "key-draft": {
+      if (state.editable !== true) return state;
       const value = typeof action.value === "string" ? action.value : "";
       const removeRequested = value.length > 0 ? false : state.keyDraft.removeRequested;
       return { ...state, keyDraft: { value, removeRequested } };
     }
     case "key-remove-requested":
+      if (state.editable !== true) return state;
       if (!state.hasKey) return state;
       return { ...state, keyDraft: { value: "", removeRequested: true } };
     case "key-remove-cancelled":
+      if (state.editable !== true) return state;
       return { ...state, keyDraft: { ...state.keyDraft, removeRequested: false } };
     case "favorite-add": {
+      if (state.editable !== true) return state;
       if (state.favorites.length >= LIMITS.favorites || !isPhoneFavorite(action.favorite)
           || state.favorites.some((favorite) => favorite.id === action.favorite.id)) return state;
       const candidate = renumber([...state.favorites, { ...action.favorite }]);
@@ -432,6 +580,7 @@ export function reduceConfigState(state, action) {
       return { ...state, favorites: candidate };
     }
     case "favorite-rename": {
+      if (state.editable !== true) return state;
       const displayName = typeof action.displayName === "string" ? action.displayName.trim() : "";
       if (displayName.length > 0 && !boundedString(displayName, LIMITS.labelUtf8Bytes)) return state;
       let changed = false;
@@ -446,6 +595,7 @@ export function reduceConfigState(state, action) {
       return changed ? { ...state, favorites } : state;
     }
     case "favorite-remove": {
+      if (state.editable !== true) return state;
       if (!state.favorites.some((favorite) => favorite.id === action.id)) return state;
       return {
         ...state,
@@ -453,6 +603,7 @@ export function reduceConfigState(state, action) {
       };
     }
     case "favorite-move": {
+      if (state.editable !== true) return state;
       const from = state.favorites.findIndex((favorite) => favorite.id === action.id);
       if (from < 0) return state;
       const to = Math.min(Math.max(from + action.delta, 0), state.favorites.length - 1);
@@ -463,18 +614,37 @@ export function reduceConfigState(state, action) {
       return { ...state, favorites: renumber(favorites) };
     }
     case "favorite-hydrate": {
-      // Routing recovery: a known serviceId gains routing in place; unknown,
-      // malformed, or bound-overflowing hydration never deletes or reorders
-      // the stored favorite.
+      // Catalog recovery: a known serviceId fills only what is unresolved —
+      // missing routing, and an arrival still null. Presentation (labels,
+      // colors, custom name), order, identity, and every resolved value stay
+      // exactly as stored; unknown, mismatched, or bound-overflowing
+      // hydration never deletes or reorders the stored favorite. A hydrate
+      // that changes nothing keeps the state identity stable.
+      if (state.editable !== true) return state;
       if (!isPhoneFavorite(action.favorite) || action.favorite.id !== action.id) return state;
-      if (!state.favorites.some((favorite) => favorite.id === action.id)) return state;
-      const candidate = renumber(state.favorites.map((favorite) => (
-        favorite.id === action.id ? action.favorite : favorite
-      )));
+      const index = state.favorites.findIndex((favorite) => favorite.id === action.id);
+      if (index < 0) return state;
+      const current = state.favorites[index];
+      if (action.favorite.serviceId !== current.serviceId) return state;
+      const merged = copyPhoneFavorite(current);
+      let changed = false;
+      if (!Object.hasOwn(current, "routing") && Object.hasOwn(action.favorite, "routing")) {
+        merged.routing = { ...action.favorite.routing };
+        changed = true;
+      }
+      if (current.arrivalPlaceId === null && action.favorite.arrivalPlaceId !== null) {
+        merged.arrivalPlaceId = action.favorite.arrivalPlaceId;
+        changed = true;
+      }
+      if (!changed) return state;
+      const candidates = state.favorites.slice();
+      candidates[index] = merged;
+      const candidate = renumber(candidates);
       if (!favoritesFitCloseBound(candidate)) return state;
       return { ...state, favorites: candidate };
     }
     case "force-full-sync":
+      if (state.editable !== true) return state;
       return { ...state, forceFullSync: action.value === true };
     default:
       return state;
@@ -503,19 +673,24 @@ export function planApiKeyUpdate(hasKey, keyDraft) {
 
 // Plans the full configuration payload: the key decision plus the whole
 // favorite list (atomic replacement; an oversized list is rejected, never
-// silently truncated).
+// silently truncated). A read-only session is refused here too, independent
+// of the DOM: legacy, malformed, or invalid-favorite openings can never save.
 
 export function planConfigResult(state) {
+  if (state.editable !== true) return { ok: false, error: "configurationUpgradeRequired" };
   const apiKeyUpdate = planApiKeyUpdate(state.hasKey, state.keyDraft);
   if (apiKeyUpdate.action === "REPLACE") {
     const error = apiKeyError(apiKeyUpdate.value);
     if (error !== null) return { ok: false, error };
   }
-  if (state.favorites.length > LIMITS.favorites) {
+  if (Array.isArray(state.favorites) && state.favorites.length > LIMITS.favorites) {
     return { ok: false, error: "favoriteLimit" };
   }
+  if (!isPhoneFavoriteList(state.favorites)) {
+    return { ok: false, error: "configurationUpgradeRequired" };
+  }
   const payload = {
-    schemaVersion: SCHEMA_VERSION,
+    schemaVersion: CONFIGURATION_VERSION,
     apiKeyUpdate,
     favorites: state.favorites.map(stampFavorite),
   };
@@ -532,6 +707,7 @@ function stampFavorite(favorite, sortOrder) {
     stopLabel: favorite.stopLabel,
     lineLabel: favorite.lineLabel,
     destinationLabel: favorite.destinationLabel,
+    arrivalPlaceId: favorite.arrivalPlaceId,
   };
   if (Object.hasOwn(favorite, "lineMode")) {
     stamped.lineMode = favorite.lineMode;
@@ -550,7 +726,9 @@ function stampFavorite(favorite, sortOrder) {
 // The documented Pebble return channel: navigate exactly once to
 // pebblejs://close#<encodeURIComponent(JSON.stringify(payload))>. The mobile
 // app intercepts this navigation; it is not an HTTP request. A session
-// refuses a second send.
+// refuses a second send. The envelope itself is CONFIGURATION_VERSION 2 —
+// an old phone rejects it whole rather than misreading a journey payload —
+// while the nested favorites and ApiKeyUpdate keep SCHEMA_VERSION 1.
 
 export const CLOSE_PREFIX = "pebblejs://close#";
 
@@ -588,7 +766,7 @@ export function closePayloadFits(payload) {
 
 function favoritesFitCloseBound(favorites) {
   return closePayloadFits({
-    schemaVersion: SCHEMA_VERSION,
+    schemaVersion: CONFIGURATION_VERSION,
     apiKeyUpdate: {
       schemaVersion: SCHEMA_VERSION,
       action: "REPLACE",

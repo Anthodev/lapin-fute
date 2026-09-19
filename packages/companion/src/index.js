@@ -14,6 +14,7 @@ var MessageQueue = require("./message-queue");
 var createConfigurationSync = require("./configuration-sync").createConfigurationSync;
 var createCatalogClient = require("./catalog-client").createCatalogClient;
 var createPrimClient = require("./prim-client").createPrimClient;
+var journeys = require("./journey-patterns");
 var hasOwn = Object.prototype.hasOwnProperty;
 
 var SDK_READY_KEY = "15025";
@@ -115,7 +116,8 @@ function snapshotFromResult(result) {
       var copy = {
         expectedAt: departure.expectedAt,
         minutes: departure.minutes,
-        status: departure.status
+        status: departure.status,
+        journeyUncertain: departure.journeyUncertain
       };
       if (typeof departure.aimedAt !== "undefined") copy.aimedAt = departure.aimedAt;
       if (typeof departure.nextIntervalMinutes !== "undefined") {
@@ -326,7 +328,7 @@ Companion.prototype._onWebviewClosed = function (event) {
     if (this._credentialBlocked
         || this._configuration.keyStatus === contracts.KEY_STATUS.INVALID) {
       pending = {
-        schemaVersion: contracts.SCHEMA_VERSION,
+        schemaVersion: contracts.CONFIGURATION_VERSION,
         favorites: next.favorites.map(contracts.copyPhoneFavorite),
         primApiKey: next.primApiKey,
         keyStatus: contracts.KEY_STATUS.INVALID
@@ -350,6 +352,11 @@ Companion.prototype._onWebviewClosed = function (event) {
     || configuration.activeWatchLanguage(this._Pebble) !== this._watchLanguage;
   invalidate = update.apiKeyUpdate.action !== "KEEP"
     || !sameFavoriteContentSet(this._watchFavorites, nextWatch)
+    || this._configuration.favorites.some(function (favorite) {
+      return !next.favorites.some(function (other) {
+        return other.id === favorite.id && journeys.journeyKey(other) === journeys.journeyKey(favorite);
+      });
+    })
     || update.forceFullSync;
   if (invalidate) {
     pruned = configuration.pruneCache(this._cache, next.favorites);
@@ -552,13 +559,12 @@ Companion.prototype._sendDisplayTransfer = function (request, kind, records, fav
   this._enqueueResult(records, request, terminal);
 };
 
-// favorite: a committed binding entry carrying id and serviceId. Flight
-// errors are keyed by service because one service may serve several favorites.
+// Cache and errors belong to the complete service/arrival binding.
 Companion.prototype._favoriteView = function (favorite, flightErrors, aggregateError, cacheOnly) {
   var entry = configuration.findOverview(this._cache, favorite.id, "cache");
   // A favorite ID cannot retarget a cached service during an in-flight DIFF.
-  if (entry !== null && entry.serviceId !== favorite.serviceId) entry = null;
-  var code = aggregateError || (flightErrors && flightErrors[favorite.serviceId]) || null;
+  if (entry !== null && journeys.journeyKey(entry) !== journeys.journeyKey(favorite)) entry = null;
+  var code = aggregateError || (flightErrors && flightErrors[journeys.journeyKey(favorite)]) || null;
   if (!code && entry && entry.refreshError) code = entry.refreshError.code;
   var hasData = entry !== null && hasOwn.call(entry, "result")
     && cacheUseful(entry.result.fetchedAt, entry.resultStoredAt, this._clock.now());
@@ -584,7 +590,7 @@ Companion.prototype._viewRecord = function (view, maximumDepartures, refreshing)
     trafficCheckedAt: view.traffic.checkedAt,
     departures: view.hasData
       ? view.snapshot.departures.slice(0, maximumDepartures).map(function (departure) {
-        return { expectedAt: departure.expectedAt, status: departure.status };
+        return { expectedAt: departure.expectedAt, status: departure.status, journeyUncertain: departure.journeyUncertain };
       })
       : []
   });
@@ -617,6 +623,7 @@ Companion.prototype._staleOverviewFavorites = function (request, binding) {
     if (request.kind === "detail" && favorite.id !== request.favoriteId) return false;
     var entry = configuration.findOverview(this._cache, favorite.id, request.requestId);
     return entry === null
+      || journeys.journeyKey(entry) !== journeys.journeyKey(favorite)
       || !hasOwn.call(entry, "result")
       || !cacheFresh(entry.result.fetchedAt, entry.resultStoredAt, now);
   }, this);
@@ -633,7 +640,7 @@ Companion.prototype._bindingFavorite = function (binding, favoriteId) {
 Companion.prototype._recordCacheMetrics = function (binding) {
   var anyCached = binding.favorites.some(function (favorite) {
     var entry = configuration.findOverview(this._cache, favorite.id, "cache");
-    return entry !== null && hasOwn.call(entry, "result");
+    return entry !== null && journeys.journeyKey(entry) === journeys.journeyKey(favorite) && hasOwn.call(entry, "result");
   }, this);
   if (anyCached) this._metrics.cacheHits += 1;
   else this._metrics.cacheMisses += 1;
@@ -679,6 +686,7 @@ Companion.prototype._dispatchDetail = function (request, binding) {
   if (keyError) { this._sendErrorTransfer(request, keyError); return; }
   var favorite = this._bindingFavorite(binding, request.favoriteId);
   var cached = configuration.findOverview(this._cache, request.favoriteId, request.requestId);
+  if (cached !== null && journeys.journeyKey(cached) !== journeys.journeyKey(favorite)) cached = null;
   var cacheOnly = request.trigger === contracts.REQUEST_TRIGGER.CACHE_ONLY;
   if (cached !== null && hasOwn.call(cached, "result")) {
     this._metrics.cacheHits += 1;
@@ -774,13 +782,15 @@ Companion.prototype._hydrateRouting = function (flight, favorites, complete) {
       if (remaining !== 0) return;
       if (Object.keys(recovered).length === 0) { complete(recovered); return; }
       hydrated = {
-        schemaVersion: contracts.SCHEMA_VERSION,
+        schemaVersion: contracts.CONFIGURATION_VERSION,
         favorites: self._configuration.favorites.map(contracts.copyPhoneFavorite),
         primApiKey: self._configuration.primApiKey,
         keyStatus: self._configuration.keyStatus
       };
       hydrated.favorites.forEach(function (favorite) {
-        if (!favorite.routing && recovered[favorite.serviceId]) {
+        if (!favorite.routing && recovered[favorite.serviceId] && favorites.some(function (captured) {
+          return captured.id === favorite.id && captured.serviceId === favorite.serviceId;
+        })) {
           favorite.routing = recovered[favorite.serviceId];
           changed = true;
         }
@@ -791,10 +801,11 @@ Companion.prototype._hydrateRouting = function (flight, favorites, complete) {
       }
       if (changed && configuration.configurationUrl(
         self._configurationUrl, hydrated, configuration.activeWatchLanguage(self._Pebble)
-      ) !== null) {
-        configuration.saveConfiguration(self._storage, hydrated);
+      ) !== null && configuration.saveConfiguration(self._storage, hydrated)
+          && flight.generation === self._lifecycleGeneration) {
         self._configuration = hydrated;
-      }
+        self._sync.enrichPhoneFavorites(hydrated.favorites, flight.generation);
+      } else if (changed) recovered = Object.create(null);
       complete(recovered);
     }));
   });
@@ -806,9 +817,9 @@ Companion.prototype._freshServiceEntry = function (favorite) {
   var entry;
   for (index = 0; index < this._configuration.favorites.length; index += 1) {
     candidate = this._configuration.favorites[index];
-    if (candidate.serviceId !== favorite.serviceId) continue;
+    if (journeys.journeyKey(candidate) !== journeys.journeyKey(favorite)) continue;
     entry = configuration.findOverview(this._cache, candidate.id, "cache");
-    if (entry !== null && hasOwn.call(entry, "result")
+    if (entry !== null && journeys.journeyKey(entry) === journeys.journeyKey(favorite) && hasOwn.call(entry, "result")
         && cacheFresh(entry.result.fetchedAt, entry.resultStoredAt, this._clock.now())) return entry;
   }
   return null;
@@ -880,63 +891,53 @@ Companion.prototype._acceptOutcome = function (flight, outcome) {
 
 Companion.prototype._startOverviewFlight = function (request) {
   var self = this;
-  var favorites = request.overviewFavorites;
   var language = request.binding.language;
-  var services = Object.create(null);
-  var serviceIds = [];
-  var remaining;
   var flight = {
-    kind: "overview",
-    generation: this._lifecycleGeneration,
-    startedAt: this._clock.now(),
-    handles: [],
-    serviceErrors: Object.create(null),
+    kind: "overview", generation: this._lifecycleGeneration, startedAt: this._clock.now(),
+    handles: [], serviceErrors: Object.create(null),
+    workFavorites: request.overviewFavorites.map(contracts.copyPhoneFavorite),
     launchRequest: {
-      schemaVersion: contracts.SCHEMA_VERSION,
-      requestId: request.requestId,
-      language: language,
-      favorites: favorites.map(function (favorite) {
+      schemaVersion: contracts.SCHEMA_VERSION, requestId: request.requestId, language: language,
+      favorites: request.overviewFavorites.map(function (favorite) {
         return { favoriteId: favorite.id, serviceId: favorite.serviceId };
       })
     }
   };
+  var groups = Object.create(null);
+  var services = Object.create(null);
+  var keys = [];
+  var remaining;
   this._overviewFlight = flight;
-  favorites.forEach(function (favorite) {
-    if (!hasOwn.call(services, favorite.serviceId)) {
-      serviceIds.push(favorite.serviceId);
-      services[favorite.serviceId] = { favoriteId: favorite.id, departures: null, traffic: null };
-    }
-  });
-  remaining = serviceIds.length * 2;
 
-  function completed() {
-    var items = [];
-    var error = null;
-    var next;
-    var body;
-    remaining -= 1;
-    if (remaining !== 0 || flight.generation !== self._lifecycleGeneration) return;
-    self._overviewFlight = null;
-    favorites.forEach(function (favorite) {
-      var service = services[favorite.serviceId];
-      var previous = configuration.findOverview(self._cache, favorite.id, request.requestId);
-      var traffic = service.traffic;
-      if (service.trafficError) {
-        traffic = {
-          state: "UNKNOWN",
-          checkedAt: previous === null ? 0 : previous.traffic.checkedAt
-        };
-      }
-      items.push({
-        favoriteId: favorite.id,
-        departures: service.departures,
-        traffic: copyTrafficSummary(traffic)
-      });
+  function current() {
+    return self._overviewFlight === flight && flight.generation === self._lifecycleGeneration;
+  }
+  function rebuildBindings() {
+    flight.workFavorites = flight.workFavorites.map(function (favorite) {
+      var bound = self._bindingFavorite(request.binding, favorite.id);
+      return bound && bound.serviceId === favorite.serviceId
+        ? contracts.copyPhoneFavorite(bound) : favorite;
     });
-    body = { schemaVersion: contracts.SCHEMA_VERSION, requestId: request.requestId, items: items };
-    next = !contracts.isOverviewResult(body, flight.launchRequest) ? null : configuration.mergeOverview(
-      self._cache, self._configuration.favorites, body, Math.floor(self._clock.now())
+  }
+  function completed() {
+    if (!current()) return;
+    remaining -= 1;
+    if (remaining !== 0) return;
+    var items = flight.workFavorites.map(function (favorite) {
+      var service = services[journeys.journeyKey(favorite)];
+      var previous = configuration.findOverview(self._cache, favorite.id, request.requestId);
+      return {
+        favoriteId: favorite.id, departures: service.departures,
+        traffic: copyTrafficSummary(service.trafficError
+          ? { state: "UNKNOWN", checkedAt: previous === null ? 0 : previous.traffic.checkedAt }
+          : service.traffic)
+      };
+    });
+    var body = { schemaVersion: contracts.SCHEMA_VERSION, requestId: request.requestId, items: items };
+    var next = !contracts.isOverviewResult(body, flight.launchRequest) ? null : configuration.mergeOverview(
+      self._cache, self._configuration.favorites, body, Math.floor(self._clock.now()), flight.workFavorites
     );
+    var error = null;
     if (next !== null && configuration.cacheIsSecretFree(next, self._configuration.primApiKey)) {
       self._cache = next;
       configuration.saveCache(self._storage, next, self._configuration.primApiKey);
@@ -945,56 +946,112 @@ Companion.prototype._startOverviewFlight = function (request) {
       error = "INVALID_RESPONSE";
       self._metrics.failures += 1;
     }
+    self._overviewFlight = null;
     self._completeOverviewFlight(flight, error);
   }
-
-  this._hydrateRouting(flight, favorites, function (recovered) {
-    serviceIds.forEach(function (serviceId) {
-      var service = services[serviceId];
-      var favorite = self._bindingFavorite(request.binding, service.favoriteId);
-      var routing = favorite.routing || recovered[serviceId];
+  function startPrim() {
+    if (!current()) return;
+    rebuildBindings();
+    flight.workFavorites.forEach(function (favorite) {
+      var key = journeys.journeyKey(favorite);
+      if (!hasOwn.call(services, key)) {
+        keys.push(key);
+        services[key] = { favorite: favorite, departures: null, traffic: null };
+      }
+    });
+    remaining = keys.length * 2;
+    keys.forEach(function (key) {
+      if (!current()) return;
+      var service = services[key];
+      var favorite = service.favorite;
+      var routing = favorite.routing;
+      var group = groups[favorite.serviceId] || null;
       var entry = self._freshServiceEntry(favorite);
       var traffic = self._freshLineTraffic(favorite, language, false);
-      var unavailable = { status: "UNAVAILABLE", error: {
-        code: "INVALID_SERVICE", occurredAt: Math.floor(self._clock.now() / 1000)
-      } };
+      var invalid = !routing || favorite.arrivalPlaceId === null || (group !== null
+        && !journeys.reachableArrivals(group, routing.monitoringRef).some(function (place) {
+          return place.placeId === favorite.arrivalPlaceId;
+        }));
       if (entry !== null) {
         service.departures = { status: "AVAILABLE", data: snapshotFromResult(entry.result) };
         completed();
-      } else if (!routing) {
-        service.departures = unavailable;
-        flight.serviceErrors[serviceId] = "INVALID_SERVICE";
+      } else if (invalid) {
+        service.departures = { status: "UNAVAILABLE", error: {
+          code: "INVALID_SERVICE", occurredAt: Math.floor(self._clock.now() / 1000)
+        } };
+        flight.serviceErrors[key] = "INVALID_SERVICE";
         completed();
       } else {
         flight.handles.push(self._prim.departures({
-          routing: routing, apiKey: self._configuration.primApiKey
+          routing: routing, apiKey: self._configuration.primApiKey,
+          context: { arrivalPlaceId: favorite.arrivalPlaceId, patterns: group }
         }, function (outcome) {
-          if (!self._acceptOutcome(flight, outcome)) return;
+          if (!current() || !self._acceptOutcome(flight, outcome)) return;
           service.departures = outcome;
-          if (outcome.status === "UNAVAILABLE") {
-            flight.serviceErrors[serviceId] = outcome.error.code;
+          if (outcome.status === "UNAVAILABLE") flight.serviceErrors[key] = outcome.error.code;
+          completed();
+        }));
+      }
+      if (!current()) return;
+      if (traffic !== null) { service.traffic = traffic; completed(); }
+      else if (!routing) { service.trafficError = true; completed(); }
+      else flight.handles.push(self._prim.traffic({
+        lineRef: routing.lineRef, language: language, apiKey: self._configuration.primApiKey
+      }, function (outcome) {
+        if (!current() || !self._acceptOutcome(flight, outcome)) return;
+        if (outcome.status === "AVAILABLE") {
+          service.traffic = outcome.data;
+          self._storeTraffic(favorite, language, outcome.data, request.requestId);
+        } else service.trafficError = outcome.error;
+        completed();
+      }));
+    });
+  }
+  // Fresh snapshots require no catalogue work. Resolve only the bindings which
+  // will actually need a new departure request.
+  var stale = flight.workFavorites.filter(function (favorite) { return self._freshServiceEntry(favorite) === null; });
+  this._hydrateRouting(flight, stale, function () {
+    if (!current()) return;
+    rebuildBindings();
+    var pending = Object.create(null);
+    flight.workFavorites.forEach(function (favorite) {
+      if (favorite.routing && self._freshServiceEntry(favorite) === null) pending[favorite.serviceId] = favorite;
+    });
+    var ids = Object.keys(pending);
+    var count = ids.length;
+    if (!count) { startPrim(); return; }
+    ids.forEach(function (serviceId) {
+      if (!current()) return;
+      var captured = pending[serviceId];
+      flight.handles.push(self._catalog.lookupJourney(serviceId, captured.routing, function (result) {
+        if (!current()) return;
+        if (result !== null) {
+          groups[serviceId] = result.group;
+          var hydrated = {
+            schemaVersion: contracts.CONFIGURATION_VERSION,
+            favorites: self._configuration.favorites.map(contracts.copyPhoneFavorite),
+            primApiKey: self._configuration.primApiKey, keyStatus: self._configuration.keyStatus
+          };
+          var changed = false;
+          hydrated.favorites.forEach(function (favorite) {
+            if (favorite.serviceId !== serviceId || favorite.arrivalPlaceId !== null
+                || result.service.terminalPlaceId === null) return;
+            if (!flight.workFavorites.some(function (work) {
+              return work.id === favorite.id && work.serviceId === serviceId && work.arrivalPlaceId === null;
+            })) return;
+            favorite.arrivalPlaceId = result.service.terminalPlaceId;
+            changed = true;
+          });
+          if (changed && configuration.areFavoritesSecretFree(hydrated.favorites, hydrated.primApiKey, null)
+              && configuration.configurationUrl(self._configurationUrl, hydrated, configuration.activeWatchLanguage(self._Pebble)) !== null
+              && configuration.saveConfiguration(self._storage, hydrated) && current()) {
+            self._configuration = hydrated;
+            self._sync.enrichPhoneFavorites(hydrated.favorites, flight.generation);
           }
-          completed();
-        }));
-      }
-      if (traffic !== null) {
-        service.traffic = traffic;
-        completed();
-      } else if (!routing) {
-        service.trafficError = unavailable.error;
-        completed();
-      } else {
-        flight.handles.push(self._prim.traffic({
-          lineRef: routing.lineRef, language: language, apiKey: self._configuration.primApiKey
-        }, function (outcome) {
-          if (!self._acceptOutcome(flight, outcome)) return;
-          if (outcome.status === "AVAILABLE") {
-            service.traffic = outcome.data;
-            self._storeTraffic(favorite, language, outcome.data, request.requestId);
-          } else service.trafficError = outcome.error;
-          completed();
-        }));
-      }
+        }
+        count -= 1;
+        if (!count) startPrim();
+      }));
     });
   });
 };
@@ -1024,9 +1081,9 @@ Companion.prototype._startTrafficFlight = function (request) {
 };
 
 Companion.prototype._completeOverviewFlight = function (flight, error) {
+  if (flight.generation !== this._lifecycleGeneration) return;
   this._metrics.lastLatencyMs = Math.max(0, this._clock.now() - flight.startedAt);
   this._metrics.totalLatencyMs += this._metrics.lastLatencyMs;
-  if (flight.generation !== this._lifecycleGeneration) return;
   this._requests.slice().forEach(function (request) { this._completeDemand(request, flight, error); }, this);
   var active = this._activeRequest;
   var overview = this._overviewDemand;
@@ -1041,8 +1098,11 @@ Companion.prototype._completeOverviewFlight = function (flight, error) {
 Companion.prototype._completeDemand = function (request, flight, error) {
   if (request.generation !== this._lifecycleGeneration || !request.awaitingOverview) return;
   var uncovered = request.overviewFavorites.filter(function (favorite) {
-    return !flight.launchRequest.favorites.some(function (sent) { return sent.favoriteId === favorite.id; });
-  });
+    var bound = this._bindingFavorite(request.binding, favorite.id) || favorite;
+    return !flight.workFavorites.some(function (sent) {
+      return sent.id === bound.id && journeys.journeyKey(sent) === journeys.journeyKey(bound);
+    });
+  }, this);
   var errors = request.overviewErrors || Object.create(null);
   Object.keys(flight.serviceErrors).forEach(function (service) { errors[service] = flight.serviceErrors[service]; });
   request.overviewErrors = errors;
@@ -1088,7 +1148,7 @@ Companion.prototype._invalidateCredential = function () {
   if (this._configuration.primApiKey === null
       || this._configuration.keyStatus === contracts.KEY_STATUS.INVALID) return;
   invalid = {
-    schemaVersion: contracts.SCHEMA_VERSION,
+    schemaVersion: contracts.CONFIGURATION_VERSION,
     favorites: this._configuration.favorites.map(contracts.copyPhoneFavorite),
     primApiKey: this._configuration.primApiKey,
     keyStatus: contracts.KEY_STATUS.INVALID

@@ -23,6 +23,7 @@
         <h1 id="page-title">Settings</h1>
         <p id="intro"></p>
       </div>
+      <p id="configuration-upgrade" class="error" role="status" hidden></p>
       <div class="settings-list">
       <details class="settings-section" id="prim-section" aria-labelledby="key-title" open>
         <summary>
@@ -98,6 +99,12 @@
           <div id="service-step" hidden>
             <label class="field-label" for="service-select" id="services-label"></label>
             <select id="service-select"></select>
+          </div>
+
+          <div id="arrival-step" hidden>
+            <label class="field-label" for="arrival-select" id="arrivals-label"></label>
+            <select id="arrival-select" aria-describedby="journey-hint"></select>
+            <p class="support" id="journey-hint"></p>
           </div>
 
           <div id="preview" class="preview" hidden>

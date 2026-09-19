@@ -12,7 +12,7 @@
               "MonitoredVehicleJourney": {
                 "LineRef": { "value": "IDFM:C2001" },
                 "DirectionRef": { "value": "IDFM:2001D" },
-                "DestinationRef": { "value": "IDFM:2001DST" },
+                "DestinationRef": { "value": "STIF:StopPoint:Q:2001DST:" },
                 "MonitoredCall": {
                   "DepartureStatus": "ontime"
                 }

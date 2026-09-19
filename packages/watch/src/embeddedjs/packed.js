@@ -129,7 +129,7 @@ export function departureValid(record, maximum) {
       || hex(record, 11, 2) < 0 || hex(record, 11, 2) > 7
       || hex(record, 13, 1) < 0 || hex(record, 13, 1) > 3 || hex(record, 14, 8) < 0) return false;
   for (let i = 0; i < count; i++) {
-    if (hex(record, 23 + i * 9, 8) < 0 || hex(record, 31 + i * 9, 1) < 0 || hex(record, 31 + i * 9, 1) > 3) return false;
+    if (hex(record, 23 + i * 9, 8) < 0 || hex(record, 31 + i * 9, 1) < 0 || hex(record, 31 + i * 9, 1) > 7) return false;
   }
   return true;
 }

@@ -1,4 +1,10 @@
 export const SCHEMA_VERSION = 1 as const;
+// CONFIGURATION_VERSION 2 covers only the stored configuration record and the
+// page open/close envelopes. Domain objects, nested favorites and ApiKeyUpdate
+// keep SCHEMA_VERSION 1. Versioning the envelope also protects an empty
+// backup: a phone that cannot read v2 must never blank the configuration with
+// a v1 close.
+export const CONFIGURATION_VERSION = 2 as const;
 
 export const LIMITS = {
   apiKeyUtf8Bytes: 512,
@@ -49,9 +55,9 @@ export const DISPLAY_DEPARTURE_MAX_UTF8_BYTES = 64 as const;
 export const DISPLAY_TRAFFIC_FRAGMENT_MAX_UTF8_BYTES = 640 as const;
 export const DISPLAY_EPOCH_UTF8_BYTES = 15 as const;
 export const DISPLAY_REQUEST_ID_UTF8_BYTES = 24 as const;
-// DISPLAY_WIRE_VERSION 2 governs the watch display dictionaries only; domain
+// DISPLAY_WIRE_VERSION 3 governs the watch display dictionaries only; domain
 // data keeps SCHEMA_VERSION 1. The two numbers are never interchangeable.
-export const DISPLAY_WIRE_VERSION = 2 as const;
+export const DISPLAY_WIRE_VERSION = 3 as const;
 export const MESSAGE_TYPE = {
   REQUEST: 1,
   CONFIG_BEGIN: 2,
@@ -134,13 +140,101 @@ export interface ServiceRouting {
   destinationRef: string;
 }
 
-export type PhoneFavorite = Favorite & { routing?: ServiceRouting };
+export interface JourneyPlace {
+  kind: "place";
+  placeId: string;
+  label: string;
+}
+
+export interface JourneyTerminal {
+  kind: "terminal";
+  terminalId: string;
+  terminalPlaceId: string;
+  refs: string[];
+  labels: string[];
+}
+
+export interface JourneyStop {
+  stopRef: string | null;
+  placeId: string;
+  pickupType: 0 | 1 | 2 | 3;
+  dropOffType: 0 | 1 | 2 | 3;
+}
+
+export interface JourneyPattern {
+  kind: "pattern";
+  patternId: string;
+  terminalId: string;
+  stops: JourneyStop[];
+}
+
+export type JourneyRow = JourneyPlace | JourneyTerminal | JourneyPattern;
+
+export interface ServiceJourneyDocument {
+  schemaVersion: 1;
+  revision: string;
+  serviceId: string;
+  groupId: string;
+  lineMode: TransportMode;
+  routing: ServiceRouting;
+  terminalPlaceId: string | null;
+}
+
+export interface JourneyGroupIndex {
+  schemaVersion: 1;
+  revision: string;
+  groupId: string;
+  lineMode: TransportMode;
+  lineRef: string;
+  pageCount: number;
+  rowCount: number;
+  patternCount: number;
+}
+
+export interface JourneyGroupPage {
+  schemaVersion: 1;
+  revision: string;
+  groupId: string;
+  page: number;
+  nextPage: number | null;
+  rows: JourneyRow[];
+}
+
+export interface JourneyPatternGroup {
+  revision: string;
+  groupId: string;
+  lineMode: TransportMode;
+  lineRef: string;
+  places: JourneyPlace[];
+  terminals: JourneyTerminal[];
+  patterns: JourneyPattern[];
+}
+
+export interface JourneyEvidence {
+  refs: string[];
+  labels: string[];
+}
+
+export interface DepartureContext {
+  arrivalPlaceId: string;
+  patterns: JourneyPatternGroup | null;
+}
+
+export type PhoneFavorite = Favorite & {
+  routing?: ServiceRouting;
+  // Required own field. A plc_ string is the chosen arrival place; null keeps
+  // an older favorite visible while its arrival is not resolved yet. Never
+  // part of the Favorite projection transferred to the watch.
+  arrivalPlaceId: string | null;
+};
 
 export interface Departure {
   expectedAt: number;
   aimedAt?: number;
   minutes: number;
   status: DepartureStatus;
+  // Required; a missing field is invalid, never read as false.
+  journeyUncertain: boolean;
   nextIntervalMinutes?: number;
 }
 
@@ -364,7 +458,7 @@ const encoder = new TextEncoder();
 const UINT32_MAX = 0xffff_ffff;
 const domainKeys = {
   favorite: ["schemaVersion", "id", "serviceId", "displayName", "stopLabel", "lineLabel", "destinationLabel", "lineMode", "lineColor", "lineTextColor", "sortOrder"],
-  departure: ["expectedAt", "aimedAt", "minutes", "status", "nextIntervalMinutes"],
+  departure: ["expectedAt", "aimedAt", "minutes", "status", "journeyUncertain", "nextIntervalMinutes"],
   result: ["schemaVersion", "requestId", "favoriteId", "fetchedAt", "sourceUpdatedAt", "freshness", "departures"],
   departureSnapshot: ["fetchedAt", "sourceUpdatedAt", "freshness", "departures"],
   overviewRequestItem: ["favoriteId", "serviceId"],
@@ -390,8 +484,11 @@ const domainKeys = {
   serviceOptionsResult: ["schemaVersion", "placeId", "services"],
   catalogError: ["schemaVersion", "code"],
 } as const;
-const phoneFavoriteKeys = [...domainKeys.favorite, "routing"];
+const phoneFavoriteKeys = [...domainKeys.favorite, "routing", "arrivalPlaceId"];
 const serviceRoutingKeys = ["monitoringRef", "lineRef", "destinationRef"];
+// Journey place identity: "plc_" plus 43 base64url characters, computed only
+// by the catalog. Clients check the shape without a cryptographic dependency.
+const PLACE_ID = /^plc_[A-Za-z0-9_-]{43}$/;
 
 function object(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -477,6 +574,11 @@ export function isServiceRouting(value: unknown): value is ServiceRouting {
 export function isPhoneFavorite(value: unknown): value is PhoneFavorite {
   return object(value)
     && exactKeys(value, phoneFavoriteKeys)
+    && Object.hasOwn(value, "arrivalPlaceId")
+    && (value.arrivalPlaceId === null
+      || (typeof value.arrivalPlaceId === "string"
+        && value.arrivalPlaceId.length === 47
+        && PLACE_ID.test(value.arrivalPlaceId)))
     && hasFavorite(value)
     && (!Object.hasOwn(value, "routing") || isServiceRouting(value.routing));
 }
@@ -490,6 +592,7 @@ export function isDeparture(value: unknown): value is Departure {
     && Number(value.minutes) >= -1_440
     && Number(value.minutes) <= 1_440
     && DEPARTURE_STATUS.includes(value.status as DepartureStatus)
+    && typeof value.journeyUncertain === "boolean"
     && (value.nextIntervalMinutes === undefined
       || (Number.isInteger(value.nextIntervalMinutes) && Number(value.nextIntervalMinutes) >= 0 && Number(value.nextIntervalMinutes) <= 1_440));
 }
@@ -826,7 +929,7 @@ function displayDeparture(record: unknown, maximum: number): boolean {
   if (flags > 3 || count > maximum || (!(flags & 1) && count !== 0)
       || record.length !== 23 + 9 * count || parseInt(record[10]!, 16) > 3
       || parseInt(record.slice(11, 13), 16) > 7 || parseInt(record[13]!, 16) > 3) return false;
-  for (let i = 0; i < count; i++) if (parseInt(record[31 + 9 * i]!, 16) > 3) return false;
+  for (let i = 0; i < count; i++) if (parseInt(record[31 + 9 * i]!, 16) > 7) return false;
   return true;
 }
 

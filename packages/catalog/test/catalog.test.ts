@@ -94,10 +94,10 @@ const BASE_SERVICES: readonly ServiceSeed[] = [
     stopLabel: "République",
     lineLabel: "96",
     destinationLabel: "Porte des Lilas",
-    monitoringRef: "raw-monitoring-bus-east",
-    lineRef: "raw-line-bus-96",
+    monitoringRef: "STIF:StopPoint:Q:raw-monitoring-bus-east:",
+    lineRef: "STIF:Line::raw-line-bus-96:",
     directionId: "east",
-    destinationRef: "terminal-bus-east",
+    destinationRef: "STIF:StopPoint:Q:terminal-bus-east:",
   },
   {
     key: "metro-south",
@@ -106,10 +106,10 @@ const BASE_SERVICES: readonly ServiceSeed[] = [
     stopLabel: "Châtelet",
     lineLabel: "4",
     destinationLabel: "Bagneux – Lucie Aubrac",
-    monitoringRef: "raw-monitoring-metro-south",
-    lineRef: "raw-line-metro-4",
+    monitoringRef: "STIF:StopPoint:Q:raw-monitoring-metro-south:",
+    lineRef: "STIF:Line::raw-line-metro-4:",
     directionId: "south",
-    destinationRef: "terminal-metro-south",
+    destinationRef: "STIF:StopPoint:Q:terminal-metro-south:",
   },
   {
     key: "tram-west",
@@ -118,10 +118,10 @@ const BASE_SERVICES: readonly ServiceSeed[] = [
     stopLabel: "Porte de Versailles",
     lineLabel: "T2",
     destinationLabel: "Porte de Versailles",
-    monitoringRef: "raw-monitoring-tram-west",
-    lineRef: "raw-line-tram-t2",
+    monitoringRef: "STIF:StopPoint:Q:raw-monitoring-tram-west:",
+    lineRef: "STIF:Line::raw-line-tram-t2:",
     directionId: "west",
-    destinationRef: "terminal-tram-west",
+    destinationRef: "STIF:StopPoint:Q:terminal-tram-west:",
   },
   {
     key: "rer-north",
@@ -130,10 +130,10 @@ const BASE_SERVICES: readonly ServiceSeed[] = [
     stopLabel: "Châtelet – Les Halles",
     lineLabel: "B",
     destinationLabel: "Aéroport Charles de Gaulle 2",
-    monitoringRef: "raw-shared-rer-station",
-    lineRef: "raw-line-rer-b",
+    monitoringRef: "STIF:StopArea:SP:raw-shared-rer-station:",
+    lineRef: "STIF:Line::raw-line-rer-b:",
     directionId: "north",
-    destinationRef: "terminal-rer-north",
+    destinationRef: "STIF:StopArea:SP:terminal-rer-north:",
   },
   {
     key: "train-west",
@@ -142,10 +142,10 @@ const BASE_SERVICES: readonly ServiceSeed[] = [
     stopLabel: "Saint-Lazare",
     lineLabel: "L",
     destinationLabel: "Versailles Rive Droite",
-    monitoringRef: "raw-monitoring-train-west",
-    lineRef: "raw-line-train-l",
+    monitoringRef: "STIF:StopArea:SP:raw-monitoring-train-west:",
+    lineRef: "STIF:Line::raw-line-train-l:",
     directionId: "west",
-    destinationRef: "terminal-train-west",
+    destinationRef: "STIF:StopArea:SP:terminal-train-west:",
   },
 ];
 
@@ -218,12 +218,19 @@ function buildCatalog(seed: CatalogSeed = {}): BuiltCatalog {
       destination_ref TEXT NOT NULL,
       canonical_tuple TEXT NOT NULL UNIQUE
     );
+    CREATE TABLE journey_groups(group_id TEXT PRIMARY KEY, line_mode TEXT NOT NULL, line_ref TEXT NOT NULL,
+      UNIQUE(line_mode,line_ref)) STRICT;
+    CREATE TABLE journey_rows(group_id TEXT NOT NULL REFERENCES journey_groups(group_id),
+      row_kind TEXT NOT NULL CHECK(row_kind IN ('place','terminal','pattern')), row_id TEXT NOT NULL, row_json TEXT NOT NULL,
+      PRIMARY KEY(group_id,row_kind,row_id)) STRICT;
+    CREATE TABLE service_journeys(service_id TEXT PRIMARY KEY REFERENCES services(service_id),
+      group_id TEXT NOT NULL REFERENCES journey_groups(group_id), terminal_place_id TEXT) STRICT;
     CREATE VIRTUAL TABLE place_search USING fts5(search_text, place_id UNINDEXED);
   `);
 
   const metadata = database.prepare("INSERT INTO metadata(key, value) VALUES (?, ?)");
   metadata.run("schema_version", "1");
-  metadata.run("catalog_version", seed.catalogVersion ?? "3");
+  metadata.run("catalog_version", seed.catalogVersion ?? "4");
   metadata.run("source_revision", seed.revision ?? "fixture-revision-a");
   metadata.run("created_at", "2026-08-30T12:00:00.000Z");
 
@@ -288,6 +295,23 @@ function buildCatalog(seed: CatalogSeed = {}): BuiltCatalog {
       service.destinationRef,
       identity.canonical,
     );
+    const groupId = "grp_" + createHash("sha256").update(JSON.stringify([service.mode, service.lineRef])).digest("base64url");
+    const terminalId = "term_" + createHash("sha256").update(service.destinationRef).digest("base64url");
+    const terminalPlaceId = "plc_" + createHash("sha256").update(service.destinationRef).digest("base64url");
+    const patternId = "pat_" + createHash("sha256").update(identity.id).digest("base64url");
+    database.prepare("INSERT OR IGNORE INTO journey_groups VALUES (?, ?, ?)").run(groupId, service.mode, service.lineRef);
+    for (const [kind, id, value] of [
+      ["place", placeIds[service.placeKey], { kind: "place", placeId: placeIds[service.placeKey], label: service.stopLabel }],
+      ["place", terminalPlaceId, { kind: "place", placeId: terminalPlaceId, label: service.destinationLabel }],
+      ["terminal", terminalId, { kind: "terminal", terminalId, terminalPlaceId, refs: [service.destinationRef], labels: [service.destinationLabel] }],
+      ["pattern", patternId, { kind: "pattern", patternId, terminalId, stops: [
+        { stopRef: service.monitoringRef, placeId: placeIds[service.placeKey], pickupType: 0, dropOffType: 0 },
+        { stopRef: service.destinationRef, placeId: terminalPlaceId, pickupType: 1, dropOffType: 0 },
+      ] }],
+    ] as const) {
+      database.prepare("INSERT OR IGNORE INTO journey_rows VALUES (?, ?, ?, ?)").run(groupId, kind, id!, JSON.stringify(value));
+    }
+    database.prepare("INSERT INTO service_journeys VALUES (?, ?, ?)").run(identity.id, groupId, terminalPlaceId);
   }
   database.close();
   return { path, placeIds, serviceIds };
@@ -350,10 +374,10 @@ test("search preserves homonyms and applies deterministic ranking before the 20-
     stopLabel: place.stopLabel,
     lineLabel: `X${index}`,
     destinationLabel: "Terminus",
-    monitoringRef: `raw-monitoring-extra-${index}`,
-    lineRef: `raw-line-extra-${index}`,
+    monitoringRef: `STIF:StopPoint:Q:raw-monitoring-extra-${index}:`,
+    lineRef: `STIF:Line::raw-line-extra-${index}:`,
     directionId: "outbound",
-    destinationRef: `terminal-extra-${index}`,
+    destinationRef: `STIF:StopPoint:Q:terminal-extra-${index}:`,
   }));
   const catalog = buildCatalog({ places: [...homonyms, ...rankedPlaces], services });
   const reader = SqliteCatalogReader.open(catalog.path);
@@ -382,10 +406,10 @@ test("search deduplicates destinations by native line and keeps equal labels and
     localityLabel: "Saint-Denis",
   }));
   const busLines = [
-    { lineRef: "native-10", lineLabel: "10", lineColor: "#333333" },
-    { lineRef: "native-2-b", lineLabel: "2", lineColor: "#222222" },
-    { lineRef: "native-2-c", lineLabel: "2", lineColor: "#111111" },
-    { lineRef: "native-2-a", lineLabel: "2", lineColor: "#111111" },
+    { lineRef: "STIF:Line::native-10:", lineLabel: "10", lineColor: "#333333" },
+    { lineRef: "STIF:Line::native-2-b:", lineLabel: "2", lineColor: "#222222" },
+    { lineRef: "STIF:Line::native-2-c:", lineLabel: "2", lineColor: "#111111" },
+    { lineRef: "STIF:Line::native-2-a:", lineLabel: "2", lineColor: "#111111" },
   ];
   const services: ServiceSeed[] = busLines.flatMap((line, index) => [0, 1].map((direction) => ({
     ...line,
@@ -395,9 +419,9 @@ test("search deduplicates destinations by native line and keeps equal labels and
     stopLabel: "Saint-Denis Université",
     lineTextColor: "#ffffff",
     destinationLabel: `Terminus ${direction}`,
-    monitoringRef: `university-bus-${direction}`,
+    monitoringRef: `STIF:StopPoint:Q:university-bus-${direction}:`,
     directionId: String(direction),
-    destinationRef: `university-terminal-${direction}`,
+    destinationRef: `STIF:StopPoint:Q:university-terminal-${direction}:`,
   })));
   services.push({
     key: "university-metro",
@@ -408,10 +432,10 @@ test("search deduplicates destinations by native line and keeps equal labels and
     lineColor: "#82c8e6",
     lineTextColor: "#000000",
     destinationLabel: "Châtillon Montrouge",
-    monitoringRef: "university-metro",
-    lineRef: "native-metro-13",
+    monitoringRef: "STIF:StopPoint:Q:university-metro:",
+    lineRef: "STIF:Line::native-metro-13:",
     directionId: "0",
-    destinationRef: "metro-terminal",
+    destinationRef: "STIF:StopPoint:Q:metro-terminal:",
   });
   const catalog = buildCatalog({ places, services });
   const matches = SqliteCatalogReader.open(catalog.path).searchPlaces("universite");
@@ -434,7 +458,7 @@ test("search rejects conflicting display metadata for one native line", () => {
       ...BASE_SERVICES[0]!,
       key: "bus-other-destination",
       destinationLabel: "Other terminus",
-      destinationRef: "terminal-bus-other",
+      destinationRef: "STIF:StopPoint:Q:terminal-bus-other:",
       lineColor: "#654321",
     }],
   });
@@ -449,10 +473,10 @@ test("service options return every valid direction without applying the place-se
     stopLabel: "République",
     lineLabel: `X${String(index).padStart(2, "0")}`,
     destinationLabel: `Terminus ${index}`,
-    monitoringRef: `raw-monitoring-bus-option-${index}`,
-    lineRef: `raw-line-bus-option-${index}`,
+    monitoringRef: `STIF:StopPoint:Q:raw-monitoring-bus-option-${index}:`,
+    lineRef: `STIF:Line::raw-line-bus-option-${index}:`,
     directionId: `direction-${index}`,
-    destinationRef: `terminal-bus-option-${index}`,
+    destinationRef: `STIF:StopPoint:Q:terminal-bus-option-${index}:`,
   }));
   const catalog = buildCatalog({ services: extraServices });
   const reader = SqliteCatalogReader.open(catalog.path);
@@ -472,10 +496,10 @@ test("reload preserves stable IDs, distinguishes directions, rejects invalid can
     stopLabel: "Châtelet – Les Halles",
     lineLabel: "B",
     destinationLabel: "Saint-Rémy-lès-Chevreuse",
-    monitoringRef: "raw-shared-rer-station",
-    lineRef: "raw-line-rer-b",
+    monitoringRef: "STIF:StopArea:SP:raw-shared-rer-station:",
+    lineRef: "STIF:Line::raw-line-rer-b:",
     directionId: "south",
-    destinationRef: "terminal-rer-south",
+    destinationRef: "STIF:StopArea:SP:terminal-rer-south:",
   };
   const first = buildCatalog({ services: [southbound] });
   const manager = new CatalogManager();
@@ -488,16 +512,16 @@ test("reload preserves stable IDs, distinguishes directions, rejects invalid can
   assert.notEqual(northId, southId);
   assert.deepEqual(manager.resolveService(northId), {
     status: "RESOLVED",
-    monitoringRef: "raw-shared-rer-station",
-    lineRef: "raw-line-rer-b",
-    destinationRef: "terminal-rer-north",
+    monitoringRef: "STIF:StopArea:SP:raw-shared-rer-station:",
+    lineRef: "STIF:Line::raw-line-rer-b:",
+    destinationRef: "STIF:StopArea:SP:terminal-rer-north:",
     destinationLabel: "Aéroport Charles de Gaulle 2",
   });
   assert.deepEqual(manager.resolveService(southId), {
     status: "RESOLVED",
-    monitoringRef: "raw-shared-rer-station",
-    lineRef: "raw-line-rer-b",
-    destinationRef: "terminal-rer-south",
+    monitoringRef: "STIF:StopArea:SP:raw-shared-rer-station:",
+    lineRef: "STIF:Line::raw-line-rer-b:",
+    destinationRef: "STIF:StopArea:SP:terminal-rer-south:",
     destinationLabel: "Saint-Rémy-lès-Chevreuse",
   });
 
@@ -519,9 +543,9 @@ test("reload preserves stable IDs, distinguishes directions, rejects invalid can
   assert.equal(replacement.serviceIds["rer-north"], northId);
   assert.deepEqual(manager.resolveService(northId), {
     status: "RESOLVED",
-    monitoringRef: "raw-shared-rer-station",
-    lineRef: "raw-line-rer-b",
-    destinationRef: "terminal-rer-north",
+    monitoringRef: "STIF:StopArea:SP:raw-shared-rer-station:",
+    lineRef: "STIF:Line::raw-line-rer-b:",
+    destinationRef: "STIF:StopArea:SP:terminal-rer-north:",
     destinationLabel: "Aéroport CDG 2",
   });
   assert.deepEqual(
@@ -538,9 +562,9 @@ test("reload preserves stable IDs, distinguishes directions, rejects invalid can
     lineColor: "#123456",
     lineTextColor: "#ffffff",
     routing: {
-      monitoringRef: "raw-monitoring-metro-south",
-      lineRef: "raw-line-metro-4",
-      destinationRef: "terminal-metro-south",
+      monitoringRef: "STIF:StopPoint:Q:raw-monitoring-metro-south:",
+      lineRef: "STIF:Line::raw-line-metro-4:",
+      destinationRef: "STIF:StopPoint:Q:terminal-metro-south:",
     },
   });
 });
@@ -556,4 +580,21 @@ test("candidate validation rejects non-normalized presentation colors", () => {
     services: [{ ...BASE_SERVICES.find((service) => service.key === "metro-south")!, lineColor: "#ABCDEF" }],
   });
   assert.throws(() => SqliteCatalogReader.open(invalid.path), /service data/u);
+});
+
+test("reader rejects incomplete journey bindings and malformed linked pattern rows", () => {
+  for (const mutation of [
+    "DELETE FROM service_journeys WHERE service_id = (SELECT service_id FROM service_journeys LIMIT 1)",
+    "UPDATE service_journeys SET terminal_place_id = 'plc_' || replace(hex(zeroblob(22)), '0', 'x')",
+    "UPDATE journey_rows SET row_json = json_set(row_json, '$.stops[0].dropOffType', 4) WHERE row_kind = 'pattern'",
+    "UPDATE journey_rows SET row_json = json_set(row_json, '$.stops[0].placeId', 'plc_' || substr(hex(zeroblob(22)), 1, 43)) WHERE row_kind = 'pattern'",
+    "UPDATE journey_rows SET row_json = json_set(row_json, '$.unexpected', 1) WHERE row_kind = 'terminal'",
+    "DELETE FROM journey_rows WHERE row_kind = 'terminal'",
+  ]) {
+    const catalog = buildCatalog();
+    const database = new DatabaseSync(catalog.path);
+    database.exec(mutation);
+    database.close();
+    assert.throws(() => SqliteCatalogReader.open(catalog.path), /Invalid catalog candidate/u);
+  }
 });

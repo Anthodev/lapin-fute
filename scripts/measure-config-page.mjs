@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 const BUDGET_BYTES = 200 * 1024;
 const assets = [
   "../packages/config-page/src/config-core.js",
+  "../packages/config-page/src/generated/journey-patterns.js",
   "../packages/config-page/src/catalog-client.js",
   "../packages/config-page/src/preview-fixture.js",
   "../packages/config-page/src/line-badge-assets.js",

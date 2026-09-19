@@ -3,7 +3,15 @@ import {
   SCHEMA_VERSION,
   isPlaceSearchItem,
   isServiceOption,
+  isServiceRouting,
 } from "./config-core.js";
+import {
+  JOURNEY_LIMITS,
+  isServiceJourneyDocument,
+  isJourneyGroupIndex,
+  isJourneyGroupPage,
+  validateJourneyGroup,
+} from "./generated/journey-patterns.js";
 import {
   catalogSearchBucket,
   normalizeCatalogSearchQuery,
@@ -116,7 +124,7 @@ export function createCatalogClient({
   let searchController = null;
   let manifest = null;
 
-  async function json(path, signal, missingCode = "BACKEND_UNAVAILABLE", fresh = false) {
+  async function fetchText(path, signal, missingCode = "BACKEND_UNAVAILABLE", fresh = false) {
     if (signal?.aborted) throw abortError();
     try {
       const response = await fetchImpl(`catalog/${path}`, {
@@ -151,7 +159,7 @@ export function createCatalogClient({
           parts.push(decoder.decode(next.value, { stream: true }));
         }
         parts.push(decoder.decode());
-        return JSON.parse(parts.join(""));
+        return { text: parts.join(""), bytes };
       } finally {
         if (!finished) await reader.cancel();
         reader.releaseLock();
@@ -159,6 +167,16 @@ export function createCatalogClient({
     } catch (error) {
       if (signal?.aborted || error?.name === "AbortError") throw abortError();
       throw error instanceof CatalogClientError ? error : new CatalogClientError("BACKEND_UNAVAILABLE");
+    }
+  }
+
+  async function json(path, signal, missingCode, fresh) {
+    const fetched = await fetchText(path, signal, missingCode, fresh);
+    if (fetched === null) return null;
+    try {
+      return JSON.parse(fetched.text);
+    } catch {
+      throw new CatalogClientError("BACKEND_UNAVAILABLE");
     }
   }
 
@@ -287,5 +305,118 @@ export function createCatalogClient({
     return body.service;
   }
 
-  return { cancelSearch, searchPlaces, listServices, lookupService };
+  // One in-flight load per pinned revision and group: concurrent lookups for
+  // services of the same line share the index and every page transfer. The
+  // flight lives only until it settles — no group is retained between lookups,
+  // there is no retry and no manifest refresh. A subscriber abort never touches
+  // the shared load while other subscribers remain; the last one cancels it.
+  const groupFlights = new Map();
+
+  async function loadGroup(revision, groupId, signal) {
+    const base = `${revision}/journeys/groups/${groupId}`;
+    const fetchedIndex = await fetchText(`${base}/index.json`, signal, null);
+    if (fetchedIndex === null) return null;
+    let index;
+    try {
+      index = JSON.parse(fetchedIndex.text);
+    } catch {
+      return null;
+    }
+    if (!isJourneyGroupIndex(index)
+        || index.revision !== revision || index.groupId !== groupId) return null;
+    const pages = [];
+    try {
+      let bytes = fetchedIndex.bytes;
+      for (let page = 0; page < index.pageCount; page += 1) {
+        const fetched = await fetchText(`${base}/${page}.json`, signal, null);
+        if (fetched === null) return null;
+        // Count original response bytes, including index whitespace that
+        // canonical validation cannot recover from parsed documents.
+        bytes += fetched.bytes;
+        if (bytes > JOURNEY_LIMITS.groupBytes) return null;
+        let body;
+        try {
+          body = JSON.parse(fetched.text);
+        } catch {
+          return null;
+        }
+        if (!isJourneyGroupPage(body) || body.page !== page
+            || body.revision !== revision || body.groupId !== groupId) return null;
+        pages.push(body);
+      }
+      return validateJourneyGroup(index, pages);
+    } finally {
+      pages.length = 0;
+    }
+  }
+
+  function settleJourneyFlight(key, flight, outcome) {
+    flight.settled = true;
+    if (groupFlights.get(key) === flight) groupFlights.delete(key);
+    return outcome;
+  }
+
+  function journeyFlight(revision, groupId) {
+    const key = `${revision}:${groupId}`;
+    const existing = groupFlights.get(key);
+    if (existing !== undefined) return existing;
+    const flight = { key, controller: new AbortController(), subscribers: new Set(), settled: false };
+    flight.promise = loadGroup(revision, groupId, flight.controller.signal).then(
+      (group) => settleJourneyFlight(key, flight, { ok: group !== null, group: group ?? null }),
+      () => settleJourneyFlight(key, flight, { ok: false, group: null }),
+    );
+    groupFlights.set(key, flight);
+    return flight;
+  }
+
+  async function lookupJourney(serviceId, routing, signal) {
+    if (typeof serviceId !== "string" || !SERVICE_ID.test(serviceId)
+        || !isServiceRouting(routing)) throw new CatalogClientError("INVALID_SERVICE");
+    if (signal?.aborted) throw abortError();
+    const pinned = await pinnedManifest(signal);
+    let annex;
+    try {
+      annex = await json(`${pinned.revision}/journeys/services/${serviceId}.json`, signal, null);
+    } catch (error) {
+      if (signal?.aborted || error?.name === "AbortError") throw abortError();
+      return null;
+    }
+    if (annex === null || !isServiceJourneyDocument(annex)
+        || annex.revision !== pinned.revision || annex.serviceId !== serviceId
+        || annex.routing.monitoringRef !== routing.monitoringRef
+        || annex.routing.lineRef !== routing.lineRef
+        || annex.routing.destinationRef !== routing.destinationRef) return null;
+    if (signal?.aborted) throw abortError();
+    const flight = journeyFlight(pinned.revision, annex.groupId);
+    const subscriber = {};
+    flight.subscribers.add(subscriber);
+    const leave = () => {
+      flight.subscribers.delete(subscriber);
+      if (!flight.settled && flight.subscribers.size === 0) {
+        if (groupFlights.get(flight.key) === flight) groupFlights.delete(flight.key);
+        flight.controller.abort();
+      }
+    };
+    return new Promise((resolve, reject) => {
+      const onAbort = () => {
+        leave();
+        reject(abortError());
+      };
+      if (signal !== undefined && signal.aborted) {
+        onAbort();
+        return;
+      }
+      signal?.addEventListener("abort", onAbort, { once: true });
+      flight.promise.then((outcome) => {
+        signal?.removeEventListener("abort", onAbort);
+        leave();
+        if (signal !== undefined && signal.aborted) return;
+        const group = outcome.ok && outcome.group.lineMode === annex.lineMode
+          && outcome.group.lineRef === annex.routing.lineRef ? outcome.group : null;
+        resolve({ service: annex, group });
+      });
+    });
+  }
+
+  return { cancelSearch, searchPlaces, listServices, lookupService, lookupJourney };
 }

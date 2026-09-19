@@ -1,4 +1,6 @@
 import { DatabaseSync, type StatementSync } from "node:sqlite";
+import journeyPatterns from "../../companion/src/journey-patterns.js";
+import type { JourneyRow, JourneyGroupPage } from "../../contracts/src/index.ts";
 import {
   LIMITS,
   TRANSPORT_MODE,
@@ -84,7 +86,7 @@ interface ExpectedColumn {
 const CLOSE_READER = Symbol("closeCatalogReader");
 const OPAQUE_ID_BYTES = 47;
 const CATALOG_SCHEMA_VERSION = "1";
-const CATALOG_FORMAT_VERSION = "3";
+const CATALOG_FORMAT_VERSION = "4";
 const REQUIRED_METADATA = [
   "schema_version",
   "catalog_version",
@@ -95,6 +97,9 @@ const EXPECTED_TABLES: Readonly<Record<string, true>> = {
   metadata: true,
   places: true,
   services: true,
+  journey_groups: true,
+  journey_rows: true,
+  service_journeys: true,
   place_search: true,
   place_search_data: true,
   place_search_idx: true,
@@ -127,6 +132,22 @@ const TABLE_COLUMNS: Readonly<Record<string, readonly ExpectedColumn[]>> = {
     { name: "direction_id", type: "TEXT", notNull: true },
     { name: "destination_ref", type: "TEXT", notNull: true },
     { name: "canonical_tuple", type: "TEXT", notNull: true },
+  ],
+  journey_groups: [
+    { name: "group_id", type: "TEXT", primaryKey: 1 },
+    { name: "line_mode", type: "TEXT", notNull: true },
+    { name: "line_ref", type: "TEXT", notNull: true },
+  ],
+  journey_rows: [
+    { name: "group_id", type: "TEXT", notNull: true, primaryKey: 1 },
+    { name: "row_kind", type: "TEXT", notNull: true, primaryKey: 2 },
+    { name: "row_id", type: "TEXT", notNull: true, primaryKey: 3 },
+    { name: "row_json", type: "TEXT", notNull: true },
+  ],
+  service_journeys: [
+    { name: "service_id", type: "TEXT", primaryKey: 1 },
+    { name: "group_id", type: "TEXT", notNull: true },
+    { name: "terminal_place_id", type: "TEXT" },
   ],
   place_search: [
     { name: "search_text", type: "" },
@@ -428,6 +449,108 @@ function validateCandidate(database: DatabaseSync): void {
   validateSchema(database);
   validateMetadata(database);
   validateData(database);
+  validateJourneyCatalog(database);
+}
+
+export function validateJourneyCatalog(database: DatabaseSync): void {
+  const limits = journeyPatterns.JOURNEY_LIMITS;
+  const revision = "0".repeat(64);
+  for (const table of ["journey_groups", "journey_rows", "service_journeys"]) {
+    const definition = row<{ strict: number }>(database.prepare("SELECT strict FROM pragma_table_list WHERE name = ?"), table);
+    if (definition?.strict !== 1) invalidCandidate(`${table} must be STRICT`);
+    const columns = rows<ColumnRow>(database.prepare('SELECT cid, name, type, "notnull" AS "notNull", pk AS "primaryKey" FROM pragma_table_info(?) ORDER BY cid'), table);
+    const expected = TABLE_COLUMNS[table]!;
+    if (columns.length !== expected.length || columns.some((column, index) => {
+      const wanted = expected[index]!;
+      return column.name !== wanted.name || column.type !== wanted.type
+        || (wanted.notNull === true && column.notNull !== 1)
+        || column.primaryKey !== (wanted.primaryKey ?? 0);
+    })) invalidCandidate(`${table} columns`);
+  }
+  const expectedForeignKeys: Record<string, string[]> = {
+    journey_groups: [],
+    journey_rows: ["group_id:journey_groups:group_id"],
+    service_journeys: ["group_id:journey_groups:group_id", "service_id:services:service_id"],
+  };
+  for (const [table, expected] of Object.entries(expectedForeignKeys)) {
+    const actual = rows<{ source: string; target: string; column: string }>(database.prepare(
+      'SELECT "from" AS source, "table" AS target, "to" AS column FROM pragma_foreign_key_list(?)'), table)
+      .map((key) => `${key.source}:${key.target}:${key.column}`).sort();
+    if (JSON.stringify(actual) !== JSON.stringify(expected)) invalidCandidate(`${table} foreign keys`);
+  }
+  if (database.prepare(`
+    SELECT 1 FROM pragma_index_list('journey_groups') AS indexes
+    WHERE indexes."unique" = 1 AND
+      (SELECT group_concat(name, ',') FROM pragma_index_info(indexes.name)) = 'line_mode,line_ref'
+  `).get() === undefined) invalidCandidate("journey group uniqueness");
+  if (database.prepare(`
+    SELECT 1 FROM services LEFT JOIN service_journeys USING(service_id)
+    WHERE service_journeys.service_id IS NULL LIMIT 1
+  `).get() !== undefined) invalidCandidate("missing service journey");
+  const rowDefinition = row<{ sql: string }>(database.prepare("SELECT sql FROM sqlite_schema WHERE name = 'journey_rows'"))?.sql;
+  if (typeof rowDefinition !== "string"
+    || !/CHECK\s*\(\s*row_kind\s+IN\s*\(\s*'place'\s*,\s*'terminal'\s*,\s*'pattern'\s*\)\s*\)/iu.test(rowDefinition)) {
+    invalidCandidate("journey row kind constraint");
+  }
+  if (database.prepare("PRAGMA foreign_key_check").get() !== undefined) invalidCandidate("journey foreign key integrity");
+  const selectRows = database.prepare(`SELECT row_kind, row_id, row_json FROM journey_rows WHERE group_id = ?
+    ORDER BY CASE row_kind WHEN 'place' THEN 0 WHEN 'terminal' THEN 1 ELSE 2 END, row_id`);
+  for (const entry of database.prepare("SELECT * FROM journey_groups ORDER BY group_id").iterate() as Iterable<{
+    group_id: string; line_mode: TransportMode; line_ref: string;
+  }>) {
+    const pages: JourneyGroupPage[] = [];
+    let page: JourneyGroupPage = { schemaVersion: 1, revision, groupId: entry.group_id, page: 0, nextPage: 1, rows: [] };
+    let pageBytes = Buffer.byteLength(JSON.stringify(page));
+    let rowCount = 0;
+    let patternCount = 0;
+    let totalBytes = 0;
+    for (const stored of selectRows.iterate(entry.group_id) as Iterable<{ row_kind: string; row_id: string; row_json: string }>) {
+      if (Buffer.byteLength(stored.row_json) > limits.documentBytes) invalidCandidate(`journey row too large in ${entry.group_id}`);
+      let value: JourneyRow;
+      try { value = JSON.parse(stored.row_json) as JourneyRow; } catch { invalidCandidate("journey row JSON"); }
+      if (value === null || typeof value !== "object" || value.kind !== stored.row_kind
+        || (value.kind === "place" ? value.placeId : value.kind === "terminal" ? value.terminalId : value.patternId) !== stored.row_id) {
+        invalidCandidate("journey row identity");
+      }
+      const bytes = Buffer.byteLength(JSON.stringify(value));
+      if (page.rows.length > 0 && pageBytes + bytes + 1 > limits.documentBytes - 3) {
+        pages.push(page);
+        page = { schemaVersion: 1, revision, groupId: entry.group_id, page: pages.length, nextPage: pages.length + 1, rows: [] };
+        pageBytes = Buffer.byteLength(JSON.stringify(page));
+      }
+      pageBytes += bytes + (page.rows.length > 0 ? 1 : 0);
+      page.rows.push(value);
+      totalBytes += bytes;
+      rowCount += 1;
+      if (value.kind === "pattern") patternCount += 1;
+      if (pages.length >= limits.pages || totalBytes > limits.groupBytes
+        || rowCount > limits.places + limits.terminals + limits.patterns) invalidCandidate(`journey group too large: ${entry.group_id}`);
+    }
+    page.nextPage = null;
+    pages.push(page);
+    const index = { schemaVersion: 1, revision, groupId: entry.group_id, lineMode: entry.line_mode,
+      lineRef: entry.line_ref, pageCount: pages.length, rowCount, patternCount };
+    const group = journeyPatterns.validateJourneyGroup(index, pages);
+    if (group === null) invalidCandidate(`invalid journey group ${entry.group_id}`);
+    const terminalPlaces = new Set(group.terminals.map((terminal: { terminalPlaceId: string }) => terminal.terminalPlaceId));
+    let services = 0;
+    for (const service of database.prepare(`
+      SELECT annex.*, services.monitoring_ref, services.line_ref, services.destination_ref, places.mode
+      FROM service_journeys AS annex JOIN services USING(service_id)
+      JOIN places ON places.place_id = services.place_id WHERE annex.group_id = ?
+    `).iterate(entry.group_id) as Iterable<{
+      service_id: string; terminal_place_id: string | null; monitoring_ref: string; line_ref: string; destination_ref: string; mode: string;
+    }>) {
+      const document = { schemaVersion: 1, revision, groupId: entry.group_id, serviceId: service.service_id,
+        lineMode: entry.line_mode, routing: { monitoringRef: service.monitoring_ref, lineRef: service.line_ref,
+          destinationRef: service.destination_ref }, terminalPlaceId: service.terminal_place_id };
+      if (service.mode !== entry.line_mode || service.line_ref !== entry.line_ref
+        || !journeyPatterns.isServiceJourneyDocument(document)
+        || (service.terminal_place_id !== null && !terminalPlaces.has(service.terminal_place_id))) invalidCandidate("service journey binding");
+      services += 1;
+    }
+    if (services === 0) invalidCandidate("journey group without service");
+  }
 }
 
 function normalizedMatchQuery(query: string): string {

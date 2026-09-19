@@ -12,7 +12,7 @@
               "MonitoredVehicleJourney": {
                 "LineRef": { "value": "IDFM:C2001" },
                 "DirectionRef": { "value": "IDFM:2001D" },
-                "DestinationRef": { "value": "IDFM:2001DST" },
+                "DestinationRef": { "value": "STIF:StopPoint:Q:2001DST:" },
                 "MonitoredCall": {
                   "ExpectedDepartureTime": "2026-01-15T08:37:00Z",
                   "AimedDepartureTime": "2026-01-15T08:33:00Z",

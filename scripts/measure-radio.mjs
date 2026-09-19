@@ -67,7 +67,7 @@ const trafficRequest = base(MESSAGE_TYPE.TRAFFIC_REQUEST, { FAVORITE_ID: favorit
 
 function departure(count) {
   return "03ffffffff3073ffffffff" + layout.fixed(count, 1)
-    + Array.from({ length: count }, (_, index) => "ffffffff" + layout.fixed(index, 1)).join("");
+    + Array.from({ length: count }, (_, index) => "ffffffff" + layout.fixed(index | 4, 1)).join("");
 }
 function transfer(kind, records) {
   const context = { requestId, generation, kind };

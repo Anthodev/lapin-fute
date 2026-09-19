@@ -17,6 +17,47 @@
     { "id": "fixture-2026-08-b", "preservedTripId": "trip-bus-preserved", "removedTripId": "trip-metro-west" },
     { "id": "fixture-invalid-no-transilien", "invalidReason": "No exact TRANSILIEN perimeter pair; five-mode validation rejects the candidate" }
   ],
+  "journeySources": {
+    "stops": [
+      { "stop_id": "IDFM:TERM-BUS-PARTIAL", "stop_name": "Porte de Paris", "parent_station": "" },
+      { "stop_id": "IDFM:BUS-MIDDLE", "stop_name": "Arrêt intermédiaire", "parent_station": "" },
+      { "stop_id": "unmapped-stop", "stop_name": "Arrêt sans rattachement", "parent_station": "" }
+    ],
+    "arrets": [
+      { "arrid": "TERM-BUS-PARTIAL", "zdaid": "44016", "arrname": "Mairie de Stains" },
+      { "arrid": "7969", "zdaid": "44016", "arrname": "Mairie" }
+    ],
+    "trips": [
+      { "route_id": "IDFM:C100", "trip_id": "trip-bus-partial", "trip_headsign": "Hôpital Européen", "direction_id": "0" },
+      { "route_id": "IDFM:C100", "trip_id": "trip-bus-express", "trip_headsign": "Hôpital Européen", "direction_id": "0" },
+      { "route_id": "IDFM:C100", "trip_id": "trip-bus-loop", "trip_headsign": "Hôpital Européen", "direction_id": "0" },
+      { "route_id": "IDFM:C100", "trip_id": "trip-bus-restricted", "trip_headsign": "Hôpital Européen", "direction_id": "0" },
+      { "route_id": "IDFM:C100", "trip_id": "trip-bus-no-boarding", "trip_headsign": "Hôpital Européen", "direction_id": "0" }
+    ],
+    "stopTimes": [
+      { "trip_id": "trip-bus-preserved", "stop_id": "IDFM:ART-BUS-1", "stop_sequence": "1", "pickup_type": "0", "drop_off_type": "0" },
+      { "trip_id": "trip-bus-preserved", "stop_id": "IDFM:BUS-MIDDLE", "stop_sequence": "2", "pickup_type": "0", "drop_off_type": "0" },
+      { "trip_id": "trip-bus-preserved", "stop_id": "IDFM:TERM-BUS-PARTIAL", "stop_sequence": "3", "pickup_type": "0", "drop_off_type": "0" },
+      { "trip_id": "trip-bus-preserved", "stop_id": "IDFM:TERM-BUS-1", "stop_sequence": "4", "pickup_type": "1", "drop_off_type": "0" },
+      { "trip_id": "trip-bus-partial", "stop_id": "IDFM:ART-BUS-1", "stop_sequence": "1", "pickup_type": "0", "drop_off_type": "0" },
+      { "trip_id": "trip-bus-partial", "stop_id": "IDFM:TERM-BUS-PARTIAL", "stop_sequence": "2", "pickup_type": "1", "drop_off_type": "0" },
+      { "trip_id": "trip-bus-express", "stop_id": "IDFM:ART-BUS-1", "stop_sequence": "1", "pickup_type": "0", "drop_off_type": "0" },
+      { "trip_id": "trip-bus-express", "stop_id": "IDFM:TERM-BUS-1", "stop_sequence": "2", "pickup_type": "1", "drop_off_type": "0" },
+      { "trip_id": "trip-bus-loop", "stop_id": "IDFM:ART-BUS-1", "stop_sequence": "1", "pickup_type": "0", "drop_off_type": "0" },
+      { "trip_id": "trip-bus-loop", "stop_id": "IDFM:TERM-BUS-PARTIAL", "stop_sequence": "2", "pickup_type": "0", "drop_off_type": "0" },
+      { "trip_id": "trip-bus-loop", "stop_id": "IDFM:ART-BUS-1", "stop_sequence": "3", "pickup_type": "0", "drop_off_type": "0" },
+      { "trip_id": "trip-bus-loop", "stop_id": "IDFM:TERM-BUS-1", "stop_sequence": "4", "pickup_type": "1", "drop_off_type": "0" },
+      { "trip_id": "trip-bus-restricted", "stop_id": "IDFM:ART-BUS-1", "stop_sequence": "1", "pickup_type": "2", "drop_off_type": "0" },
+      { "trip_id": "trip-bus-restricted", "stop_id": "unmapped-stop", "stop_sequence": "2", "pickup_type": "3", "drop_off_type": "2" },
+      { "trip_id": "trip-bus-restricted", "stop_id": "IDFM:TERM-BUS-1", "stop_sequence": "3", "pickup_type": "1", "drop_off_type": "3" },
+      { "trip_id": "trip-bus-no-boarding", "stop_id": "IDFM:ART-BUS-1", "stop_sequence": "1", "pickup_type": "1", "drop_off_type": "0" },
+      { "trip_id": "trip-bus-no-boarding", "stop_id": "unmapped-stop", "stop_sequence": "2", "pickup_type": "1", "drop_off_type": "1" },
+      { "trip_id": "trip-bus-no-boarding", "stop_id": "IDFM:TERM-BUS-1", "stop_sequence": "3", "pickup_type": "1", "drop_off_type": "0" }
+    ],
+    "objectCodes": [
+      { "object_type": "StopPoint", "object_id": "IDFM:TERM-BUS-PARTIAL", "object_system": "source", "object_code": "DEST:BUS-PARTIAL" }
+    ]
+  },
   "sources": {
     "agency": [
       { "agency_name": "Fixture IDFM operator", "agency_url": "https://www.iledefrance-mobilites.fr/", "agency_timezone": "Europe/Paris" }
@@ -47,12 +88,12 @@
       { "zdaid": "ZDA-FUNICULAR", "zdaname": "Montmartre", "zdatown": "Paris" }
     ],
     "arrets": [
-      { "arrid": "ARR-BUS-1", "zdaid": "ZDA-BUS-1" },
-      { "arrid": "ARR-BUS-2", "zdaid": "ZDA-BUS-2" },
-      { "arrid": "ARR-METRO-EAST", "zdaid": "ZDA-METRO" },
-      { "arrid": "ARR-METRO-WEST", "zdaid": "ZDA-METRO" },
-      { "arrid": "ARR-TRAM", "zdaid": "ZDA-TRAM" },
-      { "arrid": "ARR-FUNICULAR", "zdaid": "ZDA-FUNICULAR" }
+      { "arrid": "ARR-BUS-1", "zdaid": "ZDA-BUS-1", "arrname": "Gare du Nord" },
+      { "arrid": "ARR-BUS-2", "zdaid": "ZDA-BUS-2", "arrname": "Gare du Nord annexe" },
+      { "arrid": "ARR-METRO-EAST", "zdaid": "ZDA-METRO", "arrname": "Châtelet sud" },
+      { "arrid": "ARR-METRO-WEST", "zdaid": "ZDA-METRO", "arrname": "Châtelet nord" },
+      { "arrid": "ARR-TRAM", "zdaid": "ZDA-TRAM", "arrname": "Porte de Versailles" },
+      { "arrid": "ARR-FUNICULAR", "zdaid": "ZDA-FUNICULAR", "arrname": "Funiculaire" }
     ],
     "relations": [
       { "zdaid": "ZDA-BUS-1", "arrid": "ARR-BUS-1", "artid": "ART-BUS-1" },

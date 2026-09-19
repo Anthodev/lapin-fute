@@ -56,11 +56,12 @@ export function appearances(count = 6, prefix = "fav", options = {}) {
 
 export function departure({
   fetchedAt = NOW_S, hasData = true, exception = 0,
-  expectedAt = fetchedAt + 300, palette = 1, checkedAt = fetchedAt
+  expectedAt = fetchedAt + 300, palette = 1, checkedAt = fetchedAt,
+  status = 0, journeyUncertain = false
 } = {}) {
   return (hasData ? "01" : "00") + fixed(fetchedAt, 8) + "0" + fixed(exception, 2)
     + palette.toString(16) + fixed(checkedAt, 8)
-    + (hasData ? "1" + fixed(expectedAt, 8) + "0" : "0");
+    + (hasData ? "1" + fixed(expectedAt, 8) + fixed(status | (journeyUncertain ? 4 : 0), 1) : "0");
 }
 
 export function trafficDocument({
@@ -116,12 +117,12 @@ export function harness(faultStore = store(), { now = NOW, profile = 0, hour12 =
 }
 
 export function message(type, id, generation, extra = {}) {
-  return new Map(Object.entries({ 0: 2, 1: type, 2: id, 41: generation, ...extra })
+  return new Map(Object.entries({ 0: 3, 1: type, 2: id, 41: generation, ...extra })
     .map(([key, value]) => [Number(key), value]));
 }
 
 export function ready(target, token = "ptoken") {
-  return target.runtime.receive(new Map([[0, 2], [1, 21], [2, token]]));
+  return target.runtime.receive(new Map([[0, 3], [1, 21], [2, token]]));
 }
 
 export function begin(target, records = appearances(2), options = {}) {

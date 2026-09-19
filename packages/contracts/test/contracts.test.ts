@@ -7,6 +7,7 @@ import {
   APP_MESSAGE_KEYS,
   APP_MESSAGE_OUTBOX_BYTES,
   CATALOG_ERROR_CODE,
+  CONFIGURATION_VERSION,
   DEPARTURE_STATUS,
   CONFIG_MODE,
   DISPLAY_WIRE_VERSION,
@@ -30,6 +31,7 @@ import {
   isDisplayCorrelationToken,
   isDisplayEpoch,
   isDisplayHash,
+  isDeparture,
   isDepartureResult,
   isDepartureSnapshot,
   isErrorResult,
@@ -75,6 +77,9 @@ const routing = {
   destinationRef: "STIF:StopPoint:Q:67890:",
 };
 
+const arrivalPlaceId = "plc_" + "a".repeat(43);
+const phoneFavorite = { ...favorite, routing, arrivalPlaceId };
+
 const result = {
   schemaVersion: SCHEMA_VERSION,
   requestId: "request-1",
@@ -87,6 +92,7 @@ const result = {
     aimedAt: 1_788_000_100,
     minutes: 2,
     status: "DELAYED",
+    journeyUncertain: false,
     nextIntervalMinutes: 4,
   }],
 };
@@ -125,6 +131,8 @@ function departureRecord(count: number): string {
 }
 
 test("domain contracts expose every frozen enum and accept every field", () => {
+  assert.equal(SCHEMA_VERSION, 1);
+  assert.equal(CONFIGURATION_VERSION, 2);
   assert.deepEqual(FRESHNESS, ["REALTIME", "SCHEDULED", "MIXED", "STALE"]);
   assert.deepEqual(DEPARTURE_STATUS, ["ON_TIME", "DELAYED", "CANCELLED", "UNKNOWN"]);
   assert.deepEqual(ERROR_CODE, [
@@ -174,6 +182,36 @@ test("domain validators enforce exact fields, versions, bounds, and secret rules
   const { lineColor: _favoriteLineColor, ...favoriteWithoutColor } = favorite;
   assert.equal(isFavorite(favoriteWithoutColor), false);
   assert.equal(utf8Bytes("é".repeat(48)), LIMITS.labelUtf8Bytes);
+  assert.equal(isFavorite({ ...favorite, arrivalPlaceId: null }), false);
+  assert.equal(companion.isFavorite({ ...favorite, arrivalPlaceId: null }), false);
+  for (const validate of [isPhoneFavorite, companion.isPhoneFavorite]) {
+    assert.equal(validate(phoneFavorite), true);
+    assert.equal(validate({ ...phoneFavorite, arrivalPlaceId: null }), true);
+    assert.equal(validate({ ...favorite, arrivalPlaceId: null }), true);
+    const { arrivalPlaceId: _arrivalPlaceId, ...noArrival } = phoneFavorite;
+    assert.equal(validate(noArrival), false);
+    assert.equal(validate({ ...phoneFavorite, arrivalPlaceId: undefined }), false);
+    assert.equal(validate({ ...phoneFavorite, arrivalPlaceId: "svc_" + "a".repeat(43) }), false);
+    assert.equal(validate({ ...phoneFavorite, arrivalPlaceId: "plc_" + "a".repeat(42) }), false);
+    assert.equal(validate({ ...phoneFavorite, arrivalPlaceId: "plc_" + "!".repeat(43) }), false);
+    assert.equal(validate({ ...phoneFavorite, arrivalPlaceId: "plc_" + "a".repeat(43) + "b" }), false);
+    assert.equal(validate({ ...phoneFavorite, arrivalPlaceId: "personal-key" }), false);
+  }
+  const { journeyUncertain: _journeyUncertain, ...unconfirmed } = result.departures[0];
+  for (const validate of [isDeparture, companion.isDeparture]) {
+    assert.equal(validate({ ...result.departures[0], journeyUncertain: true }), true);
+    assert.equal(validate(unconfirmed), false);
+    assert.equal(validate({ ...result.departures[0], journeyUncertain: undefined }), false);
+    assert.equal(validate({ ...result.departures[0], journeyUncertain: "false" }), false);
+    assert.equal(validate({ ...result.departures[0], journeyUncertain: 0 }), false);
+  }
+  assert.equal(isDepartureResult({ ...result, departures: [unconfirmed] }), false);
+  assert.equal(companion.isDepartureResult({ ...result, departures: [unconfirmed] }), false);
+  const departureCopy = companion.copyDeparture(result.departures[0]);
+  assert.equal(departureCopy.journeyUncertain, false);
+  departureCopy.journeyUncertain = true;
+  assert.equal(result.departures[0].journeyUncertain, false);
+  assert.equal(companion.copyDepartureResult(result, "next").departures[0].journeyUncertain, false);
   assert.equal(isDepartureResult({
     ...result,
     departures: Array.from({ length: LIMITS.departures + 1 }, () => result.departures[0]),
@@ -200,7 +238,6 @@ test("domain validators enforce exact fields, versions, bounds, and secret rules
 });
 
 test("phone routing stays exact and separate from the canonical favorite", () => {
-  const phoneFavorite = { ...favorite, routing };
   for (const validate of [isServiceRouting, companion.isServiceRouting]) {
     assert.equal(validate(routing), true);
     assert.equal(validate({ ...routing, monitoringRef: "x".repeat(4096) }), true);
@@ -212,9 +249,9 @@ test("phone routing stays exact and separate from the canonical favorite", () =>
   }
   for (const validate of [isPhoneFavorite, companion.isPhoneFavorite]) {
     assert.equal(validate(phoneFavorite), true);
-    assert.equal(validate(favorite), true);
-    assert.equal(validate({ ...favorite, routing: undefined }), false);
-    assert.equal(validate({ ...favorite, routing: { ...routing, token: "secret" } }), false);
+    assert.equal(validate(favorite), false);
+    assert.equal(validate({ ...phoneFavorite, routing: undefined }), false);
+    assert.equal(validate({ ...phoneFavorite, routing: { ...routing, token: "secret" } }), false);
     assert.equal(validate({ ...phoneFavorite, lineColor: "#FFBE00" }), false);
     assert.equal(validate({ ...phoneFavorite, unexpected: true }), false);
   }
@@ -224,23 +261,38 @@ test("phone routing stays exact and separate from the canonical favorite", () =>
   assert.equal(companion.isPhoneFavoriteList([phoneFavorite, { ...phoneFavorite, id: "work" }]), true);
   const phoneCopy = companion.copyPhoneFavorite(phoneFavorite);
   phoneCopy.routing.lineRef = "changed";
+  phoneCopy.arrivalPlaceId = null;
   assert.equal(phoneFavorite.routing.lineRef, "STIF:Line::C01371:");
+  assert.equal(phoneFavorite.arrivalPlaceId, arrivalPlaceId);
   assert.deepEqual(companion.copyFavorite(phoneFavorite), favorite);
+  assert.equal(Object.hasOwn(companion.copyFavorite(phoneFavorite), "arrivalPlaceId"), false);
+  assert.deepEqual(companion.copyPhoneFavorite(phoneFavorite), phoneFavorite);
 });
 
 test("six favorites are accepted uniformly without relaxing required domain fields", () => {
   const six = Array.from({ length: 6 }, (_, sortOrder) => ({
     ...favorite, id: `favorite-${sortOrder}`, sortOrder,
   }));
-  for (const validate of [companion.isFavoriteList, companion.isPhoneFavoriteList]) {
-    assert.equal(validate(six), true);
-    assert.equal(validate([...six, { ...favorite, id: "seventh", sortOrder: 0 }]), false);
-  }
-  for (const validate of [isFavorite, companion.isFavorite, isPhoneFavorite, companion.isPhoneFavorite]) {
+  assert.equal(companion.isFavoriteList(six), true);
+  assert.equal(companion.isFavoriteList([...six, { ...favorite, id: "seventh", sortOrder: 0 }]), false);
+  const sixPhone = six.map((entry) => ({ ...entry, routing, arrivalPlaceId }));
+  assert.equal(companion.isPhoneFavoriteList(sixPhone), true);
+  assert.equal(companion.isPhoneFavoriteList([...sixPhone, { ...sixPhone[0], id: "seventh" }]), false);
+  for (const validate of [isFavorite, companion.isFavorite]) {
     assert.equal(validate(six[5]), true);
-    assert.equal(validate({ ...favorite, sortOrder: 6 }), false);
-    const { serviceId: _serviceId, ...noService } = favorite;
-    const { sortOrder: _sortOrder, ...noOrder } = favorite;
+    assert.equal(validate({ ...six[5], sortOrder: 6 }), false);
+    const { serviceId: _serviceId, ...noService } = six[5];
+    const { sortOrder: _sortOrder, ...noOrder } = six[5];
+    assert.equal(validate(noService), false);
+    assert.equal(validate(noOrder), false);
+  }
+  for (const validate of [isPhoneFavorite, companion.isPhoneFavorite]) {
+    assert.equal(validate(sixPhone[5]), true);
+    assert.equal(validate({ ...sixPhone[5], sortOrder: 6 }), false);
+    const { arrivalPlaceId: _arrivalPlaceId, ...noArrival } = sixPhone[5];
+    const { serviceId: _serviceId, ...noService } = sixPhone[5];
+    const { sortOrder: _sortOrder, ...noOrder } = sixPhone[5];
+    assert.equal(validate(noArrival), false);
     assert.equal(validate(noService), false);
     assert.equal(validate(noOrder), false);
   }
@@ -353,6 +405,7 @@ test("D2 separates watch epochs, data counters, configuration generations and co
   const ready = message(MESSAGE_TYPE.DISPLAY_READY, { REQUEST_ID: "phone-open-1" });
   acceptsWire(ready, true);
   acceptsWire({ ...ready, SCHEMA_VERSION: 1 }, false);
+  acceptsWire({ ...ready, SCHEMA_VERSION: 2 }, false);
   acceptsWire({ ...ready, DISPLAY_GENERATION: 1 }, false);
   acceptsWire({ ...ready, 0: DISPLAY_WIRE_VERSION }, false);
   acceptsWire({ 15025: 1 }, false);
@@ -788,7 +841,12 @@ test("packed result dictionaries enforce kind-specific counts and favorite bindi
   acceptsWire({ ...record, ITEM_INDEX: 1 }, false);
   acceptsWire({ ...record, DISPLAY_RECORD: departureRecord(4) + "0" }, false);
   acceptsWire({ ...record, DISPLAY_RECORD: "04" + departureRecord(1).slice(2) }, false);
-  acceptsWire({ ...record, DISPLAY_RECORD: departureRecord(1).slice(0, -1) + "4" }, false);
+  for (let status = 0; status < 16; status++) {
+    for (let index = 0; index < 4; index++) {
+      const packed = departureRecord(4), offset = 31 + 9 * index;
+      acceptsWire({ ...record, DISPLAY_RECORD: packed.slice(0, offset) + status.toString(16) + packed.slice(offset + 1) }, status < 8);
+    }
+  }
   acceptsWire({ ...record, FAVORITE_ID: "home" }, false);
   acceptsWire(message(MESSAGE_TYPE.DISPLAY_COMMIT, { ...context, DISPLAY_KIND: 2 }), true);
 });

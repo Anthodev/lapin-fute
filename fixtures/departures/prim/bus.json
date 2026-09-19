@@ -12,7 +12,7 @@
               "MonitoredVehicleJourney": {
                 "LineRef": { "value": "IDFM:C1001" },
                 "DirectionRef": { "value": "IDFM:1001D" },
-                "DestinationRef": { "value": "IDFM:1001DST" },
+                "DestinationRef": { "value": "STIF:StopPoint:Q:1001DST:" },
                 "MonitoredCall": {
                   "ExpectedDepartureTime": "2026-01-15T08:32:00Z",
                   "AimedDepartureTime": "2026-01-15T08:31:00Z",
@@ -26,7 +26,7 @@
               "MonitoredVehicleJourney": {
                 "LineRef": { "value": "IDFM:C1001" },
                 "DirectionRef": { "value": "IDFM:1001D" },
-                "DestinationRef": { "value": "IDFM:1001DST" },
+                "DestinationRef": { "value": "STIF:StopPoint:Q:1001DST:" },
                 "MonitoredCall": {
                   "ExpectedDepartureTime": "2026-01-15T08:38:00Z",
                   "AimedDepartureTime": "2026-01-15T08:37:30Z",

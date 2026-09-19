@@ -13,7 +13,7 @@ export function generateDisplayCopy() {
   if (metrics.length !== 9057 || createHash("sha256").update(metrics).digest("hex") !== "271229905bd286b822454c4aac7c4a90be6edba33e0551bf10d59d3db26a3ea9") {
     throw new Error("Font metrics differ from the native-calibrated SDK 4.33.1 table");
   }
-  if (corpus.length !== 47 || new Set(corpus.map(entry => entry.token)).size !== 47
+  if (corpus.length !== 49 || new Set(corpus.map(entry => entry.token)).size !== 49
       || corpus.some(entry => typeof entry.token !== "string" || typeof entry.en !== "string" || typeof entry.fr !== "string")) {
     throw new Error("Invalid canonical display copy corpus");
   }
@@ -29,15 +29,15 @@ export function generateDisplayCopy() {
     return text.slice(0, fit.end) + (fit.ellipsis ? "…" : "");
   }
   for (const profile of [0, 1]) for (const language of ["en", "fr"]) {
-    const fields = [], map = Array(47 * 8).fill(255);
+    const fields = [], map = Array(49 * 8).fill(255);
     const raw = token => corpus[token][language];
     function put(token, role, text) {
-      if (!Number.isInteger(token) || token < 0 || token >= 47 || !Number.isInteger(role) || role < 0 || role > 7
-          || map[token + role * 47] !== 255) throw new Error("Invalid or duplicate display copy role");
+      if (!Number.isInteger(token) || token < 0 || token >= 49 || !Number.isInteger(role) || role < 0 || role > 7
+          || map[token + role * 49] !== 255) throw new Error("Invalid or duplicate display copy role");
       let index = fields.indexOf(text);
       if (index < 0) { index = fields.length; fields.push(text); }
       if (index >= 255) throw new Error("Display copy field index overflow");
-      map[token + role * 47] = index;
+      map[token + role * 49] = index;
     }
     for (let token = 0; token <= 20; token++) put(token, 0, raw(token));
     // Updating can retain a stale snapshot, whose header is bold14.
@@ -53,6 +53,8 @@ export function generateDisplayCopy() {
     for (const token of [14, 15, 16]) put(token, 1, clipped(raw(token), 1, profile ? 106 : 119));
     for (let token = 17; token <= 20; token++) put(token, 6, clipped(raw(token), 1, profile ? 141 : 165));
     put(8, 7, clipped(raw(8), 1, profile ? 106 : 135));
+    put(47, 0, clipped(raw(47), 0, profile ? 176 : 184));
+    for (const token of [14, 15, 16, 48]) put(token, 7, clipped(raw(token), 0, profile ? 94 : 107));
     data.push(intern(fields.map(lp3).join("")));
     indexes.push(intern(map.map(index => layout.fixed(index, 2)).join("")));
   }
@@ -67,7 +69,7 @@ export function generateDisplayCopy() {
     + "import { field, hex } from '../embeddedjs/packed.js';\n"
     + constants.map((text, index) => "const C" + index + "=" + JSON.stringify(text) + ";\n").join("")
     + "const DATA=[" + data.join(",") + "];\nconst INDEX=[" + indexes.join(",") + "];\n"
-    + "export function copy(profile,language,token,role=0){const bank=profile*2+(language==='fr'?1:0);return field(DATA[bank],hex(INDEX[bank],2*(token+47*role),2));}\n";
+    + "export function copy(profile,language,token,role=0){const bank=profile*2+(language==='fr'?1:0);return field(DATA[bank],hex(INDEX[bank],2*(token+49*role),2));}\n";
   mkdirSync(output, { recursive: true });
   writeFileSync(new URL("display-copy.js", output), source);
   writeFileSync(new URL("package.json", output), '{"type":"module"}\n');
