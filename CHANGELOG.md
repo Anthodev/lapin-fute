@@ -8,12 +8,12 @@ Active works now participate in traffic reporting according to their severity, r
 
 ### Fixes
 
-- fix(traffic): include active works in disruption selection and preserve the exclusive end-of-period boundary.
+- fix(traffic): include active works in disruption selection (`a259698`)
 
 ### Changes
 
-- ci: extract a manual catalog-only workflow with up to 75 concurrent curl uploads, manifest-last publication, and rollback support.
-- ci: keep PBW builds, settings-page deployment, and GitHub releases in the release workflow.
+- chore(release): bump to version 1.2.1 (`66c22cf`)
+- ci(catalog): separate catalog publishing from release deployment (`8f2b8fe`)
 
 ## [1.2.0] - 2026-09-20
 
