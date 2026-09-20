@@ -35,7 +35,11 @@ jobs:
             --jq '[.status, .path, .event, .head_repository.full_name] | @tsv')"
           IFS=$'\t' read -r status workflow_path event head_repository <<< "$metadata"
           test "$status" = completed
-          test "$workflow_path" = ".github/workflows/deploy-bunny.yml"
+          case "$workflow_path" in
+            .github/workflows/deploy-bunny.yml) ;;
+            .github/workflows/rebuild-catalog.yml) test "$event" = workflow_dispatch ;;
+            *) echo "Unsupported deployment workflow: $workflow_path" >&2; exit 1 ;;
+          esac
           test "$head_repository" = "$GH_REPO"
           [[ "$event" = push || "$event" = workflow_dispatch ]]
 
@@ -49,8 +53,9 @@ jobs:
             --repo "$GH_REPO" \
             --name "bunny-rollback-$DEPLOYMENT_RUN_ID" \
             --dir var/deploy-backup
-          test -d var/deploy-backup/files
           test -f var/deploy-backup/missing
+          # Artifact downloads omit empty directories on first catalog publication.
+          mkdir -p var/deploy-backup/files
 
       - name: Restore previous mutable files
         env:

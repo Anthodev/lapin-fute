@@ -1,5 +1,14 @@
 # Changelog
 
+## [Unreleased]
+
+Catalog rebuilds and publication now run independently of settings-page deployment and watch releases.
+
+### Changes
+
+- ci: extract a manual catalog-only workflow with up to 75 concurrent curl uploads, manifest-last publication, and rollback support.
+- ci: keep PBW builds, settings-page deployment, and GitHub releases in the release workflow.
+
 ## [1.2.0] - 2026-09-20
 
 The configuration page can now override the watch app language independently of the watch system settings. Automatic remains the default; explicit French or English choices are saved on the phone and survive restarts.

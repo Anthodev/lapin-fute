@@ -58,13 +58,15 @@ function parseJson(path, label) {
   }
 }
 
-function verifyLocalSite(sitePath, includeCatalog) {
+function verifyLocalSite(sitePath, includeCatalog, catalogOnly) {
   const root = resolve(sitePath);
   if (!statSync(root, { throwIfNoEntry: false })?.isDirectory()) {
     fail(`site directory does not exist: ${root}`);
   }
-  const indexPath = join(root, "index.html");
-  if (!statSync(indexPath, { throwIfNoEntry: false })?.isFile()) fail("index.html is missing");
+  if (!catalogOnly) {
+    const indexPath = join(root, "index.html");
+    if (!statSync(indexPath, { throwIfNoEntry: false })?.isFile()) fail("index.html is missing");
+  }
   if (!includeCatalog) {
     return {
       root,
@@ -74,12 +76,13 @@ function verifyLocalSite(sitePath, includeCatalog) {
     };
   }
 
-  const manifestPath = join(root, "catalog", "manifest.json");
+  const catalogRoot = catalogOnly ? root : join(root, "catalog");
+  const manifestPath = join(catalogRoot, "manifest.json");
   if (!statSync(manifestPath, { throwIfNoEntry: false })?.isFile()) fail("catalog/manifest.json is missing");
 
   const manifest = parseJson(manifestPath, "catalog manifest");
   if (!isCatalogManifest(manifest)) fail("catalog manifest does not satisfy the static catalog contract");
-  const revisionRoot = join(root, "catalog", manifest.revision);
+  const revisionRoot = join(catalogRoot, manifest.revision);
   if (!statSync(revisionRoot, { throwIfNoEntry: false })?.isDirectory()) {
     fail(`catalog revision directory is missing: ${manifest.revision}`);
   }
@@ -187,10 +190,13 @@ export async function verifyConfigSite({
   origin,
   fetcher = globalThis.fetch,
   includeCatalog = true,
+  catalogOnly = false,
 } = {}) {
-  const local = verifyLocalSite(sitePath, includeCatalog);
+  if (catalogOnly && !includeCatalog) fail("catalog-only and page-only modes are mutually exclusive");
+  const local = verifyLocalSite(sitePath, includeCatalog, catalogOnly);
   const parsedOrigin = siteOrigin(origin);
-  await verifyServedFiles(local, parsedOrigin, fetcher);
+  const servedOrigin = catalogOnly ? new URL("catalog/", parsedOrigin) : parsedOrigin;
+  await verifyServedFiles(local, servedOrigin, fetcher);
   return {
     origin: parsedOrigin.href,
     revision: local.manifest?.revision ?? null,
@@ -204,14 +210,17 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
   try {
     const arguments_ = process.argv.slice(2);
     const pageOnly = arguments_.includes("--page-only");
-    const positional = arguments_.filter((argument) => argument !== "--page-only");
-    if (positional.length > 2 || arguments_.length !== positional.length + (pageOnly ? 1 : 0)) {
-      fail("usage: verify-config-site.mjs [site-path] [origin] [--page-only]");
+    const catalogOnly = arguments_.includes("--catalog-only");
+    const positional = arguments_.filter((argument) => argument !== "--page-only" && argument !== "--catalog-only");
+    if (positional.length > 2
+        || arguments_.length !== positional.length + (pageOnly ? 1 : 0) + (catalogOnly ? 1 : 0)) {
+      fail("usage: verify-config-site.mjs [site-path] [origin] [--page-only | --catalog-only]");
     }
     const result = await verifyConfigSite({
-      sitePath: positional[0] ?? DEFAULT_SITE_PATH,
+      sitePath: positional[0] ?? (catalogOnly ? join(PROJECT_ROOT, "var/catalog/static") : DEFAULT_SITE_PATH),
       origin: positional[1] ?? process.env.CONFIG_SITE_ORIGIN,
       includeCatalog: !pageOnly,
+      catalogOnly,
     });
     console.log(JSON.stringify(result, null, 2));
   } catch (error) {

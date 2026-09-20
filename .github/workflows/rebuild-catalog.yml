@@ -1,17 +1,20 @@
-name: Deploy configuration site to Bunny
+name: Rebuild and publish IDFM catalog
 
 on:
-  push:
-    tags: ["v*", "pre-v*"]
   workflow_dispatch:
+    inputs:
+      force_catalog_upload:
+        description: Upload a rebuilt catalog even when its IDFM source revision is already hosted
+        required: true
+        default: false
+        type: boolean
 
 permissions:
   contents: read
 
 concurrency:
   group: deploy-bunny-production
-  # Never interrupt a production upload between its immutable files and the
-  # manifest publication. A later deployment waits for the current one.
+  # Keep catalog publication, page deployment, and rollback serialized.
   cancel-in-progress: false
 
 jobs:
@@ -28,85 +31,11 @@ jobs:
 
       - run: npm ci
 
-      - name: Validate release tag
-        if: ${{ github.event_name == 'push' }}
-        env:
-          RELEASE_TAG: ${{ github.ref_name }}
-        run: |
-          production='^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$'
-          preview='^pre-v(0|[1-9][0-9]*)-(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$'
-          [[ "$RELEASE_TAG" =~ $production || "$RELEASE_TAG" =~ $preview ]]
-
-      # Every mode that publishes release notes (a pushed v* tag, or a manual
-      # dispatch on an existing v* tag) runs the publish job, so a missing,
-      # empty, or duplicated changelog section must fail before any package or
-      # deployment runs.
-      - name: Validate release changelog section
-        if: ${{ startsWith(github.ref_name, 'v') }}
-        run: node scripts/generate-release-notes.mjs
-
       - run: npm test
 
-  package:
-    name: Build release PBW
-    needs: test
-    if: ${{ startsWith(github.ref_name, 'v') }}
-    runs-on: ubuntu-latest
-    environment: production
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-node@v4
-        with:
-          node-version-file: .node-version
-          cache: npm
-
-      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
-        with:
-          bun-version: 1.4.0
-
-      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6.8.0
-
-      - run: npm ci
-
-      - name: Install pinned Pebble toolchain
-        run: |
-          uv tool install pebble-tool==5.0.40
-          pebble sdk install 4.33.1
-
-      - name: Validate package version
-        env:
-          RELEASE_TAG: ${{ github.ref_name }}
-        run: |
-          PACKAGE_VERSION="$(node -p "require('./packages/watch/package.json').version")"
-          test "$RELEASE_TAG" = "v$PACKAGE_VERSION"
-
-      - name: Build production PBW
-        env:
-          LAPIN_FUTE_CONFIG_URL: ${{ vars.CONFIG_SITE_ORIGIN }}
-        run: npm run build
-
-      - name: Prepare release artifacts
-        env:
-          RELEASE_TAG: ${{ github.ref_name }}
-        run: |
-          mkdir release-assets
-          cp packages/watch/build/watch.pbw "release-assets/lapin-fute-$RELEASE_TAG.pbw"
-          (
-            cd release-assets
-            sha256sum "lapin-fute-$RELEASE_TAG.pbw" > SHA256SUMS
-          )
-
-      - uses: actions/upload-artifact@v4
-        with:
-          name: lapin-fute-${{ github.ref_name }}
-          path: release-assets/
-          if-no-files-found: error
-
   deploy:
-    name: Build and deploy configuration site
+    name: Rebuild and publish catalog
     needs: test
-    if: ${{ startsWith(github.ref_name, 'v') }}
     runs-on: ubuntu-latest
     environment: production
     steps:
@@ -119,11 +48,32 @@ jobs:
 
       - run: npm ci
 
-      - name: Build static configuration page
-        run: npm run build:config-page
+      - name: Refresh production catalog
+        env:
+          IDFM_DATASET_TOKEN: ${{ secrets.IDFM_DATASET_TOKEN }}
+        run: npm run catalog:refresh
+
+      - name: Plan catalog upload
+        id: catalog
+        env:
+          CONFIG_SITE_ORIGIN: ${{ vars.CONFIG_SITE_ORIGIN }}
+          FORCE_CATALOG_UPLOAD: ${{ inputs.force_catalog_upload }}
+        run: |
+          set -euo pipefail
+          if [[ "$FORCE_CATALOG_UPLOAD" = true ]]; then
+            include_catalog=true
+            reason="catalog upload was forced"
+          else
+            include_catalog="$(node scripts/plan-catalog-upload.mjs)"
+            reason="catalog source-revision comparison completed"
+          fi
+          echo "include_catalog=$include_catalog" >> "$GITHUB_OUTPUT"
+          echo "$reason: include_catalog=$include_catalog"
+
 
       - name: Back up mutable production files
         id: backup
+        if: ${{ steps.catalog.outputs.include_catalog == 'true' }}
         shell: bash
         env:
           BUNNY_STORAGE_ENDPOINT: ${{ vars.BUNNY_STORAGE_ENDPOINT }}
@@ -142,7 +92,7 @@ jobs:
           : > var/deploy-backup/missing
 
           while IFS= read -r -d '' file; do
-            relative_path="${file#var/config-site/}"
+            relative_path="catalog/${file#var/catalog/static/}"
             case "$relative_path" in
               *[!A-Za-z0-9._/-]* | /* | *../*)
                 echo "Refusing unsafe backup path: $relative_path" >&2
@@ -168,9 +118,10 @@ jobs:
                 exit 1
                 ;;
             esac
-          done < <(find var/config-site -type f -print0)
+          done < <(find var/catalog/static -maxdepth 1 -type f -name manifest.json -print0)
 
       - name: Retain rollback bundle
+        if: ${{ steps.catalog.outputs.include_catalog == 'true' }}
         uses: actions/upload-artifact@v4
         with:
           name: bunny-rollback-${{ github.run_id }}
@@ -178,8 +129,9 @@ jobs:
           if-no-files-found: error
           retention-days: 30
 
-      - name: Upload static site to Bunny Storage
+      - name: Upload catalog to Bunny Storage
         id: upload
+        if: ${{ steps.catalog.outputs.include_catalog == 'true' }}
         shell: bash
         env:
           BUNNY_STORAGE_ENDPOINT: ${{ vars.BUNNY_STORAGE_ENDPOINT }}
@@ -197,7 +149,7 @@ jobs:
 
           upload_file() {
             local file="$1"
-            local relative_path="${file#var/config-site/}"
+            local relative_path="catalog/${file#var/catalog/static/}"
             local mime_type
             case "$relative_path" in
               *[!A-Za-z0-9._/-]* | /* | *../*)
@@ -218,11 +170,15 @@ jobs:
 
           export endpoint BUNNY_STORAGE_PASSWORD
           export -f upload_file
-          find var/config-site -type f -print0 \
-            | xargs -0 --no-run-if-empty --max-args=1 --max-procs=32 \
+          find var/catalog/static -type f ! -path 'var/catalog/static/manifest.json' -print0 \
+            | xargs -0 --no-run-if-empty --max-args=1 --max-procs=75 \
                 bash -c 'upload_file "$1"' _
 
+          # Publish the catalog pointer only after every immutable catalog file.
+          upload_file var/catalog/static/manifest.json
+
       - name: Purge Bunny CDN cache
+        if: ${{ steps.catalog.outputs.include_catalog == 'true' }}
         env:
           BUNNY_API_KEY: ${{ secrets.BUNNY_API_KEY }}
           BUNNY_PULL_ZONE_ID: ${{ vars.BUNNY_PULL_ZONE_ID }}
@@ -236,12 +192,13 @@ jobs:
             --header "AccessKey: $BUNNY_API_KEY" \
             "https://api.bunny.net/pullzone/$BUNNY_PULL_ZONE_ID/purgeCache"
 
-      - name: Verify served static site
+      - name: Verify served catalog
+        if: ${{ steps.catalog.outputs.include_catalog == 'true' }}
         env:
           CONFIG_SITE_ORIGIN: ${{ vars.CONFIG_SITE_ORIGIN }}
         run: |
           for attempt in 1 2 3; do
-            if npm run verify:config-site -- --page-only; then
+            if npm run verify:config-site -- --catalog-only; then
               exit 0
             fi
             if [[ "$attempt" != 3 ]]; then sleep 10; fi
@@ -304,92 +261,3 @@ jobs:
             --request POST \
             --header "AccessKey: $BUNNY_API_KEY" \
             "https://api.bunny.net/pullzone/$BUNNY_PULL_ZONE_ID/purgeCache"
-
-  publish:
-    name: Publish GitHub release notes
-    needs: [test, package, deploy]
-    if: ${{ startsWith(github.ref_name, 'v') }}
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-    steps:
-      - name: Check out tagged commit
-        uses: actions/checkout@v4
-        with:
-          ref: ${{ github.sha }}
-          fetch-depth: 0
-          persist-credentials: false
-
-      - name: Download release artifacts
-        uses: actions/download-artifact@v4
-        with:
-          name: lapin-fute-${{ github.ref_name }}
-          path: release-assets
-
-      - name: Generate release notes
-        run: node scripts/generate-release-notes.mjs
-
-      - name: Create release with changelog notes
-        env:
-          GH_TOKEN: ${{ github.token }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          gh release create "$GITHUB_REF_NAME" \
-            --repo "$GITHUB_REPOSITORY" \
-            --title "$GITHUB_REF_NAME" \
-            --notes-file release-notes.md \
-            --verify-tag \
-            release-assets/*
-
-  store:
-    name: Publish release to the RePebble store
-    needs: publish
-    if: ${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') }}
-    runs-on: ubuntu-latest
-    environment: pebble-store
-    permissions:
-      contents: read
-    timeout-minutes: 15
-    steps:
-      - name: Check out tagged commit
-        uses: actions/checkout@v4
-        with:
-          ref: ${{ github.sha }}
-          persist-credentials: false
-
-      - uses: actions/setup-node@v4
-        with:
-          node-version-file: .node-version
-          cache: npm
-
-      - run: npm ci --ignore-scripts
-
-      - name: Download release artifacts
-        uses: actions/download-artifact@v4
-        with:
-          name: lapin-fute-${{ github.ref_name }}
-          path: release-assets
-
-      - name: Fetch published release notes
-        env:
-          GH_TOKEN: ${{ github.token }}
-          RELEASE_TAG: ${{ github.ref_name }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json body --jq .body \
-            > "$RUNNER_TEMP/store-release-notes.md"
-
-      - name: Publish to the RePebble store
-        env:
-          PEBBLE_FIREBASE_REFRESH_TOKEN: ${{ secrets.PEBBLE_FIREBASE_REFRESH_TOKEN }}
-          RELEASE_TAG: ${{ github.ref_name }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          node scripts/publish-pebble-store.mjs \
-            --pbw "release-assets/lapin-fute-$RELEASE_TAG.pbw" \
-            --checksums "release-assets/SHA256SUMS" \
-            --tag "$RELEASE_TAG" \
-            --notes-file "$RUNNER_TEMP/store-release-notes.md"

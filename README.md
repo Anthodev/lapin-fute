@@ -110,6 +110,10 @@ npm run build:config-site                          # assemble var/config-site; f
 
 `node --env-file=.env scripts/probe-catalog.mjs` runs a small live check against PRIM, one request per transport mode, and needs a `PRIM_API_KEY`. Operator tokens live only in `.env` and are never printed or embedded in build output.
 
+To rebuild the hosted catalog independently, run **Rebuild and publish IDFM catalog** from GitHub Actions, using `.github/workflows/rebuild-catalog.yml`. It uses the existing `production` environment's IDFM and Bunny credentials and publishes only catalog files, with up to 75 concurrent curl uploads. The manifest is uploaded last. It does not build the PBW, deploy the settings page, or create a GitHub release.
+
+Uploads are skipped when the hosted IDFM source revision is unchanged. Enable `force_catalog_upload` when republishing a catalog format change from the same source data. The workflow retains the previous manifest for rollback and shares the production publication lock with page deployments and rollbacks. Release tags continue through `deploy-bunny.yml`, without rebuilding the catalog.
+
 ## Contributing
 
 Bug reports are welcome on the [issue tracker](https://github.com/Anthodev/lapin-fute/issues). A useful report includes the watch model and firmware, the phone setup, the steps to reproduce, and whether the data shown was live or cached. Never paste your PRIM token or other personal data in an issue.
