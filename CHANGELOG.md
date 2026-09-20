@@ -4,6 +4,12 @@
 
 Catalog rebuilds and publication now run independently of settings-page deployment and watch releases.
 
+Active works now participate in traffic reporting according to their severity, rather than being discarded solely because their cause is `TRAVAUX`. Future, expired, and information-only notices remain excluded.
+
+### Fixes
+
+- fix(traffic): include active works in disruption selection and preserve the exclusive end-of-period boundary.
+
 ### Changes
 
 - ci: extract a manual catalog-only workflow with up to 75 concurrent curl uploads, manifest-last publication, and rollback support.

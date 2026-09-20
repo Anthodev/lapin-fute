@@ -427,7 +427,7 @@ test("dated incidents outrank undated ones and equal dates use ID rather than in
   assert.equal(trafficDetail(payload, "IDFM:C200").title, "Tram T3 : incident");
 });
 
-test("newer future and active works are excluded and cannot mask older active incidents", function () {
+test("future works stay ignored while active works participate in the selection", function () {
   var payload = trafficFixture();
   payload.lines[1].impactedObjects[0].disruptionIds = ["delay-active", "future-delay", "blocking-unclassified"];
   payload.disruptions[3].lastUpdate = "20260115T095900";
@@ -435,25 +435,47 @@ test("newer future and active works are excluded and cannot mask older active in
   payload.disruptions[4].lastUpdate = "20260115T100000";
   assert.equal(trafficDetail(payload, "IDFM:C200").title, "Métro 2 : ralentissements");
   payload.disruptions[4].applicationPeriods[0].begin = "20260115T100000";
-  assert.equal(trafficDetail(payload, "IDFM:C200").title, "Métro 2 : ralentissements");
+  assert.deepEqual(trafficDetail(payload, "IDFM:C200"), {
+    schemaVersion: 1, state: "DELAYED", checkedAt: TRAFFIC_MS / 1000,
+    title: "Travaux prévus", text: "Des travaux sont prévus plus tard."
+  });
   payload.lines[1].impactedObjects[0].disruptionIds = ["future-delay"];
-  assert.equal(trafficDetail(payload, "IDFM:C200").state, "NORMAL");
+  assert.equal(trafficDetail(payload, "IDFM:C200").state, "DELAYED");
 });
 
-test("works exclusion follows the explicit TRAVAUX cause, never the title, a missing or unknown cause", function () {
+test("active works interruption tracks the synthetic September window, inclusive at 08:00 and gone at noon", function () {
   var payload = trafficFixture();
-  payload.lines[1].impactedObjects[0].disruptionIds = ["delay-active", "future-delay"];
-  payload.disruptions[4].applicationPeriods[0].begin = "20260115T100000";
-  payload.disruptions[4].lastUpdate = "20260115T100000";
-  payload.disruptions[0].lastUpdate = "20260115T090000";
-  payload.disruptions[0].title = "Travaux en cours sur la ligne";
-  assert.equal(trafficDetail(payload, "IDFM:C200").title, "Travaux en cours sur la ligne");
-  payload.disruptions[0].cause = "TRAVAUX";
-  assert.equal(trafficDetail(payload, "IDFM:C200").state, "NORMAL");
-  payload.disruptions[0].cause = "MANIFESTATION";
-  assert.equal(trafficDetail(payload, "IDFM:C200").title, "Travaux en cours sur la ligne");
-  delete payload.disruptions[0].cause;
-  assert.equal(trafficDetail(payload, "IDFM:C200").title, "Travaux en cours sur la ligne");
+  payload.lines[1].impactedObjects[0].disruptionIds = ["future-delay"];
+  payload.disruptions[4].severity = "BLOQUANTE";
+  payload.disruptions[4].applicationPeriods = [{ begin: "20260920T080000", end: "20260920T120000" }];
+  payload.disruptions[4].lastUpdate = "20260920T070000";
+  payload.disruptions[4].title = "Interruption pour travaux";
+  payload.disruptions[4].message = "Service interrompu jusqu'à midi.";
+  function worksAt(iso) {
+    var ms = Date.parse(iso);
+    return trafficDetail(payload, "IDFM:C200", ms, ms);
+  }
+  assert.equal(worksAt("2026-09-20T05:59:59Z").state, "NORMAL");
+  var interrupted = worksAt("2026-09-20T06:00:00Z");
+  assert.deepEqual(interrupted, {
+    schemaVersion: 1, state: "STOPPED", checkedAt: Date.parse("2026-09-20T06:00:00Z") / 1000,
+    title: "Interruption pour travaux", text: "Service interrompu jusqu'à midi."
+  });
+  assertTrafficContract(interrupted);
+  assert.equal(worksAt("2026-09-20T09:59:59Z").state, "STOPPED");
+  assert.equal(worksAt("2026-09-20T10:00:00Z").state, "NORMAL");
+  var activeAt = Date.parse("2026-09-20T08:00:00Z");
+  var delayed = clone(payload);
+  delayed.disruptions[4].severity = "PERTURBEE";
+  assert.equal(trafficDetail(delayed, "IDFM:C200", activeAt, activeAt).state, "DELAYED");
+  var informational = clone(payload);
+  informational.disruptions[4].severity = "INFORMATION";
+  assert.equal(trafficDetail(informational, "IDFM:C200", activeAt, activeAt).state, "NORMAL");
+  var silent = clone(payload);
+  delete silent.disruptions[4].message;
+  assert.deepEqual(trafficDetail(silent, "IDFM:C200", activeAt, activeAt), {
+    schemaVersion: 1, state: "UNKNOWN", checkedAt: activeAt / 1000
+  });
 });
 
 test("an active disruption without complete details remains UNKNOWN", function () {

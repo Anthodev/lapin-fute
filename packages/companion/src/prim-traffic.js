@@ -298,9 +298,7 @@ function trafficForLine(envelope, lineId, evaluatedAtMilliseconds, checkedAtMill
   }
   for (index = 0; index < line.length; index += 1) {
     disruption = envelope.disruptions[line[index]];
-    // Works never surface as traffic, including works already under way.
-    if (disruption.cause === "TRAVAUX" || !active(disruption, localNow)
-        || disruption.severity === "INFORMATION") continue;
+    if (!active(disruption, localNow) || disruption.severity === "INFORMATION") continue;
     updatedAt = disruption.lastUpdate || "";
     bestUpdatedAt = typeof best === "undefined" ? "" : best.lastUpdate || "";
     if (typeof best === "undefined" || updatedAt > bestUpdatedAt
