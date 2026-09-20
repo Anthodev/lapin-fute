@@ -1,6 +1,6 @@
 # Changelog
 
-## [Unreleased]
+## [1.2.1] - 2026-09-20
 
 Catalog rebuilds and publication now run independently of settings-page deployment and watch releases.
 
